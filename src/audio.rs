@@ -443,9 +443,35 @@ pub fn run_audio_thread(
                         track_audio.input_buffer_r[i] = 0.0;
                     }
                 } else {
-                    // Clear buffers, plugins will generate/process audio
+                    // Clear buffers first
                     track_audio.input_buffer_l[..num_frames].fill(0.0);
                     track_audio.input_buffer_r[..num_frames].fill(0.0);
+
+                    let current_beat = state_lock.position_to_beats(state_lock.current_position);
+
+                    for clip in &track.audio_clips {
+                        // Check if we're within this clip's time range
+                        if current_beat >= clip.start_beat
+                            && current_beat < clip.start_beat + clip.length_beats
+                        {
+                            // Calculate position within the clip
+                            let clip_position_beats = current_beat - clip.start_beat;
+                            let clip_position_samples = (clip_position_beats * 60.0
+                                / state_lock.bpm as f64
+                                * clip.sample_rate as f64)
+                                as usize;
+
+                            // Copy samples from clip to output buffer
+                            for i in 0..num_frames {
+                                let sample_idx = clip_position_samples + i;
+                                if sample_idx < clip.samples.len() {
+                                    let sample = clip.samples[sample_idx];
+                                    track_audio.input_buffer_l[i] += sample;
+                                    track_audio.input_buffer_r[i] += sample;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

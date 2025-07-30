@@ -18,6 +18,8 @@ pub struct YadawApp {
     project_path: Option<String>,
     show_save_dialog: bool,
     show_load_dialog: bool,
+    timeline_zoom: f32,
+    show_message: Option<String>,
 }
 
 impl YadawApp {
@@ -40,8 +42,22 @@ impl YadawApp {
             project_path: None,
             show_save_dialog: false,
             show_load_dialog: false,
+            timeline_zoom: 100.0,
+            show_message: None,
         }
     }
+}
+
+enum TimelineInteraction {
+    DragClip {
+        track_id: usize,
+        clip_id: usize,
+        delta: egui::Vec2,
+    },
+    ToggleClip {
+        track_id: usize,
+        clip_id: usize,
+    },
 }
 
 impl eframe::App for YadawApp {
@@ -52,6 +68,15 @@ impl eframe::App for YadawApp {
                 UIUpdate::Position(pos) => {
                     let mut state = self.state.lock().unwrap();
                     state.current_position = pos;
+                }
+                UIUpdate::RecordingFinished(track_id, clip) => {
+                    let mut state = self.state.lock().unwrap();
+                    if let Some(track) = state.tracks.get_mut(track_id) {
+                        track.audio_clips.push(clip);
+                    }
+                }
+                UIUpdate::RecordingLevel(level) => {
+                    // TODO: Show recording level meter
                 }
                 _ => {}
             }
@@ -120,73 +145,39 @@ impl eframe::App for YadawApp {
 
         // File dialogs - Fixed borrow checker issues
         if self.show_save_dialog {
-            let mut close_dialog = false;
-            let mut save_path = None;
-
-            egui::Window::new("Save Project")
-                .open(&mut self.show_save_dialog)
-                .show(ctx, |ui| {
-                    ui.label("Save project as:");
-
-                    let mut filename = self
-                        .project_path
-                        .clone()
-                        .unwrap_or_else(|| "untitled.yadaw".to_string());
-
-                    ui.text_edit_singleline(&mut filename);
-
-                    ui.horizontal(|ui| {
-                        if ui.button("Save").clicked() {
-                            save_path = Some(filename.clone());
-                            close_dialog = true;
-                        }
-
-                        if ui.button("Cancel").clicked() {
-                            close_dialog = true;
-                        }
-                    });
-                });
-
-            if close_dialog {
-                self.show_save_dialog = false;
-                if let Some(path) = save_path {
-                    self.save_project(&path);
-                    self.project_path = Some(path);
-                }
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("YADAW Project", &["yadaw"])
+                .add_filter("All Files", &["*"])
+                .set_file_name("untitled.yadaw")
+                .save_file()
+            {
+                self.save_project(path.to_str().unwrap());
+                self.project_path = Some(path.to_str().unwrap().to_string());
             }
+            self.show_save_dialog = false;
         }
 
         if self.show_load_dialog {
-            let mut close_dialog = false;
-            let mut load_path = None;
-
-            egui::Window::new("Load Project")
-                .open(&mut self.show_load_dialog)
-                .show(ctx, |ui| {
-                    ui.label("Load project:");
-
-                    let mut filename = String::new();
-                    ui.text_edit_singleline(&mut filename);
-
-                    ui.horizontal(|ui| {
-                        if ui.button("Load").clicked() && !filename.is_empty() {
-                            load_path = Some(filename.clone());
-                            close_dialog = true;
-                        }
-
-                        if ui.button("Cancel").clicked() {
-                            close_dialog = true;
-                        }
-                    });
-                });
-
-            if close_dialog {
-                self.show_load_dialog = false;
-                if let Some(path) = load_path {
-                    self.load_project(&path);
-                    self.project_path = Some(path);
-                }
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("YADAW Project", &["yadaw"])
+                .add_filter("All Files", &["*"])
+                .pick_file()
+            {
+                self.load_project(path.to_str().unwrap());
+                self.project_path = Some(path.to_str().unwrap().to_string());
             }
+            self.show_load_dialog = false;
+        }
+
+        if let Some(message) = &self.show_message.clone() {
+            egui::Window::new("Message")
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label(message);
+                    if ui.button("OK").clicked() {
+                        self.show_message = None;
+                    }
+                });
         }
 
         // Top panel - Transport controls
@@ -205,6 +196,30 @@ impl eframe::App for YadawApp {
 
                 if ui.button("⏹").clicked() {
                     let _ = self.audio_tx.send(AudioCommand::Stop);
+                }
+
+                if ui
+                    .button(if state.recording {
+                        "⏺ Recording"
+                    } else {
+                        "⏺"
+                    })
+                    .on_hover_text("Record")
+                    .clicked()
+                {
+                    if state.recording {
+                        let _ = self.audio_tx.send(AudioCommand::StopRecording);
+                    } else {
+                        // Find first armed track
+                        let armed_track = state.tracks.iter().position(|t| t.armed && !t.is_midi);
+                        if let Some(track_id) = armed_track {
+                            let _ = self.audio_tx.send(AudioCommand::StartRecording(track_id));
+                        } else {
+                            // Show message that no track is armed
+                            self.show_message =
+                                Some("Please arm an audio track for recording".to_string());
+                        }
+                    }
                 }
 
                 ui.separator();
@@ -478,52 +493,166 @@ impl eframe::App for YadawApp {
                     }
                 }
             } else {
-                // Show timeline for audio tracks (existing code)
+                // Show timeline for audio tracks
+                ui.heading("Timeline");
+
                 let rect = ui.available_rect_before_wrap();
-                let (is_playing, current_position, sample_rate) = {
+                let (is_playing, current_position, sample_rate, bpm) = {
                     let state = self.state.lock().unwrap();
-                    (state.playing, state.current_position, state.sample_rate)
+                    (
+                        state.playing,
+                        state.current_position,
+                        state.sample_rate,
+                        state.bpm,
+                    )
                 };
 
-                let painter = ui.painter();
+                // Timeline controls
+                ui.horizontal(|ui| {
+                    ui.label("Zoom:");
+                    if ui.button("-").clicked() {
+                        self.timeline_zoom *= 0.8;
+                    }
+                    if ui.button("+").clicked() {
+                        self.timeline_zoom *= 1.25;
+                    }
+                    ui.label(format!("{:.0} pixels/beat", self.timeline_zoom));
+                });
 
-                // Draw grid
-                let grid_size = 50.0;
-                let grid_color = egui::Color32::from_gray(40);
+                ui.separator();
 
-                for i in 0..((rect.width() / grid_size) as i32 + 1) {
-                    let x = rect.left() + i as f32 * grid_size;
-                    painter.line_segment(
-                        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                        egui::Stroke::new(1.0, grid_color),
-                    );
-                }
+                // Timeline scroll area
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let timeline_rect = ui.available_rect_before_wrap();
+                        let track_height = 80.0;
 
-                for i in 0..((rect.height() / grid_size) as i32 + 1) {
-                    let y = rect.top() + i as f32 * grid_size;
-                    painter.line_segment(
-                        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                        egui::Stroke::new(1.0, grid_color),
-                    );
-                }
+                        // Allocate space for all tracks
+                        let total_height =
+                            self.state.lock().unwrap().tracks.len() as f32 * track_height;
+                        ui.allocate_space(egui::vec2(timeline_rect.width(), total_height));
 
-                // Draw playhead
-                if is_playing {
-                    let pixels_per_second = 100.0;
-                    let time_seconds = current_position / sample_rate as f64;
-                    let playhead_x = rect.left() + (time_seconds * pixels_per_second) as f32;
+                        let painter = ui.painter();
+                        let timeline_rect = ui.min_rect();
 
-                    painter.line_segment(
-                        [
-                            egui::pos2(playhead_x, rect.top()),
-                            egui::pos2(playhead_x, rect.bottom()),
-                        ],
-                        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 100, 100)),
-                    );
-                }
+                        // Draw grid
+                        self.draw_timeline_grid(&painter, timeline_rect, bpm);
 
-                ui.heading("Timeline");
-                ui.label("Audio arrangement view - Coming soon!");
+                        // Draw tracks and clips
+                        let mut clip_interactions = Vec::new();
+                        {
+                            let state = self.state.lock().unwrap();
+                            for (track_idx, track) in state.tracks.iter().enumerate() {
+                                let track_rect = egui::Rect::from_min_size(
+                                    timeline_rect.min
+                                        + egui::vec2(0.0, track_idx as f32 * track_height),
+                                    egui::vec2(timeline_rect.width(), track_height),
+                                );
+
+                                // Track background
+                                painter.rect_filled(
+                                    track_rect,
+                                    0.0,
+                                    if track_idx % 2 == 0 {
+                                        egui::Color32::from_gray(25)
+                                    } else {
+                                        egui::Color32::from_gray(30)
+                                    },
+                                );
+
+                                // Track name
+                                painter.text(
+                                    track_rect.min + egui::vec2(5.0, 5.0),
+                                    egui::Align2::LEFT_TOP,
+                                    &track.name,
+                                    egui::FontId::default(),
+                                    egui::Color32::WHITE,
+                                );
+
+                                // Draw audio clips
+                                for (clip_idx, clip) in track.audio_clips.iter().enumerate() {
+                                    let clip_x = clip.start_beat as f32 * self.timeline_zoom;
+                                    let clip_width = clip.length_beats as f32 * self.timeline_zoom;
+
+                                    let clip_rect = egui::Rect::from_min_size(
+                                        track_rect.min + egui::vec2(clip_x, 20.0),
+                                        egui::vec2(clip_width, track_height - 25.0),
+                                    );
+
+                                    // Draw waveform
+                                    crate::waveform::draw_waveform(
+                                        &painter,
+                                        clip_rect,
+                                        clip,
+                                        self.timeline_zoom,
+                                        0.0,
+                                    );
+
+                                    // Check for interactions
+                                    let response = ui.interact(
+                                        clip_rect,
+                                        ui.id().with((track_idx, clip_idx)),
+                                        egui::Sense::click_and_drag(),
+                                    );
+
+                                    if response.dragged() {
+                                        clip_interactions.push(TimelineInteraction::DragClip {
+                                            track_id: track_idx,
+                                            clip_id: clip_idx,
+                                            delta: response.drag_delta(),
+                                        });
+                                    }
+
+                                    if response.double_clicked() {
+                                        clip_interactions.push(TimelineInteraction::ToggleClip {
+                                            track_id: track_idx,
+                                            clip_id: clip_idx,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
+                        // Process interactions
+                        for interaction in clip_interactions {
+                            match interaction {
+                                TimelineInteraction::DragClip {
+                                    track_id,
+                                    clip_id,
+                                    delta,
+                                } => {
+                                    let mut state = self.state.lock().unwrap();
+                                    if let Some(track) = state.tracks.get_mut(track_id) {
+                                        if let Some(clip) = track.audio_clips.get_mut(clip_id) {
+                                            let beat_delta = delta.x / self.timeline_zoom;
+                                            clip.start_beat =
+                                                (clip.start_beat + beat_delta as f64).max(0.0);
+                                        }
+                                    }
+                                }
+                                TimelineInteraction::ToggleClip { track_id, clip_id } => {
+                                    // TODO: Implement clip selection/editing
+                                }
+                            }
+                        }
+
+                        // Draw playhead
+                        if is_playing {
+                            let current_beat =
+                                (current_position / sample_rate as f64) * (bpm / 60.0) as f64;
+                            let playhead_x =
+                                timeline_rect.left() + (current_beat as f32 * self.timeline_zoom);
+
+                            painter.line_segment(
+                                [
+                                    egui::pos2(playhead_x, timeline_rect.top()),
+                                    egui::pos2(playhead_x, timeline_rect.bottom()),
+                                ],
+                                egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 100, 100)),
+                            );
+                        }
+                    });
             }
 
             // Request repaint for smooth playback
@@ -555,6 +684,40 @@ impl YadawApp {
                 Err(e) => eprintln!("Failed to parse project: {}", e),
             },
             Err(e) => eprintln!("Failed to read project file: {}", e),
+        }
+    }
+}
+impl YadawApp {
+    fn draw_timeline_grid(&self, painter: &egui::Painter, rect: egui::Rect, bpm: f32) {
+        // Vertical lines (beats)
+        let beats_visible = (rect.width() / self.timeline_zoom) as i32 + 2;
+
+        for beat in 0..beats_visible {
+            let x = rect.left() + beat as f32 * self.timeline_zoom;
+
+            if x >= rect.left() && x <= rect.right() {
+                let color = if beat % 4 == 0 {
+                    egui::Color32::from_gray(60)
+                } else {
+                    egui::Color32::from_gray(40)
+                };
+
+                painter.line_segment(
+                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                    egui::Stroke::new(1.0, color),
+                );
+
+                // Beat numbers
+                if beat % 4 == 0 {
+                    painter.text(
+                        egui::pos2(x + 2.0, rect.top() + 2.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{}", beat / 4 + 1),
+                        egui::FontId::default(),
+                        egui::Color32::from_gray(100),
+                    );
+                }
+            }
         }
     }
 }
