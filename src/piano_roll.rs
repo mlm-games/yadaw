@@ -91,7 +91,7 @@ impl PianoRoll {
             }
         }
 
-        // Handle input - FIXED: Create response for the entire area
+        // Handle input
         let response = ui.interact(
             available_rect,
             ui.id().with("piano_roll"),
@@ -103,19 +103,26 @@ impl PianoRoll {
                 if pos.x > available_rect.min.x + piano_width {
                     // Click in grid area - add note
                     let grid_pos = pos - grid_rect.min;
+
+                    // Calculate beat position
                     let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
-                    let pitch = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
-                    let pitch = pitch.clamp(0.0, 127.0) as u8;
+
+                    // Convert screen Y to pitch number
+                    let screen_y_from_top = grid_pos.y;
+                    let scrolled_y = screen_y_from_top + self.scroll_y;
+                    let pitch_from_top = scrolled_y / self.zoom_y;
+                    let pitch = (127.0 - pitch_from_top).round().clamp(0.0, 127.0) as u8;
 
                     // Snap to grid
-                    let snapped_beat = (beat / self.grid_snap).round() * self.grid_snap;
+                    let snapped_beat: f64 =
+                        ((beat / self.grid_snap).round() * self.grid_snap).into();
 
                     // Only add if within pattern bounds
-                    if snapped_beat >= 0.0 && (snapped_beat as f64) < pattern.length {
+                    if snapped_beat >= 0.0 && snapped_beat < pattern.length {
                         actions.push(PianoRollAction::AddNote(MidiNote {
                             pitch,
                             velocity: 100,
-                            start: snapped_beat.into(),
+                            start: snapped_beat,
                             duration: self.grid_snap.into(),
                         }));
                     }
@@ -151,7 +158,9 @@ impl PianoRoll {
                 self.scroll_x -= scroll_delta.x;
                 self.scroll_y -= scroll_delta.y;
                 self.scroll_x = self.scroll_x.max(0.0);
-                self.scroll_y = self.scroll_y.clamp(0.0, 127.0 * self.zoom_y);
+                self.scroll_y = self
+                    .scroll_y
+                    .clamp(0.0, 127.0 * self.zoom_y - available_rect.height());
             }
         }
 
@@ -165,10 +174,9 @@ impl PianoRoll {
         for octave in 0..11 {
             for &key in &white_keys {
                 let pitch = octave * 12 + key;
-                let y =
-                    rect.max.y - ((pitch as f32 + 0.5 - self.scroll_y / self.zoom_y) * self.zoom_y);
+                let y = self.pitch_to_y(pitch as f32, rect);
 
-                if y >= rect.min.y && y <= rect.max.y {
+                if y >= rect.min.y - self.zoom_y && y <= rect.max.y + self.zoom_y {
                     let key_rect = egui::Rect::from_min_size(
                         egui::pos2(rect.min.x, y - self.zoom_y / 2.0),
                         egui::vec2(rect.width(), self.zoom_y),
@@ -200,10 +208,9 @@ impl PianoRoll {
         for octave in 0..11 {
             for &key in &black_keys {
                 let pitch = octave * 12 + key;
-                let y =
-                    rect.max.y - ((pitch as f32 + 0.5 - self.scroll_y / self.zoom_y) * self.zoom_y);
+                let y = self.pitch_to_y(pitch as f32, rect);
 
-                if y >= rect.min.y && y <= rect.max.y {
+                if y >= rect.min.y - self.zoom_y && y <= rect.max.y + self.zoom_y {
                     let key_rect = egui::Rect::from_min_size(
                         egui::pos2(rect.min.x, y - self.zoom_y / 2.0),
                         egui::vec2(rect.width() * 0.7, self.zoom_y),
@@ -246,7 +253,7 @@ impl PianoRoll {
 
         // Horizontal lines (notes)
         for pitch in 0..128 {
-            let y = rect.max.y - ((pitch as f32 + 0.5 - self.scroll_y / self.zoom_y) * self.zoom_y);
+            let y = self.pitch_to_y(pitch as f32, rect);
 
             if y >= rect.min.y && y <= rect.max.y {
                 let color = if pitch % 12 == 0 {
@@ -265,12 +272,16 @@ impl PianoRoll {
 
     fn note_rect(&self, note: &MidiNote, grid_rect: egui::Rect) -> egui::Rect {
         let x = grid_rect.min.x + (note.start as f32 * self.zoom_x - self.scroll_x);
-        let y = grid_rect.max.y
-            - ((note.pitch as f32 + 1.0 - self.scroll_y / self.zoom_y) * self.zoom_y);
+        let y = self.pitch_to_y(note.pitch as f32 + 0.5, grid_rect);
         let width = note.duration as f32 * self.zoom_x;
         let height = self.zoom_y * 0.8;
 
-        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(width, height))
+        egui::Rect::from_min_size(egui::pos2(x, y - height / 2.0), egui::vec2(width, height))
+    }
+
+    // Helper function to convert pitch to screen Y coordinate
+    fn pitch_to_y(&self, pitch: f32, rect: egui::Rect) -> f32 {
+        rect.min.y + (127.0 - pitch) * self.zoom_y - self.scroll_y
     }
 }
 
