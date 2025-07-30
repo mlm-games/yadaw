@@ -37,13 +37,16 @@ fn import_wav(path: &Path, bpm: f32) -> Result<AudioClip> {
     let mono_samples = if spec.channels == 2 {
         samples
             .chunks(2)
-            .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
+            .map(|chunk| (chunk[0] + chunk.get(1).copied().unwrap_or(0.0)) / 2.0)
             .collect()
     } else {
         samples
     };
 
-    let duration_seconds = mono_samples.len() as f64 / spec.sample_rate as f64;
+    // Trim silence from the end
+    let trimmed_samples = trim_silence_end(&mono_samples, 0.001); // -60dB threshold
+
+    let duration_seconds = trimmed_samples.len() as f64 / spec.sample_rate as f64;
     let duration_beats = duration_seconds * (bpm as f64 / 60.0);
 
     Ok(AudioClip {
@@ -54,7 +57,7 @@ fn import_wav(path: &Path, bpm: f32) -> Result<AudioClip> {
             .to_string(),
         start_beat: 0.0,
         length_beats: duration_beats,
-        samples: mono_samples,
+        samples: trimmed_samples,
         sample_rate: spec.sample_rate as f32,
     })
 }
@@ -84,20 +87,13 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
 
     let mut format = probed.format;
 
-    // Get the default track before borrowing format
-    let track_id = format
+    // Get the default track
+    let track = format
         .default_track()
-        .ok_or_else(|| anyhow!("No audio tracks found"))?
-        .id;
+        .ok_or_else(|| anyhow!("No audio tracks found"))?;
 
-    // Get codec params
-    let codec_params = format
-        .tracks()
-        .iter()
-        .find(|t| t.id == track_id)
-        .ok_or_else(|| anyhow!("Track not found"))?
-        .codec_params
-        .clone();
+    let track_id = track.id;
+    let codec_params = track.codec_params.clone();
 
     let sample_rate = codec_params
         .sample_rate
@@ -132,10 +128,23 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
                             all_samples.extend_from_slice(buf.samples());
                         }
                     }
-                    Err(e) => eprintln!("Decode error: {}", e),
+                    Err(symphonia::core::errors::Error::DecodeError(_)) => {
+                        // Skip decode errors (can happen at end of some files)
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
                 }
             }
-            Err(symphonia::core::errors::Error::IoError(_)) => break,
+            Err(symphonia::core::errors::Error::IoError(e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                // (Normal) end of file
+                break;
+            }
+            Err(symphonia::core::errors::Error::ResetRequired) => {
+                // End of stream
+                break;
+            }
             Err(e) => return Err(e.into()),
         }
     }
@@ -144,13 +153,16 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
     let mono_samples = if channels == 2 {
         all_samples
             .chunks(2)
-            .map(|chunk| (chunk[0] + chunk.get(1).unwrap_or(&0.0)) / 2.0)
+            .map(|chunk| (chunk[0] + chunk.get(1).copied().unwrap_or(0.0)) / 2.0)
             .collect()
     } else {
         all_samples
     };
 
-    let duration_seconds = mono_samples.len() as f64 / sample_rate as f64;
+    // Trim silence from the end
+    let trimmed_samples = trim_silence_end(&mono_samples, 0.001);
+
+    let duration_seconds = trimmed_samples.len() as f64 / sample_rate as f64;
     let duration_beats = duration_seconds * (bpm as f64 / 60.0);
 
     Ok(AudioClip {
@@ -161,7 +173,21 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
             .to_string(),
         start_beat: 0.0,
         length_beats: duration_beats,
-        samples: mono_samples,
+        samples: trimmed_samples,
         sample_rate: sample_rate as f32,
     })
+}
+
+// Helper function to trim silence from the end
+fn trim_silence_end(samples: &[f32], threshold: f32) -> Vec<f32> {
+    let mut last_non_silent = samples.len();
+
+    for (i, &sample) in samples.iter().enumerate().rev() {
+        if sample.abs() > threshold {
+            last_non_silent = i + 1;
+            break;
+        }
+    }
+
+    samples[..last_non_silent].to_vec()
 }

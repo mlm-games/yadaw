@@ -276,6 +276,82 @@ enum TimelineInteraction {
 
 impl eframe::App for YadawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.input(|i| {
+            if !i.raw.dropped_files.is_empty() {
+                let dropped_files = i.raw.dropped_files.clone();
+                let bpm = self.state.lock().unwrap().bpm;
+
+                self.push_undo();
+                let mut state = self.state.lock().unwrap();
+
+                for file in dropped_files {
+                    // Handle both path and path_or_text cases
+                    let path = if let Some(path) = &file.path {
+                        Some(path.clone())
+                    } else if !file.bytes.clone().expect("No bytes in file?").is_empty() {
+                        // Try to save bytes to temp file if path is not available
+                        let temp_dir = std::env::temp_dir();
+                        let temp_path = temp_dir.join(format!(
+                            "yadaw_import_{}.tmp",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis()
+                        ));
+
+                        if let Some(bytes) = &file.bytes {
+                            if let Ok(_) = std::fs::write(&temp_path, bytes) {
+                                Some(temp_path)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(path) = path {
+                        // Determine target track
+                        let target_track_id = self.selected_track;
+
+                        if let Some(track) = state.tracks.get_mut(target_track_id) {
+                            if !track.is_midi {
+                                match crate::audio_import::import_audio_file(&path, bpm) {
+                                    Ok(mut clip) => {
+                                        // Place clip at current position or end of track
+                                        let drop_beat = track
+                                            .audio_clips
+                                            .iter()
+                                            .map(|c| c.start_beat + c.length_beats)
+                                            .fold(0.0, f64::max);
+                                        clip.start_beat = drop_beat;
+                                        track.audio_clips.push(clip);
+                                    }
+                                    Err(e) => {
+                                        self.show_message = Some(format!(
+                                            "Failed to import {}: {}",
+                                            path.display(),
+                                            e
+                                        ));
+                                    }
+                                }
+
+                                // Clean up temp file if we created one
+                                if path.starts_with(std::env::temp_dir()) {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                            } else {
+                                self.show_message =
+                                    Some("Cannot drop audio on a MIDI track.".to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
         // Process UI updates from audio thread
         while let Ok(update) = self.ui_rx.try_recv() {
             match update {
@@ -293,60 +369,6 @@ impl eframe::App for YadawApp {
                     // TODO: Show recording level meter
                 }
                 _ => {}
-            }
-        }
-
-        if !ctx.input(|i| i.raw.dropped_files.is_empty()) {
-            let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
-            let pointer_pos = ctx.input(|i| i.pointer.interact_pos());
-
-            let bpm = self.state.lock().unwrap().bpm;
-            let mut target_track_id = self.selected_track;
-
-            // Find which track is being hovered, if any
-            if let Some(pos) = pointer_pos {
-                //TODO: need to store track rects to do this accurately.
-                // For now, we'll just import to the selected track.
-            }
-
-            self.push_undo();
-            let mut state = self.state.lock().unwrap();
-
-            if let Some(track) = state.tracks.get_mut(target_track_id) {
-                if !track.is_midi {
-                    for file in dropped_files {
-                        if let Some(path) = file.path {
-                            match crate::audio_import::import_audio_file(&path, bpm) {
-                                Ok(mut clip) => {
-                                    // Place clip at playhead position or end of track
-                                    let drop_beat = if let Some(pos) = pointer_pos {
-                                        // TODO: Convert mouse pos to beat
-                                        track
-                                            .audio_clips
-                                            .iter()
-                                            .map(|c| c.start_beat + c.length_beats)
-                                            .fold(0.0, f64::max)
-                                    } else {
-                                        // Default to end of track
-                                        track
-                                            .audio_clips
-                                            .iter()
-                                            .map(|c| c.start_beat + c.length_beats)
-                                            .fold(0.0, f64::max)
-                                    };
-                                    clip.start_beat = drop_beat;
-                                    track.audio_clips.push(clip);
-                                }
-                                Err(e) => {
-                                    self.show_message =
-                                        Some(format!("Failed to import {}: {}", path.display(), e));
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    self.show_message = Some("Cannot drop audio on a MIDI track.".to_string());
-                }
             }
         }
 
