@@ -78,6 +78,13 @@ impl From<&AppState> for Project {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppStateSnapshot {
+    pub tracks: Vec<Track>,
+    pub master_volume: f32,
+    pub bpm: f32,
+}
+
 impl AppState {
     pub fn load_project(&mut self, project: Project) {
         self.tracks = project.tracks;
@@ -86,8 +93,7 @@ impl AppState {
         self.playing = false;
         self.current_position = 0.0;
     }
-}
-impl AppState {
+
     pub fn new() -> Self {
         Self {
             tracks: vec![
@@ -190,6 +196,20 @@ impl AppState {
     pub fn beats_to_samples(&self, beats: f64) -> f64 {
         (beats * 60.0 / self.bpm as f64) * self.sample_rate as f64
     }
+
+    pub fn snapshot(&self) -> AppStateSnapshot {
+        AppStateSnapshot {
+            tracks: self.tracks.clone(),
+            master_volume: self.master_volume,
+            bpm: self.bpm,
+        }
+    }
+
+    pub fn restore(&mut self, snapshot: AppStateSnapshot) {
+        self.tracks = snapshot.tracks;
+        self.master_volume = snapshot.master_volume;
+        self.bpm = snapshot.bpm;
+    }
 }
 
 // Add new commands for MIDI editing
@@ -214,6 +234,10 @@ pub enum AudioCommand {
     SetRecordingInput(String),
     SaveProject(String), // filepath
     LoadProject(String),
+    SplitClip(usize, usize, f64), // track_id, clip_id, beat_position
+    DeleteClip(usize, usize),
+    TrimClipStart(usize, usize, f64), // ||, ||, new_start_beat
+    TrimClipEnd(usize, usize, f64),
 }
 
 #[derive(Debug, Clone)]
@@ -223,4 +247,5 @@ pub enum UIUpdate {
     PluginAdded(usize, String),
     RecordingLevel(f32), // peak level
     RecordingFinished(usize, AudioClip),
+    TrackLevels(Vec<(f32, f32)>),
 }

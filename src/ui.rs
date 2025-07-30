@@ -1,8 +1,11 @@
+use crate::level_meter::LevelMeter;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::plugin::PluginInfo;
-use crate::state::{AppState, AudioCommand, Project, UIUpdate};
+use crate::state::{AppState, AppStateSnapshot, AudioClip, AudioCommand, Project, UIUpdate};
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
+use egui::Pos2;
+use std::clone;
 use std::sync::{Arc, Mutex};
 
 pub struct YadawApp {
@@ -20,6 +23,14 @@ pub struct YadawApp {
     show_load_dialog: bool,
     timeline_zoom: f32,
     show_message: Option<String>,
+    undo_stack: Vec<AppStateSnapshot>,
+    redo_stack: Vec<AppStateSnapshot>,
+    selected_clips: Vec<(usize, usize)>,
+    show_clip_menu: bool,
+    clip_menu_pos: egui::Pos2,
+    show_mixer: bool,
+    track_meters: Vec<LevelMeter>,
+    clipboard: Option<Vec<AudioClip>>,
 }
 
 impl YadawApp {
@@ -44,6 +55,209 @@ impl YadawApp {
             show_load_dialog: false,
             timeline_zoom: 100.0,
             show_message: None,
+            undo_stack: vec![],
+            redo_stack: vec![],
+            selected_clips: vec![],
+            show_clip_menu: false,
+            clip_menu_pos: Pos2::ZERO,
+            show_mixer: false,
+            track_meters: vec![],
+            clipboard: Option::None,
+        }
+    }
+
+    fn push_undo(&mut self) {
+        let state = self.state.lock().unwrap();
+        self.undo_stack.push(state.snapshot());
+        self.redo_stack.clear(); // Clear redo stack on new action
+
+        // Limit undo stack size
+        if self.undo_stack.len() > 100 {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    fn undo(&mut self) {
+        if let Some(snapshot) = self.undo_stack.pop() {
+            let mut state = self.state.lock().unwrap();
+            let current = state.snapshot();
+            self.redo_stack.push(current);
+            state.restore(snapshot);
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(snapshot) = self.redo_stack.pop() {
+            let mut state = self.state.lock().unwrap();
+            let current = state.snapshot();
+            self.undo_stack.push(current);
+            state.restore(snapshot);
+        }
+    }
+
+    fn cut_selected(&mut self) {
+        self.copy_selected();
+        self.delete_selected();
+    }
+
+    fn copy_selected(&mut self) {
+        let mut clipboard = Vec::new();
+
+        {
+            let state = self.state.lock().unwrap();
+            for (track_id, clip_id) in &self.selected_clips {
+                if let Some(track) = state.tracks.get(*track_id) {
+                    if let Some(clip) = track.audio_clips.get(*clip_id) {
+                        clipboard.push(clip.clone());
+                    }
+                }
+            }
+        }
+
+        self.clipboard = Some(clipboard);
+    }
+
+    fn paste_at_playhead(&mut self) {
+        let clipboard = match &self.clipboard {
+            Some(clips) => clips.clone(),
+            None => return,
+        };
+
+        if clipboard.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+        let current_beat = state.position_to_beats(state.current_position);
+
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if !track.is_midi {
+                for clip in clipboard {
+                    let mut new_clip = clip;
+                    new_clip.start_beat = current_beat;
+                    track.audio_clips.push(new_clip);
+                }
+            }
+        }
+    }
+
+    fn delete_selected(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        // Sort clips by index in reverse order to delete from end to start
+        let mut clips_to_delete = self.selected_clips.clone();
+        clips_to_delete.sort_by(|a, b| b.1.cmp(&a.1));
+
+        for (track_id, clip_id) in clips_to_delete {
+            if let Some(track) = state.tracks.get_mut(track_id) {
+                if clip_id < track.audio_clips.len() {
+                    track.audio_clips.remove(clip_id);
+                }
+            }
+        }
+
+        self.selected_clips.clear();
+    }
+
+    fn split_selected_at_playhead(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+        let selected_clips = self.selected_clips.clone();
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+        let current_beat = state.position_to_beats(state.current_position);
+        let bpm = state.bpm;
+
+        for (track_id, clip_id) in selected_clips {
+            if let Some(track) = state.tracks.get_mut(track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(clip_id) {
+                    // Check if playhead is within clip
+                    if current_beat > clip.start_beat
+                        && current_beat < clip.start_beat + clip.length_beats
+                    {
+                        // Calculate split point
+                        let split_offset = current_beat - clip.start_beat;
+                        let split_sample =
+                            (split_offset * 60.0 / bpm as f64 * clip.sample_rate as f64) as usize;
+
+                        if split_sample < clip.samples.len() {
+                            // Create new clip from split point
+                            let new_clip = AudioClip {
+                                name: format!("{} (2)", clip.name),
+                                start_beat: current_beat,
+                                length_beats: clip.length_beats - split_offset,
+                                samples: clip.samples[split_sample..].to_vec(),
+                                sample_rate: clip.sample_rate,
+                            };
+
+                            clip.length_beats = split_offset;
+                            clip.samples.truncate(split_sample);
+
+                            track.audio_clips.push(new_clip);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn normalize_selected(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    // Find peak
+                    let peak = clip
+                        .samples
+                        .iter()
+                        .map(|s| s.abs())
+                        .fold(0.0f32, |a, b| a.max(b));
+
+                    if peak > 0.0 {
+                        // Normalize to -0.1 dB (0.989)
+                        let gain = 0.989 / peak;
+                        for sample in &mut clip.samples {
+                            *sample *= gain;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn reverse_selected(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    clip.samples.reverse();
+                }
+            }
         }
     }
 }
@@ -82,6 +296,60 @@ impl eframe::App for YadawApp {
             }
         }
 
+        if !ctx.input(|i| i.raw.dropped_files.is_empty()) {
+            let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+            let pointer_pos = ctx.input(|i| i.pointer.interact_pos());
+
+            let bpm = self.state.lock().unwrap().bpm;
+            let mut target_track_id = self.selected_track;
+
+            // Find which track is being hovered, if any
+            if let Some(pos) = pointer_pos {
+                //TODO: need to store track rects to do this accurately.
+                // For now, we'll just import to the selected track.
+            }
+
+            self.push_undo();
+            let mut state = self.state.lock().unwrap();
+
+            if let Some(track) = state.tracks.get_mut(target_track_id) {
+                if !track.is_midi {
+                    for file in dropped_files {
+                        if let Some(path) = file.path {
+                            match crate::audio_import::import_audio_file(&path, bpm) {
+                                Ok(mut clip) => {
+                                    // Place clip at playhead position or end of track
+                                    let drop_beat = if let Some(pos) = pointer_pos {
+                                        // TODO: Convert mouse pos to beat
+                                        track
+                                            .audio_clips
+                                            .iter()
+                                            .map(|c| c.start_beat + c.length_beats)
+                                            .fold(0.0, f64::max)
+                                    } else {
+                                        // Default to end of track
+                                        track
+                                            .audio_clips
+                                            .iter()
+                                            .map(|c| c.start_beat + c.length_beats)
+                                            .fold(0.0, f64::max)
+                                    };
+                                    clip.start_beat = drop_beat;
+                                    track.audio_clips.push(clip);
+                                }
+                                Err(e) => {
+                                    self.show_message =
+                                        Some(format!("Failed to import {}: {}", path.display(), e));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    self.show_message = Some("Cannot drop audio on a MIDI track.".to_string());
+                }
+            }
+        }
+
         // Plugin browser window
         let mut show_browser = self.show_plugin_browser;
         egui::Window::new("Plugin Browser")
@@ -108,7 +376,6 @@ impl eframe::App for YadawApp {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("New Project").clicked() {
-                        // Reset to default state
                         let mut state = self.state.lock().unwrap();
                         *state = AppState::new();
                         self.project_path = None;
@@ -136,14 +403,92 @@ impl eframe::App for YadawApp {
 
                     ui.separator();
 
+                    if ui.button("Import Audio...").clicked() {
+                        let bpm = {
+                            let state = self.state.lock().unwrap();
+                            state.bpm
+                        };
+                        ui.close();
+
+                        if let Some(paths) = rfd::FileDialog::new()
+                            .add_filter("Audio Files", &["wav", "mp3", "flac", "ogg"])
+                            .add_filter("All Files", &["*"])
+                            .pick_files()
+                        {
+                            for path in paths {
+                                match crate::audio_import::import_audio_file(&path, bpm) {
+                                    Ok(clip) => {
+                                        let mut state = self.state.lock().unwrap();
+                                        if let Some(track) =
+                                            state.tracks.get_mut(self.selected_track)
+                                        {
+                                            if !track.is_midi {
+                                                track.audio_clips.push(clip);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.show_message = Some(format!(
+                                            "Failed to import {}: {}",
+                                            path.display(),
+                                            e
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ui.separator();
+
                     if ui.button("Exit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+
+                ui.menu_button("Edit", |ui| {
+                    if ui.button("Undo").clicked() {
+                        self.undo();
+                        ui.close();
+                    }
+
+                    if ui.button("Redo").clicked() {
+                        self.redo();
+                        ui.close();
+                    }
+
+                    ui.separator();
+
+                    if ui.button("Cut").clicked() {
+                        self.cut_selected();
+                        ui.close();
+                    }
+
+                    if ui.button("Copy").clicked() {
+                        self.copy_selected();
+                        ui.close();
+                    }
+
+                    if ui.button("Paste").clicked() {
+                        self.paste_at_playhead();
+                        ui.close();
+                    }
+
+                    if ui.button("Delete").clicked() {
+                        self.delete_selected();
+                        ui.close();
+                    }
+                });
+
+                ui.menu_button("View", |ui| {
+                    if ui.checkbox(&mut self.show_mixer, "Mixer").clicked() {
+                        ui.close();
                     }
                 });
             });
         });
 
-        // File dialogs - Fixed borrow checker issues
+        // File dialogs
         if self.show_save_dialog {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("YADAW Project", &["yadaw"])
@@ -610,8 +955,98 @@ impl eframe::App for YadawApp {
                                             clip_id: clip_idx,
                                         });
                                     }
+
+                                    if response.secondary_clicked() {
+                                        self.selected_clips = vec![(track_idx, clip_idx)];
+                                        self.show_clip_menu = true;
+                                        self.clip_menu_pos =
+                                            response.interact_pointer_pos().unwrap_or_default();
+                                    }
                                 }
                             }
+                        }
+
+                        if self.show_clip_menu {
+                            egui::Area::new("clip_menu".into())
+                                .fixed_pos(self.clip_menu_pos)
+                                .show(ctx, |ui| {
+                                    ui.set_min_width(150.0);
+                                    let mut close_menu = false;
+
+                                    if ui.button("Split at Playhead").clicked() {
+                                        self.split_selected_at_playhead();
+                                        close_menu = true;
+                                    }
+
+                                    if ui.button("Delete").clicked() {
+                                        self.delete_selected();
+                                        close_menu = true;
+                                    }
+
+                                    if ui.button("Rename...").clicked() {
+                                        // TODO: Show rename dialog
+                                        close_menu = true;
+                                    }
+
+                                    ui.separator();
+
+                                    if ui.button("Normalize").clicked() {
+                                        self.normalize_selected();
+                                        close_menu = true;
+                                    }
+
+                                    if ui.button("Reverse").clicked() {
+                                        self.reverse_selected();
+                                        close_menu = true;
+                                    }
+
+                                    if close_menu {
+                                        self.show_clip_menu = false;
+                                    }
+                                });
+
+                            ui.input(|i| {
+                                if i.modifiers.ctrl {
+                                    if i.key_pressed(egui::Key::Z) {
+                                        if i.modifiers.shift {
+                                            self.redo();
+                                        } else {
+                                            self.undo();
+                                        }
+                                    }
+
+                                    if i.key_pressed(egui::Key::S) {
+                                        if let Some(path) = &self.project_path {
+                                            self.save_project(path);
+                                        } else {
+                                            self.show_save_dialog = true;
+                                        }
+                                    }
+
+                                    if i.key_pressed(egui::Key::O) {
+                                        self.show_load_dialog = true;
+                                    }
+                                }
+
+                                // Transport controls
+                                if i.key_pressed(egui::Key::Space) {
+                                    let state = self.state.lock().unwrap();
+                                    if state.playing {
+                                        drop(state);
+                                        let _ = self.audio_tx.send(AudioCommand::Stop);
+                                    } else {
+                                        drop(state);
+                                        let _ = self.audio_tx.send(AudioCommand::Play);
+                                    }
+                                }
+
+                                // Delete selected clips
+                                if i.key_pressed(egui::Key::Delete)
+                                    && !self.selected_clips.is_empty()
+                                {
+                                    self.delete_selected();
+                                }
+                            });
                         }
 
                         // Process interactions
@@ -652,6 +1087,241 @@ impl eframe::App for YadawApp {
                                 egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 100, 100)),
                             );
                         }
+                    });
+
+                ctx.input(|i| {
+                    if i.modifiers.ctrl {
+                        if i.key_pressed(egui::Key::Z) {
+                            if i.modifiers.shift {
+                                self.redo();
+                            } else {
+                                self.undo();
+                            }
+                        }
+
+                        if i.key_pressed(egui::Key::S) {
+                            if let Some(path) = &self.project_path {
+                                self.save_project(path);
+                            } else {
+                                self.show_save_dialog = true;
+                            }
+                        }
+
+                        if i.key_pressed(egui::Key::O) {
+                            self.show_load_dialog = true;
+                        }
+                    }
+
+                    // Transport controls
+                    if i.key_pressed(egui::Key::Space) {
+                        let state = self.state.lock().unwrap();
+                        if state.playing {
+                            drop(state);
+                            let _ = self.audio_tx.send(AudioCommand::Stop);
+                        } else {
+                            drop(state);
+                            let _ = self.audio_tx.send(AudioCommand::Play);
+                        }
+                    }
+
+                    // Delete selected clips
+                    if i.key_pressed(egui::Key::Delete) && !self.selected_clips.is_empty() {
+                        self.delete_selected();
+                    }
+                });
+
+                // Show clip context menu
+                if self.show_clip_menu {
+                    egui::Area::new(egui::Id::new("clip_menu"))
+                        .fixed_pos(self.clip_menu_pos)
+                        .show(ctx, |ui| {
+                            ui.set_min_width(150.0);
+                            let mut close_menu = false;
+
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                if ui.button("Split at Playhead").clicked() {
+                                    self.split_selected_at_playhead();
+                                    close_menu = true;
+                                }
+
+                                if ui.button("Delete").clicked() {
+                                    self.delete_selected();
+                                    close_menu = true;
+                                }
+
+                                if ui.button("Rename...").clicked() {
+                                    // TODO: Show rename dialog
+                                    close_menu = true;
+                                }
+
+                                ui.separator();
+
+                                if ui.button("Normalize").clicked() {
+                                    self.normalize_selected();
+                                    close_menu = true;
+                                }
+
+                                if ui.button("Reverse").clicked() {
+                                    self.reverse_selected();
+                                    close_menu = true;
+                                }
+                            });
+
+                            if close_menu || ui.input(|i| i.pointer.any_click()) {
+                                self.show_clip_menu = false;
+                            }
+                        });
+                }
+            }
+
+            if self.show_mixer {
+                egui::Window::new("Mixer")
+                    .default_size(egui::vec2(600.0, 400.0))
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::horizontal().show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                // Get track info first
+                                let track_info: Vec<_> = {
+                                    let state = self.state.lock().unwrap();
+                                    state
+                                        .tracks
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, track)| {
+                                            (
+                                                i,
+                                                track.name.clone(),
+                                                track.volume,
+                                                track.pan,
+                                                track.muted,
+                                                track.solo,
+                                            )
+                                        })
+                                        .collect()
+                                };
+
+                                // Track strips
+                                for (i, name, volume, pan, muted, solo) in track_info {
+                                    ui.group(|ui| {
+                                        ui.set_min_width(80.0);
+                                        ui.vertical(|ui| {
+                                            // Track name
+                                            ui.label(&name);
+
+                                            ui.separator();
+
+                                            // Level meter
+                                            if i < self.track_meters.len() {
+                                                self.track_meters[i].ui(ui, true);
+                                            }
+
+                                            ui.separator();
+
+                                            // Volume fader
+                                            let mut vol = volume;
+                                            if ui
+                                                .add(
+                                                    egui::Slider::new(&mut vol, 0.0..=1.2)
+                                                        .vertical()
+                                                        .show_value(false),
+                                                )
+                                                .changed()
+                                            {
+                                                let _ = self
+                                                    .audio_tx
+                                                    .send(AudioCommand::SetTrackVolume(i, vol));
+                                            }
+                                            ui.label(format!(
+                                                "{:.1} dB",
+                                                20.0 * vol.max(0.0001).log10()
+                                            ));
+
+                                            ui.separator();
+
+                                            // Pan knob
+                                            let mut p = pan;
+                                            if ui
+                                                .add(
+                                                    egui::Slider::new(&mut p, -1.0..=1.0)
+                                                        .show_value(false),
+                                                )
+                                                .changed()
+                                            {
+                                                let _ = self
+                                                    .audio_tx
+                                                    .send(AudioCommand::SetTrackPan(i, p));
+                                            }
+                                            ui.label(if p.abs() < 0.01 {
+                                                "C".to_string()
+                                            } else if p < 0.0 {
+                                                format!("L{:.0}", -p * 100.0)
+                                            } else {
+                                                format!("R{:.0}", p * 100.0)
+                                            });
+
+                                            ui.separator();
+
+                                            // Mute/Solo
+                                            ui.horizontal(|ui| {
+                                                if ui
+                                                    .button(if muted { "M" } else { "m" })
+                                                    .clicked()
+                                                {
+                                                    let _ = self
+                                                        .audio_tx
+                                                        .send(AudioCommand::MuteTrack(i, !muted));
+                                                }
+
+                                                if ui.button(if solo { "S" } else { "s" }).clicked()
+                                                {
+                                                    let _ = self
+                                                        .audio_tx
+                                                        .send(AudioCommand::SoloTrack(i, !solo));
+                                                }
+                                            });
+                                        });
+                                    });
+                                }
+
+                                // Master strip
+                                ui.separator();
+                                ui.group(|ui| {
+                                    ui.set_min_width(100.0);
+                                    ui.vertical(|ui| {
+                                        ui.heading("Master");
+
+                                        ui.separator();
+
+                                        // Master level meter
+                                        // TODO: Add master meter
+
+                                        ui.separator();
+
+                                        // Master volume
+                                        let mut master_vol = {
+                                            let state = self.state.lock().unwrap();
+                                            state.master_volume
+                                        };
+
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut master_vol, 0.0..=1.2)
+                                                    .vertical()
+                                                    .show_value(false),
+                                            )
+                                            .changed()
+                                        {
+                                            let mut state = self.state.lock().unwrap();
+                                            state.master_volume = master_vol;
+                                        }
+                                        ui.label(format!(
+                                            "{:.1} dB",
+                                            20.0 * master_vol.max(0.0001).log10()
+                                        ));
+                                    });
+                                });
+                            });
+                        });
                     });
             }
 

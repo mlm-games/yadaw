@@ -36,3 +36,5 @@ env_logger = "0.11.8"
 lilv = "0.2.4"
 lazy_static = "1.5.0"
 rfd = "0.15.4"
+hound = "3.5"
+symphonia = { version = "0.5", features = ["all"] }

@@ -29,9 +29,6 @@ impl PianoRoll {
 
         let available_rect = ui.available_rect_before_wrap();
 
-        // Make the piano roll take up the full available space
-        ui.allocate_rect(available_rect, egui::Sense::click_and_drag());
-
         // Background
         ui.painter()
             .rect_filled(available_rect, 0.0, egui::Color32::from_gray(20));
@@ -55,6 +52,73 @@ impl PianoRoll {
         );
 
         self.draw_grid(&ui.painter(), grid_rect, pattern.length);
+
+        // Handle input BEFORE drawing notes so we can update selection
+        let response = ui.interact(
+            grid_rect,
+            ui.id().with("piano_roll_grid"),
+            egui::Sense::click_and_drag(),
+        );
+
+        let mut clicked_on_note = false;
+        let mut note_to_remove = None;
+
+        // Check for clicks on existing notes
+        if let Some(pos) = response.interact_pointer_pos() {
+            for (i, note) in pattern.notes.iter().enumerate() {
+                let note_rect = self.note_rect(note, grid_rect);
+                if note_rect.contains(pos) {
+                    if response.clicked() {
+                        // Left click - select note
+                        clicked_on_note = true;
+                        if !ui.input(|i| i.modifiers.ctrl) {
+                            self.selected_notes.clear();
+                        }
+                        if !self.selected_notes.contains(&i) {
+                            self.selected_notes.push(i);
+                        }
+                    } else if response.secondary_clicked() {
+                        // Right click - remove note
+                        note_to_remove = Some(i);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // If we didn't click on a note, handle empty space click
+        if response.clicked() && !clicked_on_note {
+            if let Some(pos) = response.interact_pointer_pos() {
+                // Clear selection unless ctrl is held
+                if !ui.input(|i| i.modifiers.ctrl) {
+                    self.selected_notes.clear();
+                }
+
+                // Add new note
+                let grid_pos = pos - grid_rect.min;
+                let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
+                let screen_y_from_top = grid_pos.y;
+                let scrolled_y = screen_y_from_top + self.scroll_y;
+                let pitch_from_top = scrolled_y / self.zoom_y;
+                let pitch = (127.0 - pitch_from_top).round().clamp(0.0, 127.0) as u8;
+
+                let snapped_beat: f64 = ((beat / self.grid_snap).round() * self.grid_snap).into();
+
+                if snapped_beat >= 0.0 && snapped_beat < pattern.length {
+                    actions.push(PianoRollAction::AddNote(MidiNote {
+                        pitch,
+                        velocity: 100,
+                        start: snapped_beat,
+                        duration: self.grid_snap.into(),
+                    }));
+                }
+            }
+        }
+
+        // Handle note removal
+        if let Some(idx) = note_to_remove {
+            actions.push(PianoRollAction::RemoveNote(idx));
+        }
 
         // Draw notes
         for (i, note) in pattern.notes.iter().enumerate() {
@@ -91,60 +155,20 @@ impl PianoRoll {
             }
         }
 
-        // Handle input
-        let response = ui.interact(
-            available_rect,
-            ui.id().with("piano_roll"),
-            egui::Sense::click_and_drag(),
-        );
-
-        if response.clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if pos.x > available_rect.min.x + piano_width {
-                    // Click in grid area - add note
-                    let grid_pos = pos - grid_rect.min;
-
-                    // Calculate beat position
-                    let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
-
-                    // Convert screen Y to pitch number
-                    let screen_y_from_top = grid_pos.y;
-                    let scrolled_y = screen_y_from_top + self.scroll_y;
-                    let pitch_from_top = scrolled_y / self.zoom_y;
-                    let pitch = (127.0 - pitch_from_top).round().clamp(0.0, 127.0) as u8;
-
-                    // Snap to grid
-                    let snapped_beat: f64 =
-                        ((beat / self.grid_snap).round() * self.grid_snap).into();
-
-                    // Only add if within pattern bounds
-                    if snapped_beat >= 0.0 && snapped_beat < pattern.length {
-                        actions.push(PianoRollAction::AddNote(MidiNote {
-                            pitch,
-                            velocity: 100,
-                            start: snapped_beat,
-                            duration: self.grid_snap.into(),
-                        }));
+        // Handle keyboard shortcuts
+        ui.input(|i| {
+            if i.key_pressed(egui::Key::Delete) && !self.selected_notes.is_empty() {
+                // Remove selected notes in reverse order
+                let mut indices = self.selected_notes.clone();
+                indices.sort_by(|a, b| b.cmp(a));
+                for idx in indices {
+                    if idx < pattern.notes.len() {
+                        actions.push(PianoRollAction::RemoveNote(idx));
                     }
                 }
+                self.selected_notes.clear();
             }
-        }
-
-        // Right click to remove notes
-        if response.secondary_clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if pos.x > available_rect.min.x + piano_width {
-                    // Check if click is on a note
-                    for (i, note) in pattern.notes.iter().enumerate() {
-                        let note_rect = self.note_rect(note, grid_rect);
-                        if note_rect.contains(pos) {
-                            actions.push(PianoRollAction::RemoveNote(i));
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        });
 
         // Zoom with scroll
         if response.hovered() {

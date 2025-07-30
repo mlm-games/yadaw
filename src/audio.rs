@@ -436,34 +436,36 @@ pub fn run_audio_thread(
                     track_audio.input_buffer_l[i] = sample;
                     track_audio.input_buffer_r[i] = sample;
                 }
-            } else {
-                if track_audio.plugins.is_empty() {
-                    for i in 0..num_frames {
-                        track_audio.input_buffer_l[i] = 0.0; // Silence for now
-                        track_audio.input_buffer_r[i] = 0.0;
-                    }
-                } else {
-                    // Clear buffers first
-                    track_audio.input_buffer_l[..num_frames].fill(0.0);
-                    track_audio.input_buffer_r[..num_frames].fill(0.0);
+            }
 
-                    let current_beat = state_lock.position_to_beats(state_lock.current_position);
+            if !track.is_midi {
+                // We start with silence; clips will be added to this buffer.
+                track_audio.input_buffer_l[..num_frames].fill(0.0);
+                track_audio.input_buffer_r[..num_frames].fill(0.0);
 
-                    for clip in &track.audio_clips {
-                        // Check if we're within this clip's time range
-                        if current_beat >= clip.start_beat
-                            && current_beat < clip.start_beat + clip.length_beats
-                        {
-                            // Calculate position within the clip
-                            let clip_position_beats = current_beat - clip.start_beat;
-                            let clip_position_samples = (clip_position_beats * 60.0
-                                / state_lock.bpm as f64
-                                * clip.sample_rate as f64)
-                                as usize;
+                let start_beat = state_lock.position_to_beats(state_lock.current_position);
+                let samples_per_beat = state_lock.beats_to_samples(1.0);
 
-                            // Copy samples from clip to output buffer
-                            for i in 0..num_frames {
-                                let sample_idx = clip_position_samples + i;
+                for clip in &track.audio_clips {
+                    // Check if any part of the current processing buffer overlaps with the clip
+                    let clip_end_beat = clip.start_beat + clip.length_beats;
+                    let buffer_end_beat = state_lock
+                        .position_to_beats(state_lock.current_position + num_frames as f64);
+
+                    if clip_end_beat > start_beat && clip.start_beat < buffer_end_beat {
+                        // There is an overlap, process the samples
+                        for i in 0..num_frames {
+                            let current_sample_pos = state_lock.current_position + i as f64;
+                            let current_beat_for_sample =
+                                state_lock.position_to_beats(current_sample_pos);
+
+                            // Check if this specific sample is inside the clip's time
+                            if current_beat_for_sample >= clip.start_beat
+                                && current_beat_for_sample < clip_end_beat
+                            {
+                                let beat_within_clip = current_beat_for_sample - clip.start_beat;
+                                let sample_idx = (beat_within_clip * samples_per_beat) as usize;
+
                                 if sample_idx < clip.samples.len() {
                                     let sample = clip.samples[sample_idx];
                                     track_audio.input_buffer_l[i] += sample;
@@ -513,6 +515,27 @@ pub fn run_audio_thread(
                 }
             }
         }
+
+        let mut track_levels = Vec::new();
+        for (track_idx, track) in state_lock.tracks.iter().enumerate() {
+            if track_idx < audio_state_local.len() {
+                let track_audio = &audio_state_local[track_idx];
+
+                let left_peak = track_audio.output_buffer_l[..num_frames]
+                    .iter()
+                    .map(|s| s.abs())
+                    .fold(0.0f32, |a, b| a.max(b));
+
+                let right_peak = track_audio.output_buffer_r[..num_frames]
+                    .iter()
+                    .map(|s| s.abs())
+                    .fold(0.0f32, |a, b| a.max(b));
+
+                track_levels.push((left_peak, right_peak));
+            }
+        }
+
+        let _ = updates.try_send(UIUpdate::TrackLevels(track_levels));
 
         // 3. Finalize
         for sample in data.iter_mut() {

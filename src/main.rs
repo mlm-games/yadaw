@@ -1,4 +1,6 @@
 mod audio;
+mod audio_import;
+mod level_meter;
 mod piano_roll;
 mod plugin;
 mod state;
