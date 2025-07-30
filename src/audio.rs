@@ -1,10 +1,11 @@
-use crate::state::{AppState, AudioCommand, PluginInstance as PluginDesc, UIUpdate};
+use crate::state::{AppState, AudioClip, AudioCommand, PluginInstance as PluginDesc, UIUpdate};
 use crate::state::{MidiNote, Pattern};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use lazy_static::lazy_static;
 use lilv::{World, instance::ActiveInstance, plugin::Plugin};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 lazy_static! {
@@ -21,7 +22,12 @@ struct ActiveMidiNote {
     velocity: u8,
     start_sample: f64,
 }
-
+struct RecordingState {
+    is_recording: AtomicBool,
+    recording_track: Option<usize>,
+    recorded_samples: Vec<f32>,
+    recording_start_position: f64,
+}
 struct PluginState {
     plugin_def: Plugin,
     instance: ActiveInstance,
@@ -71,6 +77,71 @@ pub fn run_audio_thread(
             });
         }
     }
+
+    let recording_state = Arc::new(Mutex::new(RecordingState {
+        is_recording: AtomicBool::new(false),
+        recording_track: None,
+        recorded_samples: Vec::new(),
+        recording_start_position: 0.0,
+    }));
+
+    let recording_state_clone = recording_state.clone();
+    let state_clone = state.clone();
+    let updates_clone = updates.clone();
+
+    // Start recording input thread
+    std::thread::spawn(move || {
+        let host = cpal::default_host(); // Create a new host for this thread
+        match host.default_input_device() {
+            Some(input_device) => {
+                let input_config = match input_device.default_input_config() {
+                    Ok(config) => config,
+                    Err(e) => {
+                        eprintln!("Failed to get input config: {}", e);
+                        return;
+                    }
+                };
+
+                let channels = input_config.channels() as usize;
+
+                let recording_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    let mut rec_state = recording_state_clone.lock().unwrap();
+                    if rec_state.is_recording.load(Ordering::Relaxed) {
+                        // Record mono by averaging stereo channels
+                        for frame in data.chunks(channels) {
+                            let mono_sample = frame.iter().sum::<f32>() / channels as f32;
+                            rec_state.recorded_samples.push(mono_sample);
+
+                            // Send level update
+                            let level = mono_sample.abs();
+                            let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
+                        }
+                    }
+                };
+
+                match input_device.build_input_stream(
+                    &input_config.config(),
+                    recording_callback,
+                    |err| eprintln!("Input stream error: {}", err),
+                    None,
+                ) {
+                    Ok(input_stream) => {
+                        if let Err(e) = input_stream.play() {
+                            eprintln!("Failed to play input stream: {}", e);
+                            return;
+                        }
+                        std::thread::park();
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to build input stream: {}", e);
+                    }
+                }
+            }
+            None => {
+                eprintln!("No input device available");
+            }
+        }
+    });
 
     let mut audio_callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         let num_frames = data.len() / channels;
@@ -235,6 +306,42 @@ pub fn run_audio_thread(
                             pattern
                                 .notes
                                 .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                        }
+                    }
+                }
+                AudioCommand::StartRecording(track_id) => {
+                    let mut rec_state = recording_state.lock().unwrap();
+                    rec_state.is_recording.store(true, Ordering::Relaxed);
+                    rec_state.recording_track = Some(track_id);
+                    rec_state.recorded_samples.clear();
+                    rec_state.recording_start_position = state_lock.current_position;
+                    state_lock.recording = true;
+                }
+                AudioCommand::StopRecording => {
+                    let mut rec_state = recording_state.lock().unwrap();
+                    rec_state.is_recording.store(false, Ordering::Relaxed);
+                    state_lock.recording = false;
+
+                    // Create audio clip from recorded samples
+                    if let Some(track_id) = rec_state.recording_track {
+                        if !rec_state.recorded_samples.is_empty() {
+                            let start_beat =
+                                state_lock.position_to_beats(rec_state.recording_start_position);
+                            let end_beat =
+                                state_lock.position_to_beats(state_lock.current_position);
+
+                            let clip = AudioClip {
+                                name: format!(
+                                    "Recording {}",
+                                    chrono::Local::now().format("%H:%M:%S")
+                                ),
+                                start_beat,
+                                length_beats: end_beat - start_beat,
+                                samples: rec_state.recorded_samples.clone(),
+                                sample_rate: state_lock.sample_rate,
+                            };
+
+                            let _ = updates.send(UIUpdate::RecordingFinished(track_id, clip));
                         }
                     }
                 }

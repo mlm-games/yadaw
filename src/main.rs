@@ -3,6 +3,7 @@ mod piano_roll;
 mod plugin;
 mod state;
 mod ui;
+mod waveform;
 
 use crossbeam_channel::bounded;
 use eframe::egui;

@@ -1,0 +1,88 @@
+{
+  "name": "Untitled Project",
+  "tracks": [
+    {
+      "id": 0,
+      "name": "Audio 1",
+      "volume": 0.7,
+      "pan": 0.0,
+      "muted": false,
+      "solo": false,
+      "armed": false,
+      "plugin_chain": [],
+      "patterns": [],
+      "is_midi": false,
+      "audio_clips": []
+    },
+    {
+      "id": 1,
+      "name": "MIDI 1",
+      "volume": 0.7,
+      "pan": 0.0,
+      "muted": false,
+      "solo": false,
+      "armed": false,
+      "plugin_chain": [],
+      "patterns": [
+        {
+          "name": "Pattern 1",
+          "length": 4.0,
+          "notes": [
+            {
+              "pitch": 60,
+              "velocity": 100,
+              "start": 0.0,
+              "duration": 0.5
+            },
+            {
+              "pitch": 62,
+              "velocity": 100,
+              "start": 0.5,
+              "duration": 0.5
+            },
+            {
+              "pitch": 64,
+              "velocity": 100,
+              "start": 1.0,
+              "duration": 0.5
+            },
+            {
+              "pitch": 65,
+              "velocity": 100,
+              "start": 1.5,
+              "duration": 0.5
+            },
+            {
+              "pitch": 67,
+              "velocity": 100,
+              "start": 2.0,
+              "duration": 0.5
+            },
+            {
+              "pitch": 69,
+              "velocity": 100,
+              "start": 2.5,
+              "duration": 0.5
+            },
+            {
+              "pitch": 71,
+              "velocity": 100,
+              "start": 3.0,
+              "duration": 0.5
+            },
+            {
+              "pitch": 72,
+              "velocity": 100,
+              "start": 3.5,
+              "duration": 0.5
+            }
+          ]
+        }
+      ],
+      "is_midi": true,
+      "audio_clips": []
+    }
+  ],
+  "master_volume": 0.8,
+  "bpm": 120.0
+}

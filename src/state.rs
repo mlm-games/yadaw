@@ -13,6 +13,16 @@ pub struct Track {
     pub plugin_chain: Vec<PluginInstance>,
     pub patterns: Vec<Pattern>,
     pub is_midi: bool,
+    pub audio_clips: Vec<AudioClip>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioClip {
+    pub name: String,
+    pub start_beat: f64,
+    pub length_beats: f64,
+    pub samples: Vec<f32>, // Mono samples, we'll convert from stereo
+    pub sample_rate: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,7 +48,7 @@ pub struct Pattern {
     pub notes: Vec<MidiNote>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AppState {
     pub tracks: Vec<Track>,
     pub master_volume: f32,
@@ -49,7 +59,34 @@ pub struct AppState {
     pub buffer_size: usize,
     pub current_position: f64, // in samples
 }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Project {
+    pub name: String,
+    pub tracks: Vec<Track>,
+    pub master_volume: f32,
+    pub bpm: f32,
+}
 
+impl From<&AppState> for Project {
+    fn from(state: &AppState) -> Self {
+        Project {
+            name: "Untitled Project".to_string(),
+            tracks: state.tracks.clone(),
+            master_volume: state.master_volume,
+            bpm: state.bpm,
+        }
+    }
+}
+
+impl AppState {
+    pub fn load_project(&mut self, project: Project) {
+        self.tracks = project.tracks;
+        self.master_volume = project.master_volume;
+        self.bpm = project.bpm;
+        self.playing = false;
+        self.current_position = 0.0;
+    }
+}
 impl AppState {
     pub fn new() -> Self {
         Self {
@@ -65,6 +102,7 @@ impl AppState {
                     plugin_chain: vec![],
                     patterns: vec![],
                     is_midi: false,
+                    audio_clips: Vec::new(),
                 },
                 Track {
                     id: 1,
@@ -79,7 +117,6 @@ impl AppState {
                         name: "Pattern 1".to_string(),
                         length: 4.0,
                         notes: vec![
-                            // C major scale
                             MidiNote {
                                 pitch: 60,
                                 velocity: 100,
@@ -131,6 +168,7 @@ impl AppState {
                         ],
                     }],
                     is_midi: true,
+                    audio_clips: Vec::new(),
                 },
             ],
             master_volume: 0.8,
@@ -170,8 +208,12 @@ pub enum AudioCommand {
     SetPluginParam(usize, usize, String, f32),
     // Add MIDI commands
     AddNote(usize, usize, MidiNote), // track_id, pattern_id, note
-    RemoveNote(usize, usize, usize), // track_id, pattern_id, note_index
-    UpdateNote(usize, usize, usize, MidiNote), // track_id, pattern_id, note_index, new_note
+    RemoveNote(usize, usize, usize), // ||, || , note_index
+    UpdateNote(usize, usize, usize, MidiNote), // ||, || , note_index, new_note
+    StartRecording(usize),
+    SetRecordingInput(String),
+    SaveProject(String), // filepath
+    LoadProject(String),
 }
 
 #[derive(Debug, Clone)]
@@ -179,4 +221,6 @@ pub enum UIUpdate {
     Position(f64),
     PeakLevel(usize, f32, f32), // track_id, left, right
     PluginAdded(usize, String),
+    RecordingLevel(f32), // peak level
+    RecordingFinished(usize, AudioClip),
 }

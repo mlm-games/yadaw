@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 # Audio Backend
 cpal = "0.16.0"
+chrono = "0.4"
 
 # GUI
 egui = "0.32.0"

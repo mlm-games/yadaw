@@ -1,6 +1,6 @@
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::plugin::PluginInfo;
-use crate::state::{AppState, AudioCommand, UIUpdate};
+use crate::state::{AppState, AudioCommand, Project, UIUpdate};
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -15,6 +15,9 @@ pub struct YadawApp {
     piano_roll: PianoRoll,
     selected_track: usize,
     selected_pattern: usize,
+    project_path: Option<String>,
+    show_save_dialog: bool,
+    show_load_dialog: bool,
 }
 
 impl YadawApp {
@@ -34,6 +37,9 @@ impl YadawApp {
             piano_roll: PianoRoll::default(),
             selected_track: 1, // Start with MIDI track selected
             selected_pattern: 0,
+            project_path: None,
+            show_save_dialog: false,
+            show_load_dialog: false,
         }
     }
 }
@@ -72,6 +78,116 @@ impl eframe::App for YadawApp {
                 });
             });
         self.show_plugin_browser = show_browser;
+
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("New Project").clicked() {
+                        // Reset to default state
+                        let mut state = self.state.lock().unwrap();
+                        *state = AppState::new();
+                        self.project_path = None;
+                        ui.close();
+                    }
+
+                    if ui.button("Open Project...").clicked() {
+                        self.show_load_dialog = true;
+                        ui.close();
+                    }
+
+                    if ui.button("Save Project").clicked() {
+                        if let Some(path) = &self.project_path {
+                            self.save_project(path);
+                        } else {
+                            self.show_save_dialog = true;
+                        }
+                        ui.close();
+                    }
+
+                    if ui.button("Save Project As...").clicked() {
+                        self.show_save_dialog = true;
+                        ui.close();
+                    }
+
+                    ui.separator();
+
+                    if ui.button("Exit").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            });
+        });
+
+        // File dialogs - Fixed borrow checker issues
+        if self.show_save_dialog {
+            let mut close_dialog = false;
+            let mut save_path = None;
+
+            egui::Window::new("Save Project")
+                .open(&mut self.show_save_dialog)
+                .show(ctx, |ui| {
+                    ui.label("Save project as:");
+
+                    let mut filename = self
+                        .project_path
+                        .clone()
+                        .unwrap_or_else(|| "untitled.yadaw".to_string());
+
+                    ui.text_edit_singleline(&mut filename);
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            save_path = Some(filename.clone());
+                            close_dialog = true;
+                        }
+
+                        if ui.button("Cancel").clicked() {
+                            close_dialog = true;
+                        }
+                    });
+                });
+
+            if close_dialog {
+                self.show_save_dialog = false;
+                if let Some(path) = save_path {
+                    self.save_project(&path);
+                    self.project_path = Some(path);
+                }
+            }
+        }
+
+        if self.show_load_dialog {
+            let mut close_dialog = false;
+            let mut load_path = None;
+
+            egui::Window::new("Load Project")
+                .open(&mut self.show_load_dialog)
+                .show(ctx, |ui| {
+                    ui.label("Load project:");
+
+                    let mut filename = String::new();
+                    ui.text_edit_singleline(&mut filename);
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Load").clicked() && !filename.is_empty() {
+                            load_path = Some(filename.clone());
+                            close_dialog = true;
+                        }
+
+                        if ui.button("Cancel").clicked() {
+                            close_dialog = true;
+                        }
+                    });
+                });
+
+            if close_dialog {
+                self.show_load_dialog = false;
+                if let Some(path) = load_path {
+                    self.load_project(&path);
+                    self.project_path = Some(path);
+                }
+            }
+        }
 
         // Top panel - Transport controls
         egui::TopBottomPanel::top("transport").show(ctx, |ui| {
@@ -258,6 +374,7 @@ impl eframe::App for YadawApp {
                                 plugin_chain: vec![],
                                 patterns: vec![],
                                 is_midi: false,
+                                audio_clips: vec![],
                             });
                         }
                     }
@@ -414,5 +531,30 @@ impl eframe::App for YadawApp {
                 ctx.request_repaint();
             }
         });
+    }
+}
+impl YadawApp {
+    fn save_project(&self, path: &str) {
+        let state = self.state.lock().unwrap();
+        let project = Project::from(&*state);
+
+        match std::fs::write(path, serde_json::to_string_pretty(&project).unwrap()) {
+            Ok(_) => println!("Project saved to {}", path),
+            Err(e) => eprintln!("Failed to save project: {}", e),
+        }
+    }
+
+    fn load_project(&self, path: &str) {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str::<Project>(&content) {
+                Ok(project) => {
+                    let mut state = self.state.lock().unwrap();
+                    state.load_project(project);
+                    println!("Project loaded from {}", path);
+                }
+                Err(e) => eprintln!("Failed to parse project: {}", e),
+            },
+            Err(e) => eprintln!("Failed to read project file: {}", e),
+        }
     }
 }
