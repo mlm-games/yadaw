@@ -31,3 +31,6 @@ glob = "0.3"
 
 shellexpand = "3.1"
 env_logger = "0.11.8"
+
+lilv = "0.2.4"
+lazy_static = "1.5.0"

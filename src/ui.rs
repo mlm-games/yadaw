@@ -1,3 +1,4 @@
+use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::plugin::PluginInfo;
 use crate::state::{AppState, AudioCommand, UIUpdate};
 use crossbeam_channel::{Receiver, Sender};
@@ -11,6 +12,9 @@ pub struct YadawApp {
     available_plugins: Vec<PluginInfo>,
     show_plugin_browser: bool,
     selected_track_for_plugin: Option<usize>,
+    piano_roll: PianoRoll,
+    selected_track: usize,
+    selected_pattern: usize,
 }
 
 impl YadawApp {
@@ -27,6 +31,9 @@ impl YadawApp {
             available_plugins,
             show_plugin_browser: false,
             selected_track_for_plugin: None,
+            piano_roll: PianoRoll::default(),
+            selected_track: 1, // Start with MIDI track selected
+            selected_pattern: 0,
         }
     }
 }
@@ -123,11 +130,24 @@ impl eframe::App for YadawApp {
                         let num_tracks = state.tracks.len();
 
                         for i in 0..num_tracks {
+                            let is_selected = i == self.selected_track;
+
                             ui.group(|ui| {
+                                if is_selected {
+                                    ui.visuals_mut().override_text_color =
+                                        Some(egui::Color32::from_rgb(150, 200, 255));
+                                }
+
                                 let track = &mut state.tracks[i];
 
                                 ui.horizontal(|ui| {
                                     ui.label(&track.name);
+
+                                    if ui.button(&track.name).clicked() {
+                                        self.selected_track = i;
+                                    }
+
+                                    ui.label(if track.is_midi { "🎹" } else { "🎵" });
 
                                     if ui
                                         .small_button(if track.muted { "🔇" } else { "🔊" })
@@ -236,6 +256,8 @@ impl eframe::App for YadawApp {
                                 solo: false,
                                 armed: false,
                                 plugin_chain: vec![],
+                                patterns: vec![],
+                                is_midi: false,
                             });
                         }
                     }
@@ -249,57 +271,127 @@ impl eframe::App for YadawApp {
 
         // Central panel - Timeline/Arrangement
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Get the rect and state info we need before drawing
-            let rect = ui.available_rect_before_wrap();
-            let (is_playing, current_position, sample_rate) = {
+            // Check if selected track is MIDI
+            let is_midi_track = {
                 let state = self.state.lock().unwrap();
-                (state.playing, state.current_position, state.sample_rate)
+                state
+                    .tracks
+                    .get(self.selected_track)
+                    .map(|t| t.is_midi)
+                    .unwrap_or(false)
             };
 
-            // Now do all the drawing
-            let painter = ui.painter();
+            if is_midi_track {
+                // Show piano roll for MIDI tracks
+                ui.heading("Piano Roll");
 
-            // Draw grid
-            let grid_size = 50.0;
-            let grid_color = egui::Color32::from_gray(40);
+                // Pattern selector
+                ui.horizontal(|ui| {
+                    ui.label("Pattern:");
+                    let state = self.state.lock().unwrap();
+                    if let Some(track) = state.tracks.get(self.selected_track) {
+                        for (i, pattern) in track.patterns.iter().enumerate() {
+                            if ui
+                                .selectable_label(i == self.selected_pattern, &pattern.name)
+                                .clicked()
+                            {
+                                self.selected_pattern = i;
+                            }
+                        }
+                    }
+                });
 
-            for i in 0..((rect.width() / grid_size) as i32 + 1) {
-                let x = rect.left() + i as f32 * grid_size;
-                painter.line_segment(
-                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                    egui::Stroke::new(1.0, grid_color),
-                );
+                ui.separator();
+
+                // Piano roll editor
+                let mut pattern_actions = Vec::new();
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if let Some(track) = state.tracks.get_mut(self.selected_track) {
+                        if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                            pattern_actions = self.piano_roll.ui(ui, pattern);
+                        }
+                    }
+                }
+
+                // Process piano roll actions
+                for action in pattern_actions {
+                    match action {
+                        PianoRollAction::AddNote(note) => {
+                            let _ = self.audio_tx.send(AudioCommand::AddNote(
+                                self.selected_track,
+                                self.selected_pattern,
+                                note,
+                            ));
+                        }
+                        PianoRollAction::RemoveNote(index) => {
+                            let _ = self.audio_tx.send(AudioCommand::RemoveNote(
+                                self.selected_track,
+                                self.selected_pattern,
+                                index,
+                            ));
+                        }
+                        PianoRollAction::UpdateNote(index, note) => {
+                            let _ = self.audio_tx.send(AudioCommand::UpdateNote(
+                                self.selected_track,
+                                self.selected_pattern,
+                                index,
+                                note,
+                            ));
+                        }
+                    }
+                }
+            } else {
+                // Show timeline for audio tracks (existing code)
+                let rect = ui.available_rect_before_wrap();
+                let (is_playing, current_position, sample_rate) = {
+                    let state = self.state.lock().unwrap();
+                    (state.playing, state.current_position, state.sample_rate)
+                };
+
+                let painter = ui.painter();
+
+                // Draw grid
+                let grid_size = 50.0;
+                let grid_color = egui::Color32::from_gray(40);
+
+                for i in 0..((rect.width() / grid_size) as i32 + 1) {
+                    let x = rect.left() + i as f32 * grid_size;
+                    painter.line_segment(
+                        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                        egui::Stroke::new(1.0, grid_color),
+                    );
+                }
+
+                for i in 0..((rect.height() / grid_size) as i32 + 1) {
+                    let y = rect.top() + i as f32 * grid_size;
+                    painter.line_segment(
+                        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                        egui::Stroke::new(1.0, grid_color),
+                    );
+                }
+
+                // Draw playhead
+                if is_playing {
+                    let pixels_per_second = 100.0;
+                    let time_seconds = current_position / sample_rate as f64;
+                    let playhead_x = rect.left() + (time_seconds * pixels_per_second) as f32;
+
+                    painter.line_segment(
+                        [
+                            egui::pos2(playhead_x, rect.top()),
+                            egui::pos2(playhead_x, rect.bottom()),
+                        ],
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 100, 100)),
+                    );
+                }
+
+                ui.heading("Timeline");
+                ui.label("Audio arrangement view - Coming soon!");
             }
 
-            for i in 0..((rect.height() / grid_size) as i32 + 1) {
-                let y = rect.top() + i as f32 * grid_size;
-                painter.line_segment(
-                    [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                    egui::Stroke::new(1.0, grid_color),
-                );
-            }
-
-            // Draw playhead
-            if is_playing {
-                let pixels_per_second = 100.0;
-                let time_seconds = current_position / sample_rate as f64;
-                let playhead_x = rect.left() + (time_seconds * pixels_per_second) as f32;
-
-                painter.line_segment(
-                    [
-                        egui::pos2(playhead_x, rect.top()),
-                        egui::pos2(playhead_x, rect.bottom()),
-                    ],
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 100, 100)),
-                );
-            }
-
-            // UI elements after drawing
-            ui.heading("Timeline");
-            ui.label("Piano roll and arrangement view - Coming soon!");
-
-            // Request repaint for smooth playback position updates
-            if is_playing {
+            // Request repaint for smooth playback
+            if self.state.lock().unwrap().playing {
                 ctx.request_repaint();
             }
         });

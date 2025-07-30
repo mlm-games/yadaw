@@ -1,4 +1,5 @@
 mod audio;
+mod piano_roll;
 mod plugin;
 mod state;
 mod ui;
@@ -12,9 +13,7 @@ fn main() -> Result<(), eframe::Error> {
 
     // Scan for plugins
     let mut scanner = plugin::PluginScanner::new();
-    if let Err(e) = scanner.scan_default_paths() {
-        eprintln!("Error scanning plugins: {}", e);
-    }
+    scanner.discover_plugins();
     let available_plugins = scanner.get_plugins();
     println!("Found {} LV2 plugins", available_plugins.len());
 
