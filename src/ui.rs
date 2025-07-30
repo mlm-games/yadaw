@@ -31,6 +31,10 @@ pub struct YadawApp {
     show_mixer: bool,
     track_meters: Vec<LevelMeter>,
     clipboard: Option<Vec<AudioClip>>,
+    show_rename_dialog: Option<(usize, usize)>, // (track_id, clip_id)
+    rename_text: String,
+    master_meter: LevelMeter,
+    recording_level: f32,
 }
 
 impl YadawApp {
@@ -63,6 +67,10 @@ impl YadawApp {
             show_mixer: false,
             track_meters: vec![],
             clipboard: Option::None,
+            show_rename_dialog: Option::None,
+            rename_text: String::new(),
+            master_meter: LevelMeter::default(),
+            recording_level: 0.0,
         }
     }
 
@@ -266,11 +274,19 @@ enum TimelineInteraction {
     DragClip {
         track_id: usize,
         clip_id: usize,
-        delta: egui::Vec2,
+        initial_beat: f64,
+        start_mouse_x: f32,
     },
-    ToggleClip {
+    ResizeClipLeft {
         track_id: usize,
         clip_id: usize,
+        initial_start: f64,
+        initial_length: f64,
+    },
+    ResizeClipRight {
+        track_id: usize,
+        clip_id: usize,
+        initial_length: f64,
     },
 }
 
@@ -367,6 +383,27 @@ impl eframe::App for YadawApp {
                 }
                 UIUpdate::RecordingLevel(level) => {
                     // TODO: Show recording level meter
+                }
+                UIUpdate::TrackLevels(levels) => {
+                    // Update track meters
+                    while self.track_meters.len() < levels.len() {
+                        self.track_meters.push(LevelMeter::default());
+                    }
+
+                    for (i, (left, right)) in levels.iter().enumerate() {
+                        if i < self.track_meters.len() {
+                            // Create a small buffer for the meter update
+                            let samples = vec![left.max(*right)];
+                            self.track_meters[i].update(&samples, 1.0 / 60.0);
+                        }
+                    }
+                }
+                UIUpdate::RecordingLevel(level) => {
+                    self.recording_level = level;
+                }
+                UIUpdate::MasterLevel(left, right) => {
+                    let samples = vec![left.max(right)];
+                    self.master_meter.update(&samples, 1.0 / 60.0);
                 }
                 _ => {}
             }
@@ -609,6 +646,43 @@ impl eframe::App for YadawApp {
                 {
                     state.master_volume = master_vol;
                 }
+
+                {
+                    let state = self.state.lock().unwrap();
+                    if state.recording {
+                        ui.separator();
+
+                        // Recording indicator
+                        ui.colored_label(egui::Color32::RED, "● REC");
+
+                        // Recording level meter
+                        let level_db = 20.0 * self.recording_level.max(0.0001).log10();
+                        let normalized = (level_db + 60.0) / 60.0;
+
+                        let (response, painter) =
+                            ui.allocate_painter(egui::vec2(100.0, 10.0), egui::Sense::hover());
+
+                        let rect = response.rect;
+                        painter.rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+
+                        let level_rect = egui::Rect::from_min_size(
+                            rect.min,
+                            egui::vec2(rect.width() * normalized.clamp(0.0, 1.0), rect.height()),
+                        );
+
+                        let color = if level_db > -3.0 {
+                            egui::Color32::RED
+                        } else if level_db > -12.0 {
+                            egui::Color32::YELLOW
+                        } else {
+                            egui::Color32::GREEN
+                        };
+
+                        painter.rect_filled(level_rect, 2.0, color);
+
+                        ui.label(format!("{:.1} dB", level_db));
+                    }
+                }
             });
         });
 
@@ -722,10 +796,83 @@ impl eframe::App for YadawApp {
 
                                 let mut plugin_to_remove = None;
                                 for (j, plugin) in track.plugin_chain.iter().enumerate() {
-                                    ui.horizontal(|ui| {
-                                        ui.label(&plugin.name);
-                                        if ui.small_button("×").clicked() {
-                                            plugin_to_remove = Some(j);
+                                    ui.collapsing(&plugin.name, |ui| {
+                                        ui.horizontal(|ui| {
+                                            // Bypass toggle
+                                            let mut bypass = plugin.bypass;
+                                            if ui.checkbox(&mut bypass, "Bypass").changed() {
+                                                commands_to_send.push(
+                                                    AudioCommand::SetPluginBypass(i, j, bypass),
+                                                );
+                                            }
+
+                                            // Remove button
+                                            if ui.small_button("×").clicked() {
+                                                plugin_to_remove = Some(j);
+                                            }
+                                        });
+
+                                        // Parameter controls
+                                        for (param_name, param) in &plugin.params {
+                                            ui.horizontal(|ui| {
+                                                ui.label(&param.name);
+                                                let mut value = param.value;
+
+                                                // Use appropriate widget based on parameter range
+                                                if param.max - param.min <= 1.0 && param.min == 0.0
+                                                {
+                                                    // Likely a toggle
+                                                    let mut enabled = value > 0.5;
+                                                    if ui.checkbox(&mut enabled, "").changed() {
+                                                        value = if enabled { 1.0 } else { 0.0 };
+                                                        commands_to_send.push(
+                                                            AudioCommand::SetPluginParam(
+                                                                i,
+                                                                j,
+                                                                param_name.clone(),
+                                                                value,
+                                                            ),
+                                                        );
+                                                    }
+                                                } else {
+                                                    // Slider
+                                                    if ui
+                                                        .add(
+                                                            egui::Slider::new(
+                                                                &mut value,
+                                                                param.min..=param.max,
+                                                            )
+                                                            .show_value(true),
+                                                        )
+                                                        .changed()
+                                                    {
+                                                        commands_to_send.push(
+                                                            AudioCommand::SetPluginParam(
+                                                                i,
+                                                                j,
+                                                                param_name.clone(),
+                                                                value,
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+
+                                                // Reset button
+                                                if ui
+                                                    .small_button("↺")
+                                                    .on_hover_text("Reset to default")
+                                                    .clicked()
+                                                {
+                                                    commands_to_send.push(
+                                                        AudioCommand::SetPluginParam(
+                                                            i,
+                                                            j,
+                                                            param_name.clone(),
+                                                            param.default,
+                                                        ),
+                                                    );
+                                                }
+                                            });
                                         }
                                     });
                                 }
@@ -975,14 +1122,11 @@ impl eframe::App for YadawApp {
                                         clip_interactions.push(TimelineInteraction::DragClip {
                                             track_id: track_idx,
                                             clip_id: clip_idx,
-                                            delta: response.drag_delta(),
-                                        });
-                                    }
-
-                                    if response.double_clicked() {
-                                        clip_interactions.push(TimelineInteraction::ToggleClip {
-                                            track_id: track_idx,
-                                            clip_id: clip_idx,
+                                            initial_beat: clip.start_beat,
+                                            start_mouse_x: response
+                                                .interact_pointer_pos()
+                                                .map(|p| p.x)
+                                                .unwrap_or(0.0),
                                         });
                                     }
 
@@ -991,6 +1135,50 @@ impl eframe::App for YadawApp {
                                         self.show_clip_menu = true;
                                         self.clip_menu_pos =
                                             response.interact_pointer_pos().unwrap_or_default();
+                                    }
+
+                                    let edge_threshold = 5.0;
+                                    let hover_left_edge =
+                                        (response.hover_pos().map(|p| p.x).unwrap_or(0.0)
+                                            - clip_rect.left())
+                                        .abs()
+                                            < edge_threshold;
+                                    let hover_right_edge = (clip_rect.right()
+                                        - response.hover_pos().map(|p| p.x).unwrap_or(0.0))
+                                    .abs()
+                                        < edge_threshold;
+
+                                    if hover_left_edge || hover_right_edge {
+                                        ui.ctx()
+                                            .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                                    }
+
+                                    if response.drag_started() {
+                                        if hover_left_edge {
+                                            clip_interactions.push(
+                                                TimelineInteraction::ResizeClipLeft {
+                                                    track_id: track_idx,
+                                                    clip_id: clip_idx,
+                                                    initial_start: clip.start_beat,
+                                                    initial_length: clip.length_beats,
+                                                },
+                                            );
+                                        } else if hover_right_edge {
+                                            clip_interactions.push(
+                                                TimelineInteraction::ResizeClipRight {
+                                                    track_id: track_idx,
+                                                    clip_id: clip_idx,
+                                                    initial_length: clip.length_beats,
+                                                },
+                                            );
+                                        } else {
+                                            clip_interactions.push(TimelineInteraction::DragClip {
+                                                track_id: track_idx,
+                                                clip_id: clip_idx,
+                                                initial_beat: clip.start_beat,
+                                                start_mouse_x: clip_x,
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -1085,19 +1273,62 @@ impl eframe::App for YadawApp {
                                 TimelineInteraction::DragClip {
                                     track_id,
                                     clip_id,
-                                    delta,
+                                    initial_beat,
+                                    start_mouse_x,
                                 } => {
-                                    let mut state = self.state.lock().unwrap();
-                                    if let Some(track) = state.tracks.get_mut(track_id) {
-                                        if let Some(clip) = track.audio_clips.get_mut(clip_id) {
-                                            let beat_delta = delta.x / self.timeline_zoom;
-                                            clip.start_beat =
-                                                (clip.start_beat + beat_delta as f64).max(0.0);
+                                    if let Some(current_pos) = ui.ctx().pointer_latest_pos() {
+                                        let mut state = self.state.lock().unwrap();
+                                        if let Some(track) = state.tracks.get_mut(track_id) {
+                                            if let Some(clip) = track.audio_clips.get_mut(clip_id) {
+                                                let delta_x = current_pos.x - start_mouse_x;
+                                                let beat_delta = delta_x / self.timeline_zoom;
+                                                clip.start_beat =
+                                                    (initial_beat + beat_delta as f64).max(0.0);
+                                            }
                                         }
                                     }
                                 }
-                                TimelineInteraction::ToggleClip { track_id, clip_id } => {
-                                    // TODO: Implement clip selection/editing
+                                TimelineInteraction::ResizeClipLeft {
+                                    track_id,
+                                    clip_id,
+                                    initial_start,
+                                    initial_length,
+                                } => {
+                                    // Handle left resize
+                                    if let Some(current_pos) = ui.ctx().pointer_latest_pos() {
+                                        let mut state = self.state.lock().unwrap();
+                                        if let Some(track) = state.tracks.get_mut(track_id) {
+                                            if let Some(clip) = track.audio_clips.get_mut(clip_id) {
+                                                let grid_x = current_pos.x - timeline_rect.left();
+                                                let new_start_beat =
+                                                    (grid_x / self.timeline_zoom) as f64;
+                                                let end_beat = initial_start + initial_length;
+
+                                                clip.start_beat =
+                                                    new_start_beat.min(end_beat - 0.25); // Min length
+                                                clip.length_beats = end_beat - clip.start_beat;
+                                            }
+                                        }
+                                    }
+                                }
+                                TimelineInteraction::ResizeClipRight {
+                                    track_id,
+                                    clip_id,
+                                    initial_length,
+                                } => {
+                                    // Handle right resize
+                                    if let Some(current_pos) = ui.ctx().pointer_latest_pos() {
+                                        let mut state = self.state.lock().unwrap();
+                                        if let Some(track) = state.tracks.get_mut(track_id) {
+                                            if let Some(clip) = track.audio_clips.get_mut(clip_id) {
+                                                let grid_x = current_pos.x - timeline_rect.left();
+                                                let mouse_beat =
+                                                    (grid_x / self.timeline_zoom) as f64;
+                                                clip.length_beats =
+                                                    (mouse_beat - clip.start_beat).max(0.25);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1180,8 +1411,64 @@ impl eframe::App for YadawApp {
                                 }
 
                                 if ui.button("Rename...").clicked() {
-                                    // TODO: Show rename dialog
+                                    if let Some((track_id, clip_id)) = self.selected_clips.first() {
+                                        self.show_rename_dialog = Some((*track_id, *clip_id));
+
+                                        // Pre-fill with current name
+                                        if let Ok(state) = self.state.lock() {
+                                            if let Some(track) = state.tracks.get(*track_id) {
+                                                if let Some(clip) = track.audio_clips.get(*clip_id)
+                                                {
+                                                    self.rename_text = clip.name.clone();
+                                                }
+                                            }
+                                        }
+                                    }
                                     close_menu = true;
+                                }
+
+                                if let Some((track_id, clip_id)) = self.show_rename_dialog {
+                                    let mut keep_open = true;
+
+                                    egui::Window::new("Rename Clip")
+                                        .collapsible(false)
+                                        .resizable(false)
+                                        .show(ctx, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Name:");
+                                                ui.text_edit_singleline(&mut self.rename_text);
+                                            });
+
+                                            ui.horizontal(|ui| {
+                                                if ui.button("OK").clicked() {
+                                                    self.push_undo();
+
+                                                    if let Ok(mut state) = self.state.lock() {
+                                                        if let Some(track) =
+                                                            state.tracks.get_mut(track_id)
+                                                        {
+                                                            if let Some(clip) =
+                                                                track.audio_clips.get_mut(clip_id)
+                                                            {
+                                                                clip.name =
+                                                                    self.rename_text.clone();
+                                                            }
+                                                        }
+                                                    }
+
+                                                    keep_open = false;
+                                                }
+
+                                                if ui.button("Cancel").clicked() {
+                                                    keep_open = false;
+                                                }
+                                            });
+                                        });
+
+                                    if !keep_open {
+                                        self.show_rename_dialog = None;
+                                        self.rename_text.clear();
+                                    }
                                 }
 
                                 ui.separator();
@@ -1323,7 +1610,7 @@ impl eframe::App for YadawApp {
                                         ui.separator();
 
                                         // Master level meter
-                                        // TODO: Add master meter
+                                        self.master_meter.ui(ui, true);
 
                                         ui.separator();
 

@@ -30,7 +30,17 @@ pub struct PluginInstance {
     pub uri: String,
     pub name: String,
     pub bypass: bool,
-    pub params: HashMap<String, f32>,
+    pub params: HashMap<String, PluginParam>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginParam {
+    pub index: usize,
+    pub name: String,
+    pub value: f32,
+    pub min: f32,
+    pub max: f32,
+    pub default: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -240,6 +250,7 @@ pub enum AudioCommand {
     TrimClipEnd(usize, usize, f64),
     PreviewNote(usize, u8), // track_id, pitch
     StopPreviewNote,
+    SetPluginBypass(usize, usize, bool),
 }
 
 #[derive(Debug, Clone)]
@@ -250,4 +261,5 @@ pub enum UIUpdate {
     RecordingLevel(f32), // peak level
     RecordingFinished(usize, AudioClip),
     TrackLevels(Vec<(f32, f32)>),
+    MasterLevel(f32, f32),
 }

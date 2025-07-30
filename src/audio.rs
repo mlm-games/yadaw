@@ -1,4 +1,4 @@
-use crate::state::{AppState, AudioClip, AudioCommand, PluginInstance as PluginDesc, UIUpdate};
+use crate::state::{AppState, AudioClip, AudioCommand, PluginInstance, PluginParam, UIUpdate};
 use crate::state::{MidiNote, Pattern};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
@@ -34,6 +34,7 @@ struct PluginState {
     // Store port indices for efficiency
     audio_in_ports: Vec<usize>,
     audio_out_ports: Vec<usize>,
+    control_values: HashMap<usize, f32>,
 }
 
 struct TrackAudioState {
@@ -184,6 +185,7 @@ pub fn run_audio_thread(
                             .plugins()
                             .iter()
                             .find(|p| p.uri().as_uri().unwrap_or("") == uri);
+
                         if let Some(plugin) = plugin {
                             if let Some(mut instance) =
                                 unsafe { plugin.instantiate(sample_rate, &[]) }
@@ -191,12 +193,15 @@ pub fn run_audio_thread(
                                 let plugin_name =
                                     plugin.name().as_str().unwrap_or(&uri).to_string();
 
-                                // Find audio ports
+                                // Find audio and control ports
                                 let mut audio_in_ports = Vec::new();
                                 let mut audio_out_ports = Vec::new();
+                                let mut params = HashMap::new();
+                                let mut control_values = HashMap::new();
 
                                 for port in plugin.iter_ports() {
                                     let index = port.index() as usize;
+
                                     if port.is_a(
                                         &LV2_WORLD
                                             .new_uri("http://lv2plug.in/ns/lv2core#AudioPort"),
@@ -212,64 +217,111 @@ pub fn run_audio_thread(
                                         ) {
                                             audio_out_ports.push(index);
                                         }
+                                    } else if port.is_a(
+                                        &LV2_WORLD
+                                            .new_uri("http://lv2plug.in/ns/lv2core#ControlPort"),
+                                    ) && port.is_a(
+                                        &LV2_WORLD
+                                            .new_uri("http://lv2plug.in/ns/lv2core#InputPort"),
+                                    ) {
+                                        let name = port
+                                            .name()
+                                            .expect("Port name error")
+                                            .as_str()
+                                            .unwrap_or("Unknown")
+                                            .to_string();
+                                        // Use default values - lilv doesn't provide these methods directly
+                                        let default = 0.5f32;
+                                        let min = 0.0f32;
+                                        let max = 1.0f32;
+
+                                        params.insert(
+                                            name.clone(),
+                                            PluginParam {
+                                                index,
+                                                name: name.clone(),
+                                                value: default,
+                                                min,
+                                                max,
+                                                default,
+                                            },
+                                        );
+
+                                        control_values.insert(index, default);
                                     }
                                 }
 
-                                // Connect all ports to buffers
-                                let track_audio = &mut audio_state_local[track_id];
+                                // Get the track's audio state
+                                if let Some(track_audio) = audio_state_local.get_mut(track_id) {
+                                    // Connect all ports to buffers
+                                    unsafe {
+                                        // Connect audio input ports
+                                        for (i, &port_idx) in audio_in_ports.iter().enumerate() {
+                                            if i == 0 {
+                                                instance.connect_port(
+                                                    port_idx,
+                                                    track_audio.input_buffer_l.as_ptr(),
+                                                );
+                                            } else if i == 1 {
+                                                instance.connect_port(
+                                                    port_idx,
+                                                    track_audio.input_buffer_r.as_ptr(),
+                                                );
+                                            }
+                                        }
 
-                                // Connect audio input ports
-                                unsafe {
-                                    if audio_in_ports.len() > 0 {
-                                        instance.connect_port(
-                                            audio_in_ports[0],
-                                            track_audio.input_buffer_l.as_ptr(),
-                                        );
-                                    }
-                                    if audio_in_ports.len() > 1 {
-                                        instance.connect_port(
-                                            audio_in_ports[1],
-                                            track_audio.input_buffer_r.as_ptr(),
-                                        );
-                                    }
+                                        // Connect audio output ports
+                                        for (i, &port_idx) in audio_out_ports.iter().enumerate() {
+                                            if i == 0 {
+                                                instance.connect_port_mut(
+                                                    port_idx,
+                                                    track_audio.output_buffer_l.as_mut_ptr(),
+                                                );
+                                            } else if i == 1 {
+                                                instance.connect_port_mut(
+                                                    port_idx,
+                                                    track_audio.output_buffer_r.as_mut_ptr(),
+                                                );
+                                            }
+                                        }
 
-                                    // Connect audio output ports
-                                    if audio_out_ports.len() > 0 {
-                                        instance.connect_port_mut(
-                                            audio_out_ports[0],
-                                            track_audio.output_buffer_l.as_mut_ptr(),
-                                        );
-                                    }
-                                    if audio_out_ports.len() > 1 {
-                                        instance.connect_port_mut(
-                                            audio_out_ports[1],
-                                            track_audio.output_buffer_r.as_mut_ptr(),
-                                        );
-                                    }
+                                        // Connect control ports
+                                        for (&port_idx, &value) in &control_values {
+                                            let value_ptr = Box::into_raw(Box::new(value));
+                                            instance.connect_port(port_idx, value_ptr);
+                                        }
 
-                                    // Activate the instance
-                                    let active_instance = instance.activate();
+                                        // Activate the instance
+                                        let active_instance = instance.activate();
 
-                                    track_audio.plugins.push(PluginState {
-                                        plugin_def: plugin.clone(),
-                                        instance: active_instance,
-                                        audio_in_ports,
-                                        audio_out_ports,
-                                    });
+                                        track_audio.plugins.push(PluginState {
+                                            plugin_def: plugin.clone(),
+                                            instance: active_instance,
+                                            audio_in_ports,
+                                            audio_out_ports,
+                                            control_values,
+                                        });
+                                    }
                                 }
 
-                                track.plugin_chain.push(PluginDesc {
+                                track.plugin_chain.push(PluginInstance {
                                     uri: uri.clone(),
                                     name: plugin_name,
                                     bypass: false,
-                                    params: HashMap::new(),
+                                    params,
                                 });
-                            } else {
-                                eprintln!("Failed to instantiate plugin: {}", uri);
                             }
                         }
                     }
                 }
+                AudioCommand::SetPluginBypass(track_id, plugin_idx, bypass) => {
+                    if let Some(track) = state_lock.tracks.get_mut(track_id) {
+                        if let Some(plugin) = track.plugin_chain.get_mut(plugin_idx) {
+                            plugin.bypass = bypass;
+                        }
+                    }
+                }
+
                 AudioCommand::RemovePlugin(track_id, plugin_idx) => {
                     if let Some(track) = state_lock.tracks.get_mut(track_id) {
                         if plugin_idx < track.plugin_chain.len() {
@@ -514,21 +566,37 @@ pub fn run_audio_thread(
             }
 
             // Process through plugin chain
-            for plugin_state in &mut track_audio.plugins {
-                // Clear output buffers
-                track_audio.output_buffer_l[..num_frames].fill(0.0);
-                track_audio.output_buffer_r[..num_frames].fill(0.0);
+            for (plugin_idx, plugin_state) in track_audio.plugins.iter_mut().enumerate() {
+                // Check if bypassed
+                let bypassed = state_lock
+                    .tracks
+                    .get(track_idx)
+                    .and_then(|t| t.plugin_chain.get(plugin_idx))
+                    .map(|p| p.bypass)
+                    .unwrap_or(false);
 
-                // Run the plugin
-                unsafe {
-                    plugin_state.instance.run(num_frames);
+                if !bypassed {
+                    // Clear output buffers
+                    track_audio.output_buffer_l[..num_frames].fill(0.0);
+                    track_audio.output_buffer_r[..num_frames].fill(0.0);
+
+                    // Update control port values
+                    for (&port_idx, value_ptr) in &plugin_state.control_values {
+                        // Update the value at the pointer
+                        //HACK: needs proper memory management
+                    }
+
+                    // Run the plugin
+                    unsafe {
+                        plugin_state.instance.run(num_frames);
+                    }
+
+                    // Copy output to input for next plugin in chain
+                    track_audio.input_buffer_l[..num_frames]
+                        .copy_from_slice(&track_audio.output_buffer_l[..num_frames]);
+                    track_audio.input_buffer_r[..num_frames]
+                        .copy_from_slice(&track_audio.output_buffer_r[..num_frames]);
                 }
-
-                // Copy output to input for next plugin in chain
-                track_audio.input_buffer_l[..num_frames]
-                    .copy_from_slice(&track_audio.output_buffer_l[..num_frames]);
-                track_audio.input_buffer_r[..num_frames]
-                    .copy_from_slice(&track_audio.output_buffer_r[..num_frames]);
             }
 
             // Mix track output to master
@@ -572,6 +640,23 @@ pub fn run_audio_thread(
         }
 
         let _ = updates.try_send(UIUpdate::TrackLevels(track_levels));
+
+        let mut master_left_peak = 0.0f32;
+        let mut master_right_peak = 0.0f32;
+
+        for i in 0..num_frames {
+            let left = data[i * channels];
+            let right = if channels > 1 {
+                data[i * channels + 1]
+            } else {
+                left
+            };
+
+            master_left_peak = master_left_peak.max(left.abs());
+            master_right_peak = master_right_peak.max(right.abs());
+        }
+
+        let _ = updates.try_send(UIUpdate::MasterLevel(master_left_peak, master_right_peak));
 
         // 3. Finalize
         for sample in data.iter_mut() {
