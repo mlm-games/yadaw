@@ -238,6 +238,8 @@ pub enum AudioCommand {
     DeleteClip(usize, usize),
     TrimClipStart(usize, usize, f64), // ||, ||, new_start_beat
     TrimClipEnd(usize, usize, f64),
+    PreviewNote(usize, u8), // track_id, pitch
+    StopPreviewNote,
 }
 
 #[derive(Debug, Clone)]

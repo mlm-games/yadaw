@@ -85,6 +85,8 @@ pub fn run_audio_thread(
         recording_start_position: 0.0,
     }));
 
+    let mut preview_note: Option<(usize, u8, f64)> = None;
+
     let recording_state_clone = recording_state.clone();
     let state_clone = state.clone();
     let updates_clone = updates.clone();
@@ -169,6 +171,12 @@ pub fn run_audio_thread(
                     if let Some(track) = state_lock.tracks.get_mut(id) {
                         track.muted = mute;
                     }
+                }
+                AudioCommand::PreviewNote(track_id, pitch) => {
+                    preview_note = Some((track_id, pitch, state_lock.current_position));
+                }
+                AudioCommand::StopPreviewNote => {
+                    preview_note = None;
                 }
                 AudioCommand::AddPlugin(track_id, uri) => {
                     if let Some(track) = state_lock.tracks.get_mut(track_id) {
@@ -356,6 +364,34 @@ pub fn run_audio_thread(
 
         if !state_lock.playing {
             return;
+        }
+
+        if let Some((track_id, pitch, start_sample)) = preview_note {
+            if track_id < audio_state_local.len() {
+                let track_audio = &mut audio_state_local[track_id];
+
+                // Generate preview sound
+                for i in 0..num_frames {
+                    let sample_pos = state_lock.current_position + i as f64 - start_sample;
+                    if sample_pos > 0.0 {
+                        let freq = 440.0 * 2.0_f32.powf((pitch as f32 - 69.0) / 12.0);
+                        let phase =
+                            (sample_pos * freq as f64 / state_lock.sample_rate as f64) % 1.0;
+                        let envelope = (-(sample_pos * 4.0)).exp() as f32; // Quick decay
+                        let sample =
+                            (phase * 2.0 * std::f64::consts::PI).sin() as f32 * envelope * 0.3;
+
+                        track_audio.input_buffer_l[i] += sample;
+                        track_audio.input_buffer_r[i] += sample;
+                    }
+                }
+
+                // Stop preview after 0.5 seconds
+                if state_lock.current_position - start_sample > state_lock.sample_rate as f64 * 0.5
+                {
+                    preview_note = None;
+                }
+            }
         }
 
         for (track_idx, track) in state_lock.tracks.iter().enumerate() {

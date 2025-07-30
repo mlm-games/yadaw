@@ -857,6 +857,14 @@ impl eframe::App for YadawApp {
                                 note,
                             ));
                         }
+                        PianoRollAction::PreviewNote(pitch) => {
+                            let _ = self
+                                .audio_tx
+                                .send(AudioCommand::PreviewNote(self.selected_track, pitch));
+                        }
+                        PianoRollAction::StopPreview => {
+                            let _ = self.audio_tx.send(AudioCommand::StopPreviewNote);
+                        }
                     }
                 }
             } else {
