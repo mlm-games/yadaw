@@ -72,8 +72,6 @@ pub fn run_audio_thread(
         }
     }
 
-    let mut test_signal_phase = 0.0f32;
-
     let mut audio_callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         let num_frames = data.len() / channels;
 
@@ -298,7 +296,8 @@ pub fn run_audio_thread(
 
                     // Handle pattern loop
                     if pattern_position < track_audio.last_pattern_position {
-                        // Pattern looped, retrigger notes at start
+                        // Pattern looped, clear all notes and retrigger
+                        track_audio.active_notes.clear();
                         for note in &pattern.notes {
                             if note.start < 0.1 {
                                 // Notes at the very beginning
@@ -314,8 +313,7 @@ pub fn run_audio_thread(
                     track_audio.last_pattern_position = pattern_position;
                 }
 
-                // For now, generate simple tones for active notes
-                // In a real implementation, you'd send MIDI events to instrument plugins
+                // Generate audio for active MIDI notes
                 for i in 0..num_frames {
                     let mut sample = 0.0;
                     for note in &track_audio.active_notes {
@@ -332,13 +330,15 @@ pub fn run_audio_thread(
                     track_audio.input_buffer_r[i] = sample;
                 }
             } else {
-                // Audio track - generate test signal as before
-                for i in 0..num_frames {
-                    test_signal_phase =
-                        (test_signal_phase + 440.0 / state_lock.sample_rate).fract();
-                    let sample = (test_signal_phase * 2.0 * std::f32::consts::PI).sin() * 0.2;
-                    track_audio.input_buffer_l[i] = sample;
-                    track_audio.input_buffer_r[i] = sample;
+                if track_audio.plugins.is_empty() {
+                    for i in 0..num_frames {
+                        track_audio.input_buffer_l[i] = 0.0; // Silence for now
+                        track_audio.input_buffer_r[i] = 0.0;
+                    }
+                } else {
+                    // Clear buffers, plugins will generate/process audio
+                    track_audio.input_buffer_l[..num_frames].fill(0.0);
+                    track_audio.input_buffer_r[..num_frames].fill(0.0);
                 }
             }
 

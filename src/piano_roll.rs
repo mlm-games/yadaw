@@ -1,5 +1,5 @@
 use crate::state::{MidiNote, Pattern};
-use eframe::egui;
+use eframe::{egui, egui_glow::painter};
 
 pub struct PianoRoll {
     pub zoom_x: f32, // Pixels per beat
@@ -28,10 +28,13 @@ impl PianoRoll {
         let mut actions = Vec::new();
 
         let available_rect = ui.available_rect_before_wrap();
-        let painter = ui.painter();
+
+        // Make the piano roll take up the full available space
+        ui.allocate_rect(available_rect, egui::Sense::click_and_drag());
 
         // Background
-        painter.rect_filled(available_rect, 0.0, egui::Color32::from_gray(20));
+        ui.painter()
+            .rect_filled(available_rect, 0.0, egui::Color32::from_gray(20));
 
         // Draw piano keys on the left
         let piano_width = 60.0;
@@ -40,7 +43,7 @@ impl PianoRoll {
             egui::vec2(piano_width, available_rect.height()),
         );
 
-        self.draw_piano_keys(&painter, piano_rect);
+        self.draw_piano_keys(&ui.painter(), piano_rect);
 
         // Draw grid
         let grid_rect = egui::Rect::from_min_size(
@@ -51,7 +54,7 @@ impl PianoRoll {
             ),
         );
 
-        self.draw_grid(&painter, grid_rect, pattern.length);
+        self.draw_grid(&ui.painter(), grid_rect, pattern.length);
 
         // Draw notes
         for (i, note) in pattern.notes.iter().enumerate() {
@@ -62,17 +65,38 @@ impl PianoRoll {
                 egui::Color32::from_rgb(80, 120, 200)
             };
 
-            painter.rect_filled(note_rect, 2.0, color);
-            painter.rect_stroke(
+            ui.painter().rect_filled(note_rect, 2.0, color);
+            ui.painter().rect_stroke(
                 note_rect,
                 2.0,
                 egui::Stroke::new(1.0, egui::Color32::BLACK),
-                egui::StrokeKind::Outside,
+                egui::StrokeKind::Inside,
             );
         }
 
-        // Handle input
-        let response = ui.interact(available_rect, ui.id(), egui::Sense::click_and_drag());
+        // Draw playhead if playing
+        if let Some(current_beat) = ui
+            .ctx()
+            .memory(|mem| mem.data.get_temp::<f64>(egui::Id::new("current_beat")))
+        {
+            let playhead_x = grid_rect.min.x + (current_beat as f32 * self.zoom_x - self.scroll_x);
+            if playhead_x >= grid_rect.min.x && playhead_x <= grid_rect.max.x {
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(playhead_x, grid_rect.min.y),
+                        egui::pos2(playhead_x, grid_rect.max.y),
+                    ],
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 100, 100)),
+                );
+            }
+        }
+
+        // Handle input - FIXED: Create response for the entire area
+        let response = ui.interact(
+            available_rect,
+            ui.id().with("piano_roll"),
+            egui::Sense::click_and_drag(),
+        );
 
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
@@ -80,18 +104,37 @@ impl PianoRoll {
                     // Click in grid area - add note
                     let grid_pos = pos - grid_rect.min;
                     let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
-                    let pitch = 127 - ((grid_pos.y + self.scroll_y) / self.zoom_y) as u8;
+                    let pitch = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
+                    let pitch = pitch.clamp(0.0, 127.0) as u8;
 
                     // Snap to grid
-                    let snapped_beat: f64 =
-                        ((beat / self.grid_snap).round() * self.grid_snap).into();
+                    let snapped_beat = (beat / self.grid_snap).round() * self.grid_snap;
 
-                    actions.push(PianoRollAction::AddNote(MidiNote {
-                        pitch,
-                        velocity: 100,
-                        start: snapped_beat,
-                        duration: self.grid_snap as f64,
-                    }));
+                    // Only add if within pattern bounds
+                    if snapped_beat >= 0.0 && (snapped_beat as f64) < pattern.length {
+                        actions.push(PianoRollAction::AddNote(MidiNote {
+                            pitch,
+                            velocity: 100,
+                            start: snapped_beat.into(),
+                            duration: self.grid_snap.into(),
+                        }));
+                    }
+                }
+            }
+        }
+
+        // Right click to remove notes
+        if response.secondary_clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if pos.x > available_rect.min.x + piano_width {
+                    // Check if click is on a note
+                    for (i, note) in pattern.notes.iter().enumerate() {
+                        let note_rect = self.note_rect(note, grid_rect);
+                        if note_rect.contains(pos) {
+                            actions.push(PianoRollAction::RemoveNote(i));
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -107,6 +150,8 @@ impl PianoRoll {
                 // Scroll
                 self.scroll_x -= scroll_delta.x;
                 self.scroll_y -= scroll_delta.y;
+                self.scroll_x = self.scroll_x.max(0.0);
+                self.scroll_y = self.scroll_y.clamp(0.0, 127.0 * self.zoom_y);
             }
         }
 

@@ -305,6 +305,25 @@ impl eframe::App for YadawApp {
 
                 // Piano roll editor
                 let mut pattern_actions = Vec::new();
+
+                {
+                    let state = self.state.lock().unwrap();
+                    if state.playing {
+                        let current_beat = state.position_to_beats(state.current_position);
+                        let pattern_beat = current_beat
+                            % state
+                                .tracks
+                                .get(self.selected_track)
+                                .and_then(|t| t.patterns.first())
+                                .map(|p| p.length)
+                                .unwrap_or(4.0);
+                        ctx.memory_mut(|mem| {
+                            mem.data
+                                .insert_temp(egui::Id::new("current_beat"), pattern_beat)
+                        });
+                    }
+                }
+
                 {
                     let mut state = self.state.lock().unwrap();
                     if let Some(track) = state.tracks.get_mut(self.selected_track) {

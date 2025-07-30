@@ -56,8 +56,8 @@ impl PluginScanner {
             let info = PluginInfo {
                 uri: uri.clone(),
                 name,
-                category: todo!(),
-                path: todo!(),
+                category: PluginCategory::Unknown,
+                path: PathBuf::new(),
                 // class: simplified_class,
             };
             self.plugins.insert(uri, info);
