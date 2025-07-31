@@ -606,65 +606,65 @@ fn process_preview_note_static(
 //     processor: &mut TrackProcessor,
 //     num_frames: usize,
 // ) {
-    // For now, plugins are disabled but we keep the structure
-    // This prevents crashes when plugins are in the track chain
-    // The audio just passes through unchanged
-    // for (plugin_idx, plugin_desc) in track.plugin_chain.iter().enumerate() {
-    //     if plugin_desc.bypass {
-    //         continue;
-    //     }
+// For now, plugins are disabled but we keep the structure
+// This prevents crashes when plugins are in the track chain
+// The audio just passes through unchanged
+// for (plugin_idx, plugin_desc) in track.plugin_chain.iter().enumerate() {
+//     if plugin_desc.bypass {
+//         continue;
+//     }
 
-    //     if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
-    //         if let Some(instance) = &mut plugin.instance {
-    //             // Clear output buffers
-    //             processor.output_buffer_l[..num_frames].fill(0.0);
-    //             processor.output_buffer_r[..num_frames].fill(0.0);
+//     if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
+//         if let Some(instance) = &mut plugin.instance {
+//             // Clear output buffers
+//             processor.output_buffer_l[..num_frames].fill(0.0);
+//             processor.output_buffer_r[..num_frames].fill(0.0);
 
-    //             // Update control parameters
-    //             for (port_idx, param_name) in &plugin.control_ports {
-    //                 if let Some(value) = plugin.params.get(param_name) {
-    //                     if let Some(buffer) = plugin.param_buffers.get_mut(port_idx) {
-    //                         **buffer = *value.value();
-    //                         unsafe {
-    //                             instance.connect_port(
-    //                                 (*port_idx as u32).try_into().unwrap(),
-    //                                 buffer.as_ref() as *const f32,
-    //                             );
-    //                         }
-    //                     }
-    //                 }
-    //             }
+//             // Update control parameters
+//             for (port_idx, param_name) in &plugin.control_ports {
+//                 if let Some(value) = plugin.params.get(param_name) {
+//                     if let Some(buffer) = plugin.param_buffers.get_mut(port_idx) {
+//                         **buffer = *value.value();
+//                         unsafe {
+//                             instance.connect_port(
+//                                 (*port_idx as u32).try_into().unwrap(),
+//                                 buffer.as_ref() as *const f32,
+//                             );
+//                         }
+//                     }
+//                 }
+//             }
 
-    //             // Connect audio ports
-    //             unsafe {
-    //                 for (i, &port_idx) in plugin.audio_in_ports.iter().enumerate() {
-    //                     let ptr = if i == 0 {
-    //                         processor.input_buffer_l.as_ptr()
-    //                     } else {
-    //                         processor.input_buffer_r.as_ptr()
-    //                     };
-    //                     instance.connect_port((port_idx as u32).try_into().unwrap(), ptr);
-    //                 }
+//             // Connect audio ports
+//             unsafe {
+//                 for (i, &port_idx) in plugin.audio_in_ports.iter().enumerate() {
+//                     let ptr = if i == 0 {
+//                         processor.input_buffer_l.as_ptr()
+//                     } else {
+//                         processor.input_buffer_r.as_ptr()
+//                     };
+//                     instance.connect_port((port_idx as u32).try_into().unwrap(), ptr);
+//                 }
 
-    //                 for (i, &port_idx) in plugin.audio_out_ports.iter().enumerate() {
-    //                     let ptr = if i == 0 {
-    //                         processor.output_buffer_l.as_mut_ptr()
-    //                     } else {
-    //                         processor.output_buffer_r.as_mut_ptr()
-    //                     };
-    //                     instance.connect_port_mut((port_idx as u32).try_into().unwrap(), ptr);
-    //                 }
+//                 for (i, &port_idx) in plugin.audio_out_ports.iter().enumerate() {
+//                     let ptr = if i == 0 {
+//                         processor.output_buffer_l.as_mut_ptr()
+//                     } else {
+//                         processor.output_buffer_r.as_mut_ptr()
+//                     };
+//                     instance.connect_port_mut((port_idx as u32).try_into().unwrap(), ptr);
+//                 }
 
-    //                 // Run plugin
-    //                 instance.run((num_frames as u32).try_into().unwrap());
-    //             }
+//                 // Run plugin
+//                 instance.run((num_frames as u32).try_into().unwrap());
+//             }
 
-    //             // Copy output back to input for next plugin
-    //             processor.input_buffer_l[..num_frames]
-    //                 .copy_from_slice(&processor.output_buffer_l[..num_frames]);
-    //             processor.input_buffer_r[..num_frames]
-    //                 .copy_from_slice(&processor.output_buffer_r[..num_frames]);
-    //         }
-    //     }
-    // }
-}
+//             // Copy output back to input for next plugin
+//             processor.input_buffer_l[..num_frames]
+//                 .copy_from_slice(&processor.output_buffer_l[..num_frames]);
+//             processor.input_buffer_r[..num_frames]
+//                 .copy_from_slice(&processor.output_buffer_r[..num_frames]);
+//         }
+//     }
+// }
+// }
