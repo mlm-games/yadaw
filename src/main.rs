@@ -14,26 +14,28 @@ use std::sync::{Arc, Mutex};
 fn main() -> Result<(), eframe::Error> {
     env_logger::init();
 
-    // Scan for plugins
+    println!("Starting YADAW...");
+
+    println!("Scan for plugins");
     let mut scanner = plugin::PluginScanner::new();
     scanner.discover_plugins();
     let available_plugins = scanner.get_plugins();
     println!("Found {} LV2 plugins", available_plugins.len());
 
-    // Create communication channels
+    println!("Creating communication channels...");
     let (ui_to_audio_tx, ui_to_audio_rx) = bounded(256);
     let (audio_to_ui_tx, audio_to_ui_rx) = bounded(256);
 
-    // Shared state
+    println!(" Creating app state");
     let app_state = Arc::new(Mutex::new(state::AppState::new()));
 
-    // Start audio thread
+    println!("Starting audio thread");
     let audio_state = app_state.clone();
     std::thread::spawn(move || {
         audio::run_audio_thread(audio_state, ui_to_audio_rx, audio_to_ui_tx);
     });
 
-    // Run UI
+    println!("Starting UI");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1024.0, 768.0]),
         ..Default::default()
