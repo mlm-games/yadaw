@@ -1,6 +1,6 @@
-// src/level_meter.rs
-
 use eframe::egui;
+
+#[derive(Clone, Debug)]
 
 pub struct LevelMeter {
     peak: f32,

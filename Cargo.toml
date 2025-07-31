@@ -38,3 +38,6 @@ lazy_static = "1.5.0"
 rfd = "0.15.4"
 hound = "3.5"
 symphonia = { version = "0.5", features = ["all"] }
+dashmap = "6.1.0"
+parking_lot = "0.12.4"
+crossbeam = "0.8.4"

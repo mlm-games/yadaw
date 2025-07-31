@@ -21,7 +21,7 @@ pub struct AudioClip {
     pub name: String,
     pub start_beat: f64,
     pub length_beats: f64,
-    pub samples: Vec<f32>, // Mono samples, we'll convert from stereo
+    pub samples: Vec<f32>,
     pub sample_rate: f32,
 }
 
@@ -45,16 +45,16 @@ pub struct PluginParam {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MidiNote {
-    pub pitch: u8,     // MIDI note number (0-127)
-    pub velocity: u8,  // Note velocity (0-127)
-    pub start: f64,    // Start time in beats
-    pub duration: f64, // Duration in beats
+    pub pitch: u8,
+    pub velocity: u8,
+    pub start: f64,
+    pub duration: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pattern {
     pub name: String,
-    pub length: f64, // Length in beats
+    pub length: f64,
     pub notes: Vec<MidiNote>,
 }
 
@@ -67,8 +67,9 @@ pub struct AppState {
     pub bpm: f32,
     pub sample_rate: f32,
     pub buffer_size: usize,
-    pub current_position: f64, // in samples
+    pub current_position: f64,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
@@ -96,14 +97,6 @@ pub struct AppStateSnapshot {
 }
 
 impl AppState {
-    pub fn load_project(&mut self, project: Project) {
-        self.tracks = project.tracks;
-        self.master_volume = project.master_volume;
-        self.bpm = project.bpm;
-        self.playing = false;
-        self.current_position = 0.0;
-    }
-
     pub fn new() -> Self {
         Self {
             tracks: vec![
@@ -197,12 +190,18 @@ impl AppState {
         }
     }
 
-    // Add helper to convert position in samples to beats
-    pub fn position_to_beats(&self, position: f64) -> f64 {
-        (position / self.sample_rate as f64) * ((self.bpm / 60.0) as f64)
+    pub fn load_project(&mut self, project: Project) {
+        self.tracks = project.tracks;
+        self.master_volume = project.master_volume;
+        self.bpm = project.bpm;
+        self.playing = false;
+        self.current_position = 0.0;
     }
 
-    // Add helper to convert beats to samples
+    pub fn position_to_beats(&self, position: f64) -> f64 {
+        (position / self.sample_rate as f64) * (self.bpm as f64 / 60.0)
+    }
+
     pub fn beats_to_samples(&self, beats: f64) -> f64 {
         (beats * 60.0 / self.bpm as f64) * self.sample_rate as f64
     }
@@ -222,7 +221,7 @@ impl AppState {
     }
 }
 
-// Add new commands for MIDI editing
+// Audio commands
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
     Play,
@@ -236,29 +235,28 @@ pub enum AudioCommand {
     AddPlugin(usize, String),
     RemovePlugin(usize, usize),
     SetPluginParam(usize, usize, String, f32),
-    // Add MIDI commands
-    AddNote(usize, usize, MidiNote), // track_id, pattern_id, note
-    RemoveNote(usize, usize, usize), // ||, || , note_index
-    UpdateNote(usize, usize, usize, MidiNote), // ||, || , note_index, new_note
+    SetPluginBypass(usize, usize, bool),
+    AddNote(usize, usize, MidiNote),
+    RemoveNote(usize, usize, usize),
+    UpdateNote(usize, usize, usize, MidiNote),
     StartRecording(usize),
     SetRecordingInput(String),
-    SaveProject(String), // filepath
+    SaveProject(String),
     LoadProject(String),
-    SplitClip(usize, usize, f64), // track_id, clip_id, beat_position
+    SplitClip(usize, usize, f64),
     DeleteClip(usize, usize),
-    TrimClipStart(usize, usize, f64), // ||, ||, new_start_beat
+    TrimClipStart(usize, usize, f64),
     TrimClipEnd(usize, usize, f64),
-    PreviewNote(usize, u8), // track_id, pitch
+    PreviewNote(usize, u8),
     StopPreviewNote,
-    SetPluginBypass(usize, usize, bool),
 }
 
 #[derive(Debug, Clone)]
 pub enum UIUpdate {
     Position(f64),
-    PeakLevel(usize, f32, f32), // track_id, left, right
+    PeakLevel(usize, f32, f32),
     PluginAdded(usize, String),
-    RecordingLevel(f32), // peak level
+    RecordingLevel(f32),
     RecordingFinished(usize, AudioClip),
     TrackLevels(Vec<(f32, f32)>),
     MasterLevel(f32, f32),

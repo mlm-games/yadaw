@@ -1,5 +1,7 @@
 mod audio;
 mod audio_import;
+mod audio_state;
+mod command_processor;
 mod level_meter;
 mod piano_roll;
 mod plugin;
@@ -16,26 +18,43 @@ fn main() -> Result<(), eframe::Error> {
 
     println!("Starting YADAW...");
 
-    println!("Scan for plugins");
+    println!("Scanning for plugins...");
     let mut scanner = plugin::PluginScanner::new();
     scanner.discover_plugins();
     let available_plugins = scanner.get_plugins();
     println!("Found {} LV2 plugins", available_plugins.len());
 
     println!("Creating communication channels...");
-    let (ui_to_audio_tx, ui_to_audio_rx) = bounded(256);
+    let (ui_to_command_tx, ui_to_command_rx) = bounded(256);
+    let (realtime_tx, realtime_rx) = bounded(256);
     let (audio_to_ui_tx, audio_to_ui_rx) = bounded(256);
 
-    println!(" Creating app state");
+    println!("Creating app state...");
     let app_state = Arc::new(Mutex::new(state::AppState::new()));
 
-    println!("Starting audio thread");
-    let audio_state = app_state.clone();
+    let audio_state = Arc::new(audio_state::AudioState::new());
+
+    println!("Starting command processor thread...");
+    let command_state = app_state.clone();
+    let command_audio_state = audio_state.clone();
+    let command_ui_tx = audio_to_ui_tx.clone();
     std::thread::spawn(move || {
-        audio::run_audio_thread(audio_state, ui_to_audio_rx, audio_to_ui_tx);
+        command_processor::run_command_processor(
+            command_state,
+            command_audio_state,
+            ui_to_command_rx,
+            realtime_tx,
+            command_ui_tx,
+        );
     });
 
-    println!("Starting UI");
+    println!("Starting audio thread...");
+    let audio_thread_state = audio_state.clone();
+    std::thread::spawn(move || {
+        audio::run_audio_thread(audio_thread_state, realtime_rx, audio_to_ui_tx);
+    });
+
+    println!("Starting UI...");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1024.0, 768.0]),
         ..Default::default()
@@ -47,7 +66,8 @@ fn main() -> Result<(), eframe::Error> {
         Box::new(|_cc| {
             Ok(Box::new(ui::YadawApp::new(
                 app_state,
-                ui_to_audio_tx,
+                audio_state,
+                ui_to_command_tx,
                 audio_to_ui_rx,
                 available_plugins,
             )))

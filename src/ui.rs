@@ -1,10 +1,11 @@
-// src/ui.rs
+use crate::audio_state::AudioState;
 use crate::level_meter::LevelMeter;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::plugin::PluginInfo;
-use crate::state::{self, AppState, AppStateSnapshot, AudioClip, AudioCommand, Project, UIUpdate};
+use crate::state::{AppState, AppStateSnapshot, AudioClip, AudioCommand, Project, UIUpdate};
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -27,7 +28,8 @@ enum TimelineInteraction {
 
 pub struct YadawApp {
     state: Arc<Mutex<AppState>>,
-    audio_tx: Sender<AudioCommand>,
+    audio_state: Arc<AudioState>,
+    command_tx: Sender<AudioCommand>,
     ui_rx: Receiver<UIUpdate>,
     available_plugins: Vec<PluginInfo>,
     show_plugin_browser: bool,
@@ -58,7 +60,8 @@ pub struct YadawApp {
 impl YadawApp {
     pub fn new(
         state: Arc<Mutex<AppState>>,
-        audio_tx: Sender<AudioCommand>,
+        audio_state: Arc<AudioState>,
+        command_tx: Sender<AudioCommand>,
         ui_rx: Receiver<UIUpdate>,
         available_plugins: Vec<PluginInfo>,
     ) -> Self {
@@ -66,9 +69,11 @@ impl YadawApp {
             let state_lock = state.lock().unwrap();
             state_lock.tracks.len()
         };
+
         Self {
             state,
-            audio_tx,
+            audio_state,
+            command_tx,
             ui_rx,
             available_plugins,
             show_plugin_browser: false,
@@ -87,9 +92,9 @@ impl YadawApp {
             show_clip_menu: false,
             clip_menu_pos: egui::Pos2::ZERO,
             show_mixer: false,
-            track_meters: vec![],
-            clipboard: Option::None,
-            show_rename_dialog: Option::None,
+            track_meters: vec![LevelMeter::default(); num_tracks],
+            clipboard: None,
+            show_rename_dialog: None,
             rename_text: String::new(),
             master_meter: LevelMeter::default(),
             recording_level: 0.0,
@@ -160,9 +165,14 @@ impl YadawApp {
 
         self.push_undo();
 
-        let mut state = self.state.lock().unwrap();
-        let current_beat = state.position_to_beats(state.current_position);
+        let current_beat = {
+            let position = self.audio_state.get_position();
+            let sample_rate = self.audio_state.sample_rate.load();
+            let bpm = self.audio_state.bpm.load();
+            (position / sample_rate as f64) * (bpm as f64 / 60.0)
+        };
 
+        let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track) {
             if !track.is_midi {
                 for clip in clipboard {
@@ -206,8 +216,14 @@ impl YadawApp {
 
         self.push_undo();
 
+        let current_beat = {
+            let position = self.audio_state.get_position();
+            let sample_rate = self.audio_state.sample_rate.load();
+            let bpm = self.audio_state.bpm.load();
+            (position / sample_rate as f64) * (bpm as f64 / 60.0)
+        };
+
         let mut state = self.state.lock().unwrap();
-        let current_beat = state.position_to_beats(state.current_position);
         let bpm = state.bpm;
 
         for (track_id, clip_id) in selected_clips {
@@ -352,10 +368,11 @@ impl YadawApp {
 
 impl eframe::App for YadawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle drag and drop
         ctx.input(|i| {
             if !i.raw.dropped_files.is_empty() {
                 let dropped_files = i.raw.dropped_files.clone();
-                let bpm = self.state.lock().unwrap().bpm;
+                let bpm = self.audio_state.bpm.load();
 
                 self.push_undo();
                 let mut state = self.state.lock().unwrap();
@@ -431,8 +448,7 @@ impl eframe::App for YadawApp {
         while let Ok(update) = self.ui_rx.try_recv() {
             match update {
                 UIUpdate::Position(pos) => {
-                    let mut state = self.state.lock().unwrap();
-                    state.current_position = pos;
+                    // Position is already updated in audio state by audio thread
                 }
                 UIUpdate::RecordingFinished(track_id, clip) => {
                     let mut state = self.state.lock().unwrap();
@@ -475,7 +491,7 @@ impl eframe::App for YadawApp {
                         if ui.button(&plugin.name).clicked() {
                             if let Some(track_id) = self.selected_track_for_plugin {
                                 let _ = self
-                                    .audio_tx
+                                    .command_tx
                                     .send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
                                 self.show_plugin_browser = false;
                             }
@@ -492,12 +508,12 @@ impl eframe::App for YadawApp {
                         let mut state = self.state.lock().unwrap();
                         *state = AppState::new();
                         self.project_path = None;
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     if ui.button("Open Project...").clicked() {
                         self.show_load_dialog = true;
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     if ui.button("Save Project").clicked() {
@@ -506,22 +522,19 @@ impl eframe::App for YadawApp {
                         } else {
                             self.show_save_dialog = true;
                         }
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     if ui.button("Save Project As...").clicked() {
                         self.show_save_dialog = true;
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     ui.separator();
 
                     if ui.button("Import Audio...").clicked() {
-                        let bpm = {
-                            let state = self.state.lock().unwrap();
-                            state.bpm
-                        };
-                        ui.close();
+                        let bpm = self.audio_state.bpm.load();
+                        ui.close_menu();
 
                         if let Some(paths) = rfd::FileDialog::new()
                             .add_filter("Audio Files", &["wav", "mp3", "flac", "ogg"])
@@ -562,40 +575,40 @@ impl eframe::App for YadawApp {
                 ui.menu_button("Edit", |ui| {
                     if ui.button("Undo").clicked() {
                         self.undo();
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     if ui.button("Redo").clicked() {
                         self.redo();
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     ui.separator();
 
                     if ui.button("Cut").clicked() {
                         self.cut_selected();
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     if ui.button("Copy").clicked() {
                         self.copy_selected();
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     if ui.button("Paste").clicked() {
                         self.paste_at_playhead();
-                        ui.close();
+                        ui.close_menu();
                     }
 
                     if ui.button("Delete").clicked() {
                         self.delete_selected();
-                        ui.close();
+                        ui.close_menu();
                     }
                 });
 
                 ui.menu_button("View", |ui| {
                     if ui.checkbox(&mut self.show_mixer, "Mixer").clicked() {
-                        ui.close();
+                        ui.close_menu();
                     }
                 });
             });
@@ -641,39 +654,41 @@ impl eframe::App for YadawApp {
         // Top panel - Transport controls
         egui::TopBottomPanel::top("transport").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let mut state = self.state.lock().unwrap();
-                let is_playing = state.playing;
+                // Read from audio state for real-time values
+                let is_playing = self.audio_state.playing.load(Ordering::Relaxed);
+                let is_recording = self.audio_state.recording.load(Ordering::Relaxed);
+                let position = self.audio_state.get_position();
+                let sample_rate = self.audio_state.sample_rate.load();
+                let bpm = self.audio_state.bpm.load();
+                let master_volume = self.audio_state.master_volume.load();
 
                 if ui.button(if is_playing { "⏸" } else { "▶" }).clicked() {
                     if is_playing {
-                        let _ = self.audio_tx.send(AudioCommand::Stop);
+                        let _ = self.command_tx.send(AudioCommand::Stop);
                     } else {
-                        let _ = self.audio_tx.send(AudioCommand::Play);
+                        let _ = self.command_tx.send(AudioCommand::Play);
                     }
                 }
 
                 if ui.button("⏹").clicked() {
-                    let _ = self.audio_tx.send(AudioCommand::Stop);
+                    let _ = self.command_tx.send(AudioCommand::Stop);
                 }
 
                 if ui
-                    .button(if state.recording {
-                        "⏺ Recording"
-                    } else {
-                        "⏺"
-                    })
+                    .button(if is_recording { "⏺ Recording" } else { "⏺" })
                     .on_hover_text("Record")
                     .clicked()
                 {
-                    if state.recording {
-                        let _ = self.audio_tx.send(AudioCommand::StopRecording);
+                    if is_recording {
+                        let _ = self.command_tx.send(AudioCommand::StopRecording);
                     } else {
-                        // Find first armed track
+                        let state = self.state.lock().unwrap();
                         let armed_track = state.tracks.iter().position(|t| t.armed && !t.is_midi);
+                        drop(state);
+
                         if let Some(track_id) = armed_track {
-                            let _ = self.audio_tx.send(AudioCommand::StartRecording(track_id));
+                            let _ = self.command_tx.send(AudioCommand::StartRecording(track_id));
                         } else {
-                            // Show message that no track is armed
                             self.show_message =
                                 Some("Please arm an audio track for recording".to_string());
                         }
@@ -683,25 +698,29 @@ impl eframe::App for YadawApp {
                 ui.separator();
 
                 // Time display
-                let time_seconds = state.current_position / state.sample_rate as f64;
+                let time_seconds = position / sample_rate as f64;
                 let minutes = (time_seconds / 60.0) as i32;
                 let seconds = time_seconds % 60.0;
                 ui.label(format!("{:02}:{:05.2}", minutes, seconds));
 
                 ui.separator();
-                ui.label(format!("BPM: {:.1}", state.bpm));
+                ui.label(format!("BPM: {:.1}", bpm));
 
                 ui.separator();
                 ui.label("Master Vol:");
-                let mut master_vol = state.master_volume;
+                let mut master_vol = master_volume;
                 if ui
                     .add(egui::Slider::new(&mut master_vol, 0.0..=1.0).show_value(false))
                     .changed()
                 {
-                    state.master_volume = master_vol;
+                    self.audio_state.master_volume.store(master_vol);
+                    // Also update app state for persistence
+                    if let Ok(mut state) = self.state.lock() {
+                        state.master_volume = master_vol;
+                    }
                 }
 
-                if state.recording {
+                if is_recording {
                     ui.separator();
                     ui.colored_label(egui::Color32::RED, "● REC");
 
@@ -710,7 +729,6 @@ impl eframe::App for YadawApp {
 
                     let (response, painter) =
                         ui.allocate_painter(egui::vec2(100.0, 10.0), egui::Sense::hover());
-
                     let rect = response.rect;
                     painter.rect_filled(rect, 2.0, egui::Color32::from_gray(40));
 
@@ -772,7 +790,8 @@ impl eframe::App for YadawApp {
                                         .on_hover_text("Solo")
                                         .clicked()
                                     {
-                                        track.solo = !track.solo;
+                                        let solo = !track.solo;
+                                        commands_to_send.push(AudioCommand::SoloTrack(i, solo));
                                     }
 
                                     if ui
@@ -948,7 +967,7 @@ impl eframe::App for YadawApp {
 
                     // Send commands after releasing the lock
                     for cmd in commands_to_send {
-                        let _ = self.audio_tx.send(cmd);
+                        let _ = self.command_tx.send(cmd);
                     }
                 });
             });
@@ -993,7 +1012,7 @@ impl eframe::App for YadawApp {
                 {
                     let state = self.state.lock().unwrap();
                     if state.playing {
-                        let current_beat = state.position_to_beats(state.current_position);
+                        let current_beat = state.position_to_beats(self.audio_state.get_position());
                         let pattern_beat = current_beat
                             % state
                                 .tracks
@@ -1021,21 +1040,21 @@ impl eframe::App for YadawApp {
                 for action in pattern_actions {
                     match action {
                         PianoRollAction::AddNote(note) => {
-                            let _ = self.audio_tx.send(AudioCommand::AddNote(
+                            let _ = self.command_tx.send(AudioCommand::AddNote(
                                 self.selected_track,
                                 self.selected_pattern,
                                 note,
                             ));
                         }
                         PianoRollAction::RemoveNote(index) => {
-                            let _ = self.audio_tx.send(AudioCommand::RemoveNote(
+                            let _ = self.command_tx.send(AudioCommand::RemoveNote(
                                 self.selected_track,
                                 self.selected_pattern,
                                 index,
                             ));
                         }
                         PianoRollAction::UpdateNote(index, note) => {
-                            let _ = self.audio_tx.send(AudioCommand::UpdateNote(
+                            let _ = self.command_tx.send(AudioCommand::UpdateNote(
                                 self.selected_track,
                                 self.selected_pattern,
                                 index,
@@ -1044,11 +1063,11 @@ impl eframe::App for YadawApp {
                         }
                         PianoRollAction::PreviewNote(pitch) => {
                             let _ = self
-                                .audio_tx
+                                .command_tx
                                 .send(AudioCommand::PreviewNote(self.selected_track, pitch));
                         }
                         PianoRollAction::StopPreview => {
-                            let _ = self.audio_tx.send(AudioCommand::StopPreviewNote);
+                            let _ = self.command_tx.send(AudioCommand::StopPreviewNote);
                         }
                     }
                 }
@@ -1056,15 +1075,12 @@ impl eframe::App for YadawApp {
                 // Show timeline for audio tracks
                 ui.heading("Timeline");
 
-                let (is_playing, current_position, sample_rate, bpm) = {
-                    let state = self.state.lock().unwrap();
-                    (
-                        state.playing,
-                        state.current_position,
-                        state.sample_rate,
-                        state.bpm,
-                    )
-                };
+                let (is_playing, current_position, sample_rate, bpm) = (
+                    self.audio_state.playing.load(Ordering::Relaxed),
+                    self.audio_state.get_position(),
+                    self.audio_state.sample_rate.load(),
+                    self.audio_state.bpm.load(),
+                );
 
                 // Timeline controls
                 ui.horizontal(|ui| {
@@ -1104,12 +1120,20 @@ impl eframe::App for YadawApp {
                         // Draw tracks and clips
                         {
                             let mut state = self.state.lock().unwrap();
-                            for (track_idx, track) in state.tracks.iter_mut().enumerate() {
+                            let tracks_len = state.tracks.len();
+
+                            for track_idx in 0..tracks_len {
                                 let track_rect = egui::Rect::from_min_size(
                                     timeline_rect.min
                                         + egui::vec2(0.0, track_idx as f32 * track_height),
                                     egui::vec2(timeline_rect.width(), track_height),
                                 );
+
+                                // Get track info
+                                let (track_name, is_midi, clips_count) = {
+                                    let track = &state.tracks[track_idx];
+                                    (track.name.clone(), track.is_midi, track.audio_clips.len())
+                                };
 
                                 // Track background
                                 painter.rect_filled(
@@ -1126,13 +1150,14 @@ impl eframe::App for YadawApp {
                                 painter.text(
                                     track_rect.min + egui::vec2(5.0, 5.0),
                                     egui::Align2::LEFT_TOP,
-                                    &track.name,
+                                    &track_name,
                                     egui::FontId::default(),
                                     egui::Color32::WHITE,
                                 );
 
                                 // Draw audio clips
-                                for (clip_idx, clip) in track.audio_clips.iter_mut().enumerate() {
+                                for clip_idx in 0..clips_count {
+                                    let clip = &state.tracks[track_idx].audio_clips[clip_idx];
                                     let clip_x = clip.start_beat as f32 * self.timeline_zoom;
                                     let clip_width = clip.length_beats as f32 * self.timeline_zoom;
 
@@ -1159,7 +1184,6 @@ impl eframe::App for YadawApp {
                                         );
                                     }
 
-                                    // Check for interactions
                                     let clip_response = ui.interact(
                                         clip_rect,
                                         ui.id().with((track_idx, clip_idx)),
@@ -1180,14 +1204,13 @@ impl eframe::App for YadawApp {
 
                                     let edge_threshold = 5.0;
                                     let hover_left_edge =
-                                        (clip_response.hover_pos().map(|p| p.x).unwrap_or(0.0)
-                                            - clip_rect.left())
-                                        .abs()
-                                            < edge_threshold;
-                                    let hover_right_edge = (clip_rect.right()
-                                        - clip_response.hover_pos().map(|p| p.x).unwrap_or(0.0))
-                                    .abs()
-                                        < edge_threshold;
+                                        clip_response.hover_pos().map_or(false, |p| {
+                                            (p.x - clip_rect.left()).abs() < edge_threshold
+                                        });
+                                    let hover_right_edge =
+                                        clip_response.hover_pos().map_or(false, |p| {
+                                            (clip_rect.right() - p.x).abs() < edge_threshold
+                                        });
 
                                     if hover_left_edge || hover_right_edge {
                                         ui.ctx()
@@ -1217,16 +1240,22 @@ impl eframe::App for YadawApp {
                                                 original_start_beat: clip.start_beat,
                                             }
                                         } else {
-                                            let state = self.state.lock().unwrap();
-
-                                            let clips_and_starts = self
+                                            let clips_and_starts = if self
                                                 .selected_clips
-                                                .iter()
-                                                .map(|(tid, cid)| {
-                                                    let c = &state.tracks[*tid].audio_clips[*cid];
-                                                    (*tid, *cid, c.start_beat)
-                                                })
-                                                .collect();
+                                                .contains(&(track_idx, clip_idx))
+                                            {
+                                                self.selected_clips
+                                                    .iter()
+                                                    .map(|(tid, cid)| {
+                                                        let c =
+                                                            &state.tracks[*tid].audio_clips[*cid];
+                                                        (*tid, *cid, c.start_beat)
+                                                    })
+                                                    .collect()
+                                            } else {
+                                                vec![(track_idx, clip_idx, clip.start_beat)]
+                                            };
+
                                             TimelineInteraction::DragClip {
                                                 clips_and_starts,
                                                 start_drag_beat: mouse_beat,
@@ -1236,6 +1265,8 @@ impl eframe::App for YadawApp {
                                     }
                                 }
                             }
+
+                            // Handle timeline interaction outside the loop
                             if let (Some(interaction), Some(pointer_pos)) = (
                                 self.timeline_interaction.clone(),
                                 ui.ctx().pointer_interact_pos(),
@@ -1252,10 +1283,14 @@ impl eframe::App for YadawApp {
                                         let beat_delta = mouse_beat - start_drag_beat;
                                         for (track_id, clip_id, original_start) in clips_and_starts
                                         {
-                                            let clip =
-                                                &mut state.tracks[track_id].audio_clips[clip_id];
-                                            clip.start_beat =
-                                                (original_start + beat_delta).max(0.0);
+                                            if let Some(track) = state.tracks.get_mut(track_id) {
+                                                if let Some(clip) =
+                                                    track.audio_clips.get_mut(clip_id)
+                                                {
+                                                    clip.start_beat =
+                                                        (original_start + beat_delta).max(0.0);
+                                                }
+                                            }
                                         }
                                     }
                                     TimelineInteraction::ResizeClipLeft {
@@ -1263,21 +1298,29 @@ impl eframe::App for YadawApp {
                                         clip_id,
                                         original_end_beat,
                                     } => {
-                                        let clip = &mut state.tracks[track_id].audio_clips[clip_id];
-                                        let new_start =
-                                            mouse_beat.max(0.0).min(original_end_beat - 0.1);
-                                        let new_len = original_end_beat - new_start;
-                                        clip.start_beat = new_start;
-                                        clip.length_beats = new_len;
+                                        if let Some(track) = state.tracks.get_mut(track_id) {
+                                            if let Some(clip) = track.audio_clips.get_mut(clip_id) {
+                                                let new_start = mouse_beat
+                                                    .max(0.0)
+                                                    .min(original_end_beat - 0.1);
+                                                let new_len = original_end_beat - new_start;
+                                                clip.start_beat = new_start;
+                                                clip.length_beats = new_len;
+                                            }
+                                        }
                                     }
                                     TimelineInteraction::ResizeClipRight {
                                         track_id,
                                         clip_id,
                                         original_start_beat,
                                     } => {
-                                        let clip = &mut state.tracks[track_id].audio_clips[clip_id];
-                                        let new_len = (mouse_beat - original_start_beat).max(0.1);
-                                        clip.length_beats = new_len;
+                                        if let Some(track) = state.tracks.get_mut(track_id) {
+                                            if let Some(clip) = track.audio_clips.get_mut(clip_id) {
+                                                let new_len =
+                                                    (mouse_beat - original_start_beat).max(0.1);
+                                                clip.length_beats = new_len;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1328,13 +1371,11 @@ impl eframe::App for YadawApp {
                     }
 
                     if i.key_pressed(egui::Key::Space) {
-                        let state = self.state.lock().unwrap();
-                        let is_playing = state.playing;
-                        drop(state);
+                        let is_playing = self.audio_state.playing.load(Ordering::Relaxed);
                         if is_playing {
-                            let _ = self.audio_tx.send(AudioCommand::Stop);
+                            let _ = self.command_tx.send(AudioCommand::Stop);
                         } else {
-                            let _ = self.audio_tx.send(AudioCommand::Play);
+                            let _ = self.command_tx.send(AudioCommand::Play);
                         }
                     }
 
@@ -1345,7 +1386,7 @@ impl eframe::App for YadawApp {
 
                 if self.show_clip_menu {
                     let mut close_menu = false;
-                    egui::Area::new("clip_menu_area".into())
+                    egui::Area::new(egui::Id::new("clip_menu_area"))
                         .fixed_pos(self.clip_menu_pos)
                         .show(ctx, |ui| {
                             egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -1479,7 +1520,7 @@ impl eframe::App for YadawApp {
                                                 .changed()
                                             {
                                                 let _ = self
-                                                    .audio_tx
+                                                    .command_tx
                                                     .send(AudioCommand::SetTrackVolume(i, vol));
                                             }
                                             ui.label(format!(
@@ -1497,7 +1538,7 @@ impl eframe::App for YadawApp {
                                                 .changed()
                                             {
                                                 let _ = self
-                                                    .audio_tx
+                                                    .command_tx
                                                     .send(AudioCommand::SetTrackPan(i, p));
                                             }
                                             ui.label(if p.abs() < 0.01 {
@@ -1515,14 +1556,14 @@ impl eframe::App for YadawApp {
                                                     .clicked()
                                                 {
                                                     let _ = self
-                                                        .audio_tx
+                                                        .command_tx
                                                         .send(AudioCommand::MuteTrack(i, !muted));
                                                 }
 
                                                 if ui.button(if solo { "S" } else { "s" }).clicked()
                                                 {
                                                     let _ = self
-                                                        .audio_tx
+                                                        .command_tx
                                                         .send(AudioCommand::SoloTrack(i, !solo));
                                                 }
                                             });
@@ -1540,10 +1581,7 @@ impl eframe::App for YadawApp {
                                         self.master_meter.ui(ui, true);
                                         ui.separator();
 
-                                        let mut master_vol = {
-                                            let state = self.state.lock().unwrap();
-                                            state.master_volume
-                                        };
+                                        let mut master_vol = self.audio_state.master_volume.load();
 
                                         if ui
                                             .add(
@@ -1553,8 +1591,10 @@ impl eframe::App for YadawApp {
                                             )
                                             .changed()
                                         {
-                                            let mut state = self.state.lock().unwrap();
-                                            state.master_volume = master_vol;
+                                            self.audio_state.master_volume.store(master_vol);
+                                            if let Ok(mut state) = self.state.lock() {
+                                                state.master_volume = master_vol;
+                                            }
                                         }
                                         ui.label(format!(
                                             "{:.1} dB",
@@ -1568,7 +1608,7 @@ impl eframe::App for YadawApp {
             }
 
             // Request repaint for smooth playback
-            if self.state.lock().unwrap().playing {
+            if self.audio_state.playing.load(Ordering::Relaxed) {
                 ctx.request_repaint();
             }
         });
