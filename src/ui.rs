@@ -37,6 +37,26 @@ pub struct YadawApp {
     recording_level: f32,
 }
 
+enum TimelineInteraction {
+    DragClip {
+        track_id: usize,
+        clip_id: usize,
+        initial_beat: f64,
+        start_mouse_x: f32,
+    },
+    ResizeClipLeft {
+        track_id: usize,
+        clip_id: usize,
+        initial_start: f64,
+        initial_length: f64,
+    },
+    ResizeClipRight {
+        track_id: usize,
+        clip_id: usize,
+        initial_length: f64,
+    },
+}
+
 impl YadawApp {
     pub fn new(
         state: Arc<Mutex<AppState>>,
@@ -268,26 +288,62 @@ impl YadawApp {
             }
         }
     }
-}
 
-enum TimelineInteraction {
-    DragClip {
-        track_id: usize,
-        clip_id: usize,
-        initial_beat: f64,
-        start_mouse_x: f32,
-    },
-    ResizeClipLeft {
-        track_id: usize,
-        clip_id: usize,
-        initial_start: f64,
-        initial_length: f64,
-    },
-    ResizeClipRight {
-        track_id: usize,
-        clip_id: usize,
-        initial_length: f64,
-    },
+    fn save_project(&self, path: &str) {
+        let state = self.state.lock().unwrap();
+        let project = Project::from(&*state);
+
+        match std::fs::write(path, serde_json::to_string_pretty(&project).unwrap()) {
+            Ok(_) => println!("Project saved to {}", path),
+            Err(e) => eprintln!("Failed to save project: {}", e),
+        }
+    }
+
+    fn load_project(&self, path: &str) {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str::<Project>(&content) {
+                Ok(project) => {
+                    let mut state = self.state.lock().unwrap();
+                    state.load_project(project);
+                    println!("Project loaded from {}", path);
+                }
+                Err(e) => eprintln!("Failed to parse project: {}", e),
+            },
+            Err(e) => eprintln!("Failed to read project file: {}", e),
+        }
+    }
+    fn draw_timeline_grid(&self, painter: &egui::Painter, rect: egui::Rect, bpm: f32) {
+        // Vertical lines (beats)
+        let beats_visible = (rect.width() / self.timeline_zoom) as i32 + 2;
+
+        for beat in 0..beats_visible {
+            let x = rect.left() + beat as f32 * self.timeline_zoom;
+
+            if x >= rect.left() && x <= rect.right() {
+                let color = if beat % 4 == 0 {
+                    egui::Color32::from_gray(60)
+                } else {
+                    egui::Color32::from_gray(40)
+                };
+
+                painter.line_segment(
+                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                    egui::Stroke::new(1.0, color),
+                );
+
+                // Beat numbers
+                if beat % 4 == 0 {
+                    painter.text(
+                        egui::pos2(x + 2.0, rect.top() + 2.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{}", beat / 4 + 1),
+                        egui::FontId::default(),
+                        egui::Color32::from_gray(100),
+                    );
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for YadawApp {
@@ -1647,64 +1703,5 @@ impl eframe::App for YadawApp {
                 ctx.request_repaint();
             }
         });
-    }
-}
-impl YadawApp {
-    fn save_project(&self, path: &str) {
-        let state = self.state.lock().unwrap();
-        let project = Project::from(&*state);
-
-        match std::fs::write(path, serde_json::to_string_pretty(&project).unwrap()) {
-            Ok(_) => println!("Project saved to {}", path),
-            Err(e) => eprintln!("Failed to save project: {}", e),
-        }
-    }
-
-    fn load_project(&self, path: &str) {
-        match std::fs::read_to_string(path) {
-            Ok(content) => match serde_json::from_str::<Project>(&content) {
-                Ok(project) => {
-                    let mut state = self.state.lock().unwrap();
-                    state.load_project(project);
-                    println!("Project loaded from {}", path);
-                }
-                Err(e) => eprintln!("Failed to parse project: {}", e),
-            },
-            Err(e) => eprintln!("Failed to read project file: {}", e),
-        }
-    }
-}
-impl YadawApp {
-    fn draw_timeline_grid(&self, painter: &egui::Painter, rect: egui::Rect, bpm: f32) {
-        // Vertical lines (beats)
-        let beats_visible = (rect.width() / self.timeline_zoom) as i32 + 2;
-
-        for beat in 0..beats_visible {
-            let x = rect.left() + beat as f32 * self.timeline_zoom;
-
-            if x >= rect.left() && x <= rect.right() {
-                let color = if beat % 4 == 0 {
-                    egui::Color32::from_gray(60)
-                } else {
-                    egui::Color32::from_gray(40)
-                };
-
-                painter.line_segment(
-                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                    egui::Stroke::new(1.0, color),
-                );
-
-                // Beat numbers
-                if beat % 4 == 0 {
-                    painter.text(
-                        egui::pos2(x + 2.0, rect.top() + 2.0),
-                        egui::Align2::LEFT_TOP,
-                        format!("{}", beat / 4 + 1),
-                        egui::FontId::default(),
-                        egui::Color32::from_gray(100),
-                    );
-                }
-            }
-        }
     }
 }
