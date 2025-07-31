@@ -10,7 +10,7 @@ pub struct Track {
     pub muted: bool,
     pub solo: bool,
     pub armed: bool,
-    pub plugin_chain: Vec<PluginInstance>,
+    pub plugin_chain: Vec<PluginDescriptor>,
     pub patterns: Vec<Pattern>,
     pub is_midi: bool,
     pub audio_clips: Vec<AudioClip>,
@@ -26,7 +26,7 @@ pub struct AudioClip {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginInstance {
+pub struct PluginDescriptor {
     pub uri: String,
     pub name: String,
     pub bypass: bool,

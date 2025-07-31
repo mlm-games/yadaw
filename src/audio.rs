@@ -1,9 +1,10 @@
-use crate::state::{AppState, AudioClip, AudioCommand, PluginInstance, PluginParam, UIUpdate};
+use crate::state::{AppState, AudioClip, AudioCommand, PluginDescriptor, PluginParam, UIUpdate};
 use crate::state::{MidiNote, Pattern};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use lazy_static::lazy_static;
 use lilv::{World, instance::ActiveInstance, plugin::Plugin};
+use lv2::prelude::PluginInstance;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -304,7 +305,7 @@ pub fn run_audio_thread(
                                     }
                                 }
 
-                                track.plugin_chain.push(PluginInstance {
+                                track.plugin_chain.push(PluginDescriptor {
                                     uri: uri.clone(),
                                     name: plugin_name,
                                     bypass: false,
