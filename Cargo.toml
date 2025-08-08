@@ -13,14 +13,17 @@ egui = "0.32.0"
 eframe = "0.32.0"
 
 # LV2 Plugin Hosting
-lv2 = { version = "0.6.0", features = ["lv2-atom", "lv2-midi", "lv2-urid"] }
-lv2-core = "3"
-lv2-atom = "2"
-lv2-urid = "2"
-lv2-midi = "1"
+livi = "0.7.5"
+
+# Not needed (unless creating LV2 plugins):
+# lv2 = { version = "0.6.0", features = ["lv2-atom", "lv2-midi", "lv2-urid"] }
+# lv2-core = "3"
+# lv2-atom = "2"
+# lv2-urid = "2"
+# lv2-midi = "1"
 
 # Utilities
-ringbuf = "0.4.8"
+rtrb = "0.3"
 crossbeam-channel = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -31,13 +34,12 @@ anyhow = "1.0"
 glob = "0.3"
 
 shellexpand = "3.1"
-env_logger = "0.11.8"
+env_logger = "0.11"
 
-lilv = "0.2.4"
-lazy_static = "1.5.0"
-rfd = "0.15.4"
+once_cell = "1.19"
+rfd = "0.15"
 hound = "3.5"
 symphonia = { version = "0.5", features = ["all"] }
-dashmap = "6.1.0"
-parking_lot = "0.12.4"
-crossbeam = "0.8.4"
+dashmap = "6.1"
+parking_lot = "0.12"
+crossbeam = "0.8"

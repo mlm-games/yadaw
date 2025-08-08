@@ -3,6 +3,7 @@ mod audio_import;
 mod audio_state;
 mod command_processor;
 mod level_meter;
+mod lv2_plugin_host;
 mod piano_roll;
 mod plugin;
 mod state;
@@ -13,13 +14,19 @@ use crossbeam_channel::bounded;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 
+use crate::plugin::PluginScanner;
+
 fn main() -> Result<(), eframe::Error> {
     env_logger::init();
 
     println!("Starting YADAW...");
 
+    // Initialize plugin host with a default sample rate
+    // This will be updated when the audio thread starts
+    plugin::initialize_plugin_host(44100.0, 2048).expect("Failed to initialize plugin host");
+
     println!("Scanning for plugins...");
-    let mut scanner = plugin::PluginScanner::new();
+    let mut scanner = PluginScanner::new();
     scanner.discover_plugins();
     let available_plugins = scanner.get_plugins();
     println!("Found {} LV2 plugins", available_plugins.len());

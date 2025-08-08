@@ -1,7 +1,7 @@
 use crate::audio_state::AudioState;
 use crate::level_meter::LevelMeter;
+use crate::lv2_plugin_host::PluginInfo;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
-use crate::plugin::PluginInfo;
 use crate::state::{AppState, AppStateSnapshot, AudioClip, AudioCommand, Project, UIUpdate};
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;

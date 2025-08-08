@@ -2,10 +2,8 @@ use crate::audio_state::{
     AudioClipSnapshot, AudioState, MidiNoteSnapshot, PatternSnapshot, PluginSnapshot,
     RealtimeCommand, TrackSnapshot,
 };
-use crate::plugin::create_plugin_instance;
-use crate::state::{
-    AppState, AudioClip, AudioCommand, MidiNote, PluginDescriptor, PluginParam, Track, UIUpdate,
-};
+use crate::plugin;
+use crate::state::{AppState, AudioCommand, Track, UIUpdate};
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
 use std::sync::atomic::Ordering;
@@ -91,7 +89,7 @@ fn process_command(
                 if let Some(track) = state.tracks.get_mut(track_id) {
                     // Create plugin descriptor
                     if let Ok(plugin_desc) =
-                        create_plugin_instance(&uri, audio_state.sample_rate.load())
+                        plugin::create_plugin_instance(&uri, audio_state.sample_rate.load())
                     {
                         track.plugin_chain.push(plugin_desc);
 
@@ -202,6 +200,7 @@ fn process_command(
                 }
             }
         }
+
         AudioCommand::UpdateTracks => {
             println!("Updating tracks in audio thread");
             if let Ok(state) = app_state.lock() {
@@ -224,7 +223,6 @@ fn process_command(
             if let Ok(mut state) = app_state.lock() {
                 state.recording = true;
                 audio_state.recording.store(true, Ordering::Relaxed);
-                // Recording logic will be handled in audio thread
             }
         }
 

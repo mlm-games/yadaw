@@ -1,151 +1,77 @@
+use crate::lv2_plugin_host::{ControlPortInfo, LV2PluginHost, PluginInfo};
 use crate::state::{PluginDescriptor, PluginParam};
 use anyhow::Result;
-use lilv;
-use lilv::port::Port;
-use std::{collections::HashMap, path::PathBuf};
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct PluginInfo {
-    pub uri: String,
-    pub name: String,
-    pub category: PluginCategory,
-    pub path: PathBuf,
-}
+pub use crate::lv2_plugin_host::PluginInfo as PluginScanResult;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum PluginCategory {
-    Instrument,
-    Effect,
-    Generator,
-    Analyzer,
-    Unknown,
-}
+static PLUGIN_HOST: Lazy<Mutex<Option<LV2PluginHost>>> = Lazy::new(|| Mutex::new(None));
 
 pub struct PluginScanner {
-    world: lilv::World,
-    plugins: HashMap<String, PluginInfo>,
+    pub(crate) plugins: Vec<PluginInfo>,
 }
 
 impl PluginScanner {
     pub fn new() -> Self {
-        let world = lilv::World::new();
         Self {
-            world,
-            plugins: HashMap::new(),
+            plugins: Vec::new(),
         }
     }
 
     pub fn discover_plugins(&mut self) {
-        self.world.load_all();
-        let all_plugins = self.world.plugins();
-
-        for plugin in all_plugins.iter() {
-            let uri = plugin.uri().as_uri().unwrap_or_default().to_string();
-            let name = plugin.name().as_str().unwrap_or_default().to_string();
-
-            let class = plugin
-                .class()
-                .uri()
-                .expect("Plugin class URI")
-                .as_uri()
-                .unwrap_or_default()
-                .to_string();
-
-            let category = match class.as_str() {
-                s if s.contains("Instrument") => PluginCategory::Instrument,
-                s if s.contains("Generator") => PluginCategory::Generator,
-                s if s.contains("Analyzer") => PluginCategory::Analyzer,
-                s if s.contains("Effect") => PluginCategory::Effect,
-                _ => PluginCategory::Unknown,
-            };
-
-            let info = PluginInfo {
-                uri: uri.clone(),
-                name,
-                category,
-                path: PathBuf::new(),
-            };
-            self.plugins.insert(uri, info);
+        // Get plugins from the host
+        let host_lock = PLUGIN_HOST.lock();
+        if let Some(host) = host_lock.as_ref() {
+            self.plugins = host.get_available_plugins().to_vec();
         }
     }
 
-    pub fn get_plugins(&self) -> Vec<PluginInfo> {
-        self.plugins.values().cloned().collect()
+    pub fn get_plugins(&self) -> Vec<PluginScanResult> {
+        self.plugins.clone()
     }
 }
 
 /// Create a plugin descriptor from URI
-pub fn create_plugin_instance(uri: &str, sample_rate: f32) -> Result<PluginDescriptor> {
-    let world = lilv::World::new();
-    world.load_all();
+pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDescriptor> {
+    let host_lock = PLUGIN_HOST.lock();
+    let host = host_lock
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Plugin host not initialized"))?;
 
-    let plugin = world
-        .plugins()
+    let plugin_info = host
+        .get_available_plugins()
         .iter()
-        .find(|p| p.uri().as_uri().unwrap_or("") == uri)
+        .find(|p| p.uri == uri)
         .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", uri))?;
 
-    let plugin_name = plugin.name().as_str().unwrap_or(uri).to_string();
     let mut params = HashMap::new();
 
-    // Scan ports for parameters
-    for port in plugin.iter_ports() {
-        let index = port.index() as usize;
-
-        if port.is_a(&world.new_uri("http://lv2plug.in/ns/lv2core#ControlPort"))
-            && port.is_a(&world.new_uri("http://lv2plug.in/ns/lv2core#InputPort"))
-        {
-            let name = port
-                .name()
-                .expect("Port name")
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-
-            // Get port ranges
-            let (default, min, max) = get_port_range(&world, port);
-
-            params.insert(
-                name.clone(),
-                PluginParam {
-                    index,
-                    name: name.clone(),
-                    value: default,
-                    min,
-                    max,
-                    default,
-                },
-            );
-        }
+    for port in &plugin_info.control_ports {
+        params.insert(
+            port.symbol.clone(),
+            PluginParam {
+                index: port.index,
+                name: port.name.clone(),
+                value: port.default,
+                min: port.min,
+                max: port.max,
+                default: port.default,
+            },
+        );
     }
 
     Ok(PluginDescriptor {
         uri: uri.to_string(),
-        name: plugin_name,
+        name: plugin_info.name.clone(),
         bypass: false,
         params,
     })
 }
 
-fn get_port_range(world: &lilv::World, port: Port) -> (f32, f32, f32) {
-    let default_uri = world.new_uri("http://lv2plug.in/ns/lv2core#default");
-    let minimum_uri = world.new_uri("http://lv2plug.in/ns/lv2core#minimum");
-    let maximum_uri = world.new_uri("http://lv2plug.in/ns/lv2core#maximum");
-
-    let default = port
-        .get(&default_uri)
-        .and_then(|node| node.as_float())
-        .unwrap_or(0.5);
-
-    let min = port
-        .get(&minimum_uri)
-        .and_then(|node| node.as_float())
-        .unwrap_or(0.0);
-
-    let max = port
-        .get(&maximum_uri)
-        .and_then(|node| node.as_float())
-        .unwrap_or(1.0);
-
-    (default, min, max)
+pub fn initialize_plugin_host(sample_rate: f64, max_block_size: usize) -> Result<()> {
+    let mut host_lock = PLUGIN_HOST.lock();
+    *host_lock = Some(LV2PluginHost::new(sample_rate, max_block_size)?);
+    Ok(())
 }
