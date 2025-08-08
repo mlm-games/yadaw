@@ -227,6 +227,7 @@ pub enum AudioCommand {
     Play,
     Stop,
     Record,
+    UpdateTracks,
     StopRecording,
     SetTrackVolume(usize, f32),
     SetTrackPan(usize, f32),

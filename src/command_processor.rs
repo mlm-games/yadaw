@@ -38,6 +38,7 @@ fn process_command(
     realtime_tx: &Sender<RealtimeCommand>,
     ui_tx: &Sender<UIUpdate>,
 ) {
+    println!("Processing command: {:?}", cmd);
     match cmd {
         AudioCommand::Play => {
             audio_state.playing.store(true, Ordering::Relaxed);
@@ -201,6 +202,14 @@ fn process_command(
                 }
             }
         }
+        AudioCommand::UpdateTracks => {
+            println!("Updating tracks in audio thread");
+            if let Ok(state) = app_state.lock() {
+                let tracks = create_track_snapshots(&state.tracks);
+                println!("Sending {} track snapshots to audio thread", tracks.len());
+                let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(tracks));
+            }
+        }
 
         AudioCommand::PreviewNote(track_id, pitch) => {
             let position = audio_state.get_position();
@@ -233,6 +242,8 @@ fn process_command(
 }
 
 fn create_track_snapshots(tracks: &[Track]) -> Vec<TrackSnapshot> {
+    println!("Creating snapshots for {} tracks", tracks.len());
+
     tracks
         .iter()
         .map(|track| TrackSnapshot {

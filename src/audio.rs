@@ -557,24 +557,55 @@ fn process_audio_track_static(
     let buffer_start_abs = current_position;
     let buffer_end_abs = buffer_start_abs + num_frames as f64;
 
-    for clip in &track.audio_clips {
+    // Debug: Print track info
+    if !track.audio_clips.is_empty() {
+        println!(
+            "Processing {} audio clips at position {}",
+            track.audio_clips.len(),
+            current_position
+        );
+    }
+
+    for (clip_idx, clip) in track.audio_clips.iter().enumerate() {
         let clip_start_abs = (clip.start_beat * 60.0 / bpm as f64) * sample_rate;
         let clip_end_abs = clip_start_abs + (clip.length_beats * 60.0 / bpm as f64) * sample_rate;
+
+        // Debug: Print clip timing
+        println!(
+            "Clip {}: start_beat={}, length_beats={}, clip_start_abs={}, clip_end_abs={}, buffer_start={}, buffer_end={}",
+            clip_idx,
+            clip.start_beat,
+            clip.length_beats,
+            clip_start_abs,
+            clip_end_abs,
+            buffer_start_abs,
+            buffer_end_abs
+        );
 
         let overlap_start = buffer_start_abs.max(clip_start_abs);
         let overlap_end = buffer_end_abs.min(clip_end_abs);
 
         if overlap_start < overlap_end {
+            println!(
+                "  Clip {} is playing! overlap_start={}, overlap_end={}",
+                clip_idx, overlap_start, overlap_end
+            );
+
             let start_index = (overlap_start - buffer_start_abs) as usize;
             let end_index = (overlap_end - buffer_start_abs) as usize;
             let clip_start_offset = (overlap_start - clip_start_abs) as usize;
 
-            for i in 0..(end_index - start_index) {
-                if let Some(sample) = clip.samples.get(clip_start_offset + i) {
-                    processor.input_buffer_l[start_index + i] += *sample;
-                    processor.input_buffer_r[start_index + i] += *sample;
-                }
-            }
+            println!(
+                "  start_index={}, end_index={}, clip_start_offset={}, samples_available={}",
+                start_index,
+                end_index,
+                clip_start_offset,
+                clip.samples.len()
+            );
+
+            // Rest of the code...
+        } else {
+            println!("  Clip {} not in range", clip_idx);
         }
     }
 }
