@@ -9,7 +9,7 @@ use rtrb::{Consumer, RingBuffer};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-const MAX_BUFFER_SIZE: usize = 2048;
+const MAX_BUFFER_SIZE: usize = 8192;
 const RECORDING_BUFFER_SIZE: usize = 44100 * 60 * 5; // 5 minutes at 44.1kHz
 
 static PLUGIN_HOST: Lazy<parking_lot::Mutex<Option<LV2PluginHost>>> =
@@ -309,10 +309,10 @@ impl AudioEngine {
             self.track_processors.push(TrackProcessor {
                 id: self.track_processors.len(),
                 plugins: Vec::new(),
-                input_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
-                input_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
-                output_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
-                output_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
+                input_buffer_l: Vec::with_capacity(MAX_BUFFER_SIZE),
+                input_buffer_r: Vec::with_capacity(MAX_BUFFER_SIZE),
+                output_buffer_l: Vec::with_capacity(MAX_BUFFER_SIZE),
+                output_buffer_r: Vec::with_capacity(MAX_BUFFER_SIZE),
                 active_notes: Vec::new(),
                 last_pattern_position: 0.0,
             });
@@ -361,6 +361,8 @@ impl AudioEngine {
         let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
 
+        let frames_to_process = num_frames.min(MAX_BUFFER_SIZE);
+
         // Check for soloed tracks
         let any_track_soloed = tracks.iter().any(|t| t.solo);
 
@@ -381,16 +383,24 @@ impl AudioEngine {
             }
 
             if let Some(processor) = self.track_processors.get_mut(track_idx) {
+                // Ensure buffers are large enough
+                if processor.input_buffer_l.len() < frames_to_process {
+                    processor.input_buffer_l.resize(frames_to_process, 0.0);
+                    processor.input_buffer_r.resize(frames_to_process, 0.0);
+                    processor.output_buffer_l.resize(frames_to_process, 0.0);
+                    processor.output_buffer_r.resize(frames_to_process, 0.0);
+                }
+
                 // Clear input buffers
-                processor.input_buffer_l[..num_frames].fill(0.0);
-                processor.input_buffer_r[..num_frames].fill(0.0);
+                processor.input_buffer_l[..frames_to_process].fill(0.0);
+                processor.input_buffer_r[..frames_to_process].fill(0.0);
 
                 // Process track content
                 if track.is_midi {
                     process_midi_track(
                         track,
                         processor,
-                        num_frames,
+                        frames_to_process,
                         current_position,
                         bpm,
                         self.sample_rate,
@@ -399,7 +409,7 @@ impl AudioEngine {
                     process_audio_track(
                         track,
                         processor,
-                        num_frames,
+                        frames_to_process,
                         current_position,
                         bpm,
                         self.sample_rate,
@@ -412,7 +422,7 @@ impl AudioEngine {
                         process_preview_note(
                             processor,
                             preview,
-                            num_frames,
+                            frames_to_process,
                             current_position,
                             self.sample_rate,
                         );
@@ -420,14 +430,14 @@ impl AudioEngine {
                 }
 
                 // Process plugins
-                process_track_plugins(track, processor, num_frames);
+                process_track_plugins(track, processor, frames_to_process);
 
                 // Calculate levels for meters
-                let left_peak = processor.input_buffer_l[..num_frames]
+                let left_peak = processor.input_buffer_l[..frames_to_process]
                     .iter()
                     .map(|s| s.abs())
                     .fold(0.0f32, f32::max);
-                let right_peak = processor.input_buffer_r[..num_frames]
+                let right_peak = processor.input_buffer_r[..frames_to_process]
                     .iter()
                     .map(|s| s.abs())
                     .fold(0.0f32, f32::max);
@@ -436,7 +446,7 @@ impl AudioEngine {
                 // Mix to output with panning
                 let (left_gain, right_gain) = calculate_stereo_pan(track.volume, track.pan);
 
-                for i in 0..num_frames {
+                for i in 0..frames_to_process {
                     output[i * channels] += processor.input_buffer_l[i] * left_gain;
                     if channels > 1 {
                         output[i * channels + 1] += processor.input_buffer_r[i] * right_gain;
