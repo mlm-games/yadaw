@@ -617,6 +617,11 @@ fn process_preview_note(
 }
 
 fn process_track_plugins(track: &TrackSnapshot, processor: &mut TrackProcessor, num_frames: usize) {
+    // If no plugins, nothing to do
+    if processor.plugins.is_empty() {
+        return;
+    }
+
     // Prepare MIDI events for MIDI tracks
     let midi_notes: Vec<(u8, u8, i64)> = if track.is_midi {
         processor
@@ -628,6 +633,10 @@ fn process_track_plugins(track: &TrackSnapshot, processor: &mut TrackProcessor, 
         Vec::new()
     };
 
+    // Clear output buffers at the start
+    processor.output_buffer_l[..num_frames].fill(0.0);
+    processor.output_buffer_r[..num_frames].fill(0.0);
+
     for (plugin_idx, plugin_desc) in track.plugin_chain.iter().enumerate() {
         if plugin_desc.bypass {
             continue;
@@ -635,33 +644,43 @@ fn process_track_plugins(track: &TrackSnapshot, processor: &mut TrackProcessor, 
 
         if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
             if let Some(instance) = &mut plugin.instance {
-                // Update parameters
+                // Update parameters - make sure they're actually applied
                 for entry in plugin_desc.params.iter() {
                     instance.set_parameter(entry.key(), *entry.value());
                 }
 
-                // Prepare MIDI if needed
-                if !midi_notes.is_empty() {
+                // For the first plugin in chain, prepare MIDI if needed
+                if plugin_idx == 0 && !midi_notes.is_empty() {
                     instance.prepare_midi_events(&midi_notes);
+                } else {
+                    // Clear MIDI for subsequent plugins
+                    instance.clear_midi_events();
                 }
 
+                // Clear output buffers before each plugin processes
+                processor.output_buffer_l[..num_frames].fill(0.0);
+                processor.output_buffer_r[..num_frames].fill(0.0);
+
                 // Process audio
-                if let Err(e) = instance.process(
+                match instance.process(
                     &processor.input_buffer_l[..num_frames],
                     &processor.input_buffer_r[..num_frames],
                     &mut processor.output_buffer_l[..num_frames],
                     &mut processor.output_buffer_r[..num_frames],
                     num_frames,
                 ) {
-                    eprintln!("Plugin processing error: {}", e);
-                    continue;
+                    Ok(_) => {
+                        // Success - copy output to input for next plugin
+                        processor.input_buffer_l[..num_frames]
+                            .copy_from_slice(&processor.output_buffer_l[..num_frames]);
+                        processor.input_buffer_r[..num_frames]
+                            .copy_from_slice(&processor.output_buffer_r[..num_frames]);
+                    }
+                    Err(e) => {
+                        // Error - audio remains in input buffers
+                        eprintln!("Plugin {} processing error: {}", plugin_desc.uri, e);
+                    }
                 }
-
-                // Copy output back to input for next plugin
-                processor.input_buffer_l[..num_frames]
-                    .copy_from_slice(&processor.output_buffer_l[..num_frames]);
-                processor.input_buffer_r[..num_frames]
-                    .copy_from_slice(&processor.output_buffer_r[..num_frames]);
             }
         }
     }
