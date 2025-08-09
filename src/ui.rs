@@ -4,6 +4,7 @@ use crate::config;
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
+use crate::project_manager::ProjectManager;
 use crate::state::{
     AppState, AppStateSnapshot, AudioClip, AudioCommand, AutomationLane, AutomationTarget, Project,
     Track, UIUpdate,
@@ -12,6 +13,7 @@ use crate::track_manager::{TrackManager, TrackType, arm_track_exclusive, mute_tr
 use crate::transport::{LoopMode, Transport, TransportState};
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
@@ -68,6 +70,9 @@ pub struct YadawApp {
     scroll_x: f32,
     transport: Transport,
     track_manager: TrackManager,
+    project_manager: ProjectManager,
+    pending_save: Option<String>,
+    pending_load: Option<String>,
 }
 
 impl YadawApp {
@@ -86,6 +91,7 @@ impl YadawApp {
 
         let transport = Transport::new(audio_state.clone(), command_tx.clone());
         let track_manager = TrackManager::new();
+        let project_manager = ProjectManager::new();
 
         Self {
             state,
@@ -122,6 +128,9 @@ impl YadawApp {
             scroll_x: 0.0,
             transport,
             track_manager,
+            project_manager,
+            pending_load: None,
+            pending_save: None,
         }
     }
 
@@ -331,27 +340,30 @@ impl YadawApp {
         }
     }
 
-    fn save_project(&self, path: &str) {
+    fn save_project(&mut self, path: &str) {
         let state = self.state.lock().unwrap();
-        let project = Project::from(&*state);
-
-        match std::fs::write(path, serde_json::to_string_pretty(&project).unwrap()) {
-            Ok(_) => println!("Project saved to {}", path),
-            Err(e) => eprintln!("Failed to save project: {}", e),
+        match self.project_manager.save_project(&*state, Path::new(path)) {
+            Ok(_) => {
+                self.show_message = Some(format!("Project saved to {}", path));
+                self.project_path = Some(path.to_string());
+            }
+            Err(e) => {
+                self.show_message = Some(format!("Failed to save project: {}", e));
+            }
         }
     }
 
-    fn load_project(&self, path: &str) {
-        match std::fs::read_to_string(path) {
-            Ok(content) => match serde_json::from_str::<Project>(&content) {
-                Ok(project) => {
-                    let mut state = self.state.lock().unwrap();
-                    state.load_project(project);
-                    println!("Project loaded from {}", path);
-                }
-                Err(e) => eprintln!("Failed to parse project: {}", e),
-            },
-            Err(e) => eprintln!("Failed to read project file: {}", e),
+    fn load_project(&mut self, path: &str) {
+        match self.project_manager.load_project(Path::new(path)) {
+            Ok(project) => {
+                let mut state = self.state.lock().unwrap();
+                state.load_project(project);
+                self.project_path = Some(path.to_string());
+                self.show_message = Some(format!("Project loaded from {}", path));
+            }
+            Err(e) => {
+                self.show_message = Some(format!("Failed to load project: {}", e));
+            }
         }
     }
 
@@ -552,13 +564,51 @@ impl eframe::App for YadawApp {
                         ui.close();
                     }
 
+                    let mut path_to_load = None;
+                    let mut clear_recent = false;
+
+                    ui.menu_button("Open Recent", |ui| {
+                        let recent = self.project_manager.get_recent_projects().to_vec(); // Clone the list
+                        if recent.is_empty() {
+                            ui.label("No recent projects");
+                        } else {
+                            for path in recent {
+                                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                                    if ui.button(name).clicked() {
+                                        path_to_load = Some(path.clone());
+                                        ui.close();
+                                    }
+                                }
+                            }
+
+                            ui.separator();
+                            if ui.button("Clear Recent").clicked() {
+                                clear_recent = true;
+                                ui.close();
+                            }
+                        }
+                    });
+
+                    if let Some(path) = path_to_load {
+                        if let Some(path_str) = path.to_str() {
+                            self.load_project(path_str);
+                        }
+                    }
+
+                    if clear_recent {
+                        self.project_manager.clear_recent_projects();
+                    }
+
                     if ui.button("Save Project").clicked() {
-                        if let Some(path) = &self.project_path {
-                            self.save_project(path);
+                        if let Some(path) = self.project_path.clone() {
+                            let save_path = path.clone();
+                            ui.close();
+                            // Mark that we need to save after menu closes
+                            self.pending_save = Some(save_path);
                         } else {
                             self.show_save_dialog = true;
+                            ui.close();
                         }
-                        ui.close();
                     }
 
                     if ui.button("Save Project As...").clicked() {
@@ -664,6 +714,14 @@ impl eframe::App for YadawApp {
                 });
             });
         });
+
+        if let Some(path) = self.pending_save.take() {
+            self.save_project(&path);
+        }
+
+        if let Some(path) = self.pending_load.take() {
+            self.load_project(&path);
+        }
 
         // File dialogs
         if self.show_save_dialog {
@@ -1661,7 +1719,8 @@ impl eframe::App for YadawApp {
 
                         if i.key_pressed(egui::Key::S) {
                             if let Some(path) = &self.project_path {
-                                self.save_project(path);
+                                let save_path = path.clone();
+                                self.pending_save = Some(save_path);
                             } else {
                                 self.show_save_dialog = true;
                             }

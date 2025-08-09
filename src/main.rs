@@ -9,6 +9,7 @@ mod level_meter;
 mod lv2_plugin_host;
 mod piano_roll;
 mod plugin;
+mod project_manager;
 mod state;
 mod track_manager;
 mod transport;
