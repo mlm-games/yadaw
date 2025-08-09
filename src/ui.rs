@@ -1,6 +1,8 @@
 use crate::audio_state::AudioState;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config;
+use crate::constants::DEFAULT_GRID_SNAP;
+use crate::edit_actions::{EditAction, EditProcessor};
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
@@ -399,6 +401,102 @@ impl YadawApp {
             }
         }
     }
+
+    fn is_selected_track_midi(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state
+            .tracks
+            .get(self.selected_track)
+            .map(|t| t.is_midi)
+            .unwrap_or(false)
+    }
+
+    fn quantize_selected_notes(&mut self, strength: f32) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::quantize_notes(
+                    &mut pattern.notes,
+                    DEFAULT_GRID_SNAP as f64,
+                    strength,
+                );
+            }
+        }
+    }
+
+    fn transpose_selected_notes(&mut self, semitones: i32) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::transpose_notes(&mut pattern.notes, semitones);
+            }
+        }
+    }
+
+    fn humanize_selected_notes(&mut self, amount: f32) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::humanize_notes(&mut pattern.notes, amount);
+            }
+        }
+    }
+
+    fn apply_fade_in(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    EditProcessor::apply_fade_in(clip, 0.25); // Quarter beat fade
+                }
+            }
+        }
+    }
+
+    fn apply_fade_out(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    EditProcessor::apply_fade_out(clip, 0.25); // Quarter beat fade
+                }
+            }
+        }
+    }
+
+    fn slice_selected_clips(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        let bpm = state.bpm;
+
+        // Collect slices for each selected clip
+        let mut all_slices = Vec::new();
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get(*track_id) {
+                if let Some(clip) = track.audio_clips.get(*clip_id) {
+                    let slices = EditProcessor::slice_to_grid(clip, 0.25, bpm); // Slice to 16th notes
+                    all_slices.push((*track_id, *clip_id, slices));
+                }
+            }
+        }
+
+        // Replace clips with slices
+        for (track_id, clip_id, slices) in all_slices.into_iter().rev() {
+            if let Some(track) = state.tracks.get_mut(track_id) {
+                track.audio_clips.remove(clip_id);
+                for slice in slices {
+                    track.audio_clips.push(slice);
+                }
+            }
+        }
+
+        self.selected_clips.clear();
+    }
 }
 
 impl eframe::App for YadawApp {
@@ -689,6 +787,49 @@ impl eframe::App for YadawApp {
                     if ui.button("Delete").clicked() {
                         self.delete_selected();
                         ui.close();
+                    }
+
+                    ui.separator();
+
+                    // Quantize submenu for MIDI tracks
+                    if self.is_selected_track_midi() {
+                        ui.menu_button("MIDI", |ui| {
+                            if ui.button("Quantize...").clicked() {
+                                self.quantize_selected_notes(1.0);
+                                ui.close();
+                            }
+                            if ui.button("Transpose Up").clicked() {
+                                self.transpose_selected_notes(1);
+                                ui.close();
+                            }
+                            if ui.button("Transpose Down").clicked() {
+                                self.transpose_selected_notes(-1);
+                                ui.close();
+                            }
+                            if ui.button("Humanize...").clicked() {
+                                self.humanize_selected_notes(0.1);
+                                ui.close();
+                            }
+                        });
+                    }
+
+                    // Audio editing
+                    if !self.selected_clips.is_empty() {
+                        ui.menu_button("Audio", |ui| {
+                            if ui.button("Fade In").clicked() {
+                                self.apply_fade_in();
+                                ui.close();
+                            }
+                            if ui.button("Fade Out").clicked() {
+                                self.apply_fade_out();
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Slice to Grid").clicked() {
+                                self.slice_selected_clips();
+                                ui.close();
+                            }
+                        });
                     }
                 });
 
