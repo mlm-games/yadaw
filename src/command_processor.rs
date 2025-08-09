@@ -262,6 +262,20 @@ fn process_command(
                 }
             }
         }
+        AudioCommand::UpdateAutomationPoint(track_id, lane_idx, beat, new_value) => {
+            if let Ok(mut state) = app_state.lock() {
+                if let Some(lane) = state
+                    .tracks
+                    .get_mut(track_id)
+                    .and_then(|t| t.automation_lanes.get_mut(lane_idx))
+                {
+                    lane.points.insert(OrderedFloat(beat), new_value);
+
+                    let tracks = create_track_snapshots(&state.tracks);
+                    let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(tracks));
+                }
+            }
+        }
 
         AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
             if let Ok(mut state) = app_state.lock() {

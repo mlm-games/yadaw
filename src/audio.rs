@@ -2,6 +2,7 @@ use crate::audio_state::{AudioState, RealtimeCommand, TrackSnapshot};
 use crate::automation_lane::AutomationLaneWidget;
 use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
 use crate::state::{AudioClip, AutomationTarget, UIUpdate};
+use core::f32;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
@@ -320,8 +321,8 @@ impl AudioEngine {
                 output_buffer_r: Vec::with_capacity(MAX_BUFFER_SIZE),
                 active_notes: Vec::new(),
                 last_pattern_position: 0.0,
-                automated_volume: 0.0,
-                automated_pan: 0.0,
+                automated_volume: f32::NAN,
+                automated_pan: f32::NAN,
                 automated_plugin_params: DashMap::new(),
             });
         }
@@ -406,6 +407,25 @@ impl AudioEngine {
                 processor.input_buffer_l[..frames_to_process].fill(0.0);
                 processor.input_buffer_r[..frames_to_process].fill(0.0);
 
+                apply_automation(track, processor, current_beat);
+
+                // Use automated values with fallback
+                let final_volume =
+                    if !processor.automated_volume.is_nan() && processor.automated_volume > 0.0 {
+                        processor.automated_volume
+                    } else {
+                        track.volume
+                    };
+
+                let final_pan = if !processor.automated_pan.is_nan() {
+                    processor.automated_pan
+                } else {
+                    track.pan
+                };
+
+                // Use final_volume and final_pan for mixing
+                let (left_gain, right_gain) = calculate_stereo_pan(final_volume, final_pan);
+
                 // Process track content
                 if track.is_midi {
                     process_midi_track(
@@ -453,9 +473,6 @@ impl AudioEngine {
                     .map(|s| s.abs())
                     .fold(0.0f32, f32::max);
                 track_levels.push((left_peak, right_peak));
-
-                // Mix to output with panning - USE TRACK VALUES (automation will be applied later)
-                let (left_gain, right_gain) = calculate_stereo_pan(track.volume, track.pan);
 
                 for i in 0..frames_to_process {
                     output[i * channels] += processor.input_buffer_l[i] * left_gain;

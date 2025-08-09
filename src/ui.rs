@@ -931,6 +931,14 @@ impl eframe::App for YadawApp {
                                     }
                                 });
 
+                                if !track.automation_lanes.is_empty() {
+                                    ui.separator();
+                                    ui.label(format!(
+                                        "🎛️ {} automation lanes",
+                                        track.automation_lanes.len()
+                                    ));
+                                }
+
                                 let mut plugin_to_remove = None;
                                 for (j, plugin) in track.plugin_chain.iter().enumerate() {
                                     ui.collapsing(&plugin.name, |ui| {
@@ -1177,17 +1185,39 @@ impl eframe::App for YadawApp {
                     ui.label(format!("{:.0} pixels/beat", self.timeline_zoom));
                 });
 
+                if ui
+                    .checkbox(&mut self.show_automation, "Show Automation")
+                    .clicked()
+                {}
+
                 ui.separator();
 
                 // Timeline scroll area
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        let track_height = 80.0;
+                        let base_track_height = 80.0;
+
+                        // Calculate track heights including automation lanes
+                        let track_heights: Vec<f32> = {
+                            let state = self.state.lock().unwrap();
+                            state
+                                .tracks
+                                .iter()
+                                .map(|track| {
+                                    let visible_lanes = if self.show_automation {
+                                        track.automation_lanes.iter().filter(|l| l.visible).count()
+                                    } else {
+                                        0
+                                    };
+                                    base_track_height + (visible_lanes as f32 * 30.0)
+                                })
+                                .collect()
+                        };
 
                         // Allocate space for all tracks
                         let total_height =
-                            self.state.lock().unwrap().tracks.len() as f32 * track_height;
+                            self.state.lock().unwrap().tracks.len() as f32 * base_track_height;
                         let (response, painter) = ui.allocate_painter(
                             egui::vec2(
                                 ui.available_width(),
@@ -1227,8 +1257,8 @@ impl eframe::App for YadawApp {
                             for track_idx in 0..tracks_len {
                                 let track_rect = egui::Rect::from_min_size(
                                     timeline_rect.min
-                                        + egui::vec2(0.0, track_idx as f32 * track_height),
-                                    egui::vec2(timeline_rect.width(), track_height),
+                                        + egui::vec2(0.0, track_idx as f32 * base_track_height),
+                                    egui::vec2(timeline_rect.width(), base_track_height),
                                 );
 
                                 // Get track info
@@ -1265,7 +1295,7 @@ impl eframe::App for YadawApp {
 
                                     let clip_rect = egui::Rect::from_min_size(
                                         track_rect.min + egui::vec2(clip_x, 20.0),
-                                        egui::vec2(clip_width, track_height - 25.0),
+                                        egui::vec2(clip_width, base_track_height - 25.0),
                                     );
 
                                     // Draw waveform and border
@@ -1433,22 +1463,29 @@ impl eframe::App for YadawApp {
                         }
 
                         if self.show_automation {
+                            let mut widget_index = 0;
                             for (track_idx, lanes) in automation_data {
                                 let track_rect = egui::Rect::from_min_size(
                                     timeline_rect.min
-                                        + egui::vec2(0.0, track_idx as f32 * track_height),
-                                    egui::vec2(timeline_rect.width(), track_height),
+                                        + egui::vec2(0.0, track_idx as f32 * base_track_height),
+                                    egui::vec2(timeline_rect.width(), base_track_height),
                                 );
 
                                 for (lane_idx, mut lane) in lanes {
                                     if lane.visible {
                                         let lane_rect = egui::Rect::from_min_size(
-                                            track_rect.min + egui::vec2(0.0, track_height - 30.0),
+                                            track_rect.min
+                                                + egui::vec2(
+                                                    0.0,
+                                                    base_track_height
+                                                        - 30.0
+                                                        - (lane_idx as f32 * 30.0),
+                                                ), // Stack lanes
                                             egui::vec2(timeline_rect.width(), 30.0),
                                         );
 
                                         // Ensure we have enough widgets
-                                        while self.automation_widgets.len() <= lane_idx {
+                                        while self.automation_widgets.len() <= widget_index {
                                             self.automation_widgets
                                                 .push(AutomationLaneWidget::default());
                                         }
@@ -1505,6 +1542,7 @@ impl eframe::App for YadawApp {
                                                 }
                                             }
                                         }
+                                        widget_index += 1;
                                     }
                                 }
                             }
