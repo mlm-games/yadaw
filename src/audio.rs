@@ -1,5 +1,9 @@
 use crate::audio_state::{AudioState, RealtimeCommand, TrackSnapshot};
 use crate::automation_lane::AutomationLaneWidget;
+use crate::constants::{
+    MAX_BUFFER_SIZE, PREVIEW_NOTE_AMPLITUDE, PREVIEW_NOTE_DURATION, RECORDING_BUFFER_SIZE,
+    SINE_WAVE_AMPLITUDE,
+};
 use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
 use crate::state::{AudioClip, AutomationTarget, UIUpdate};
 use core::f32;
@@ -11,9 +15,6 @@ use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-
-const MAX_BUFFER_SIZE: usize = 8192;
-const RECORDING_BUFFER_SIZE: usize = 44100 * 60 * 5; // 5 minutes at 44.1kHz
 
 static PLUGIN_HOST: Lazy<parking_lot::Mutex<Option<LV2PluginHost>>> =
     Lazy::new(|| parking_lot::Mutex::new(None));
@@ -632,11 +633,13 @@ fn process_preview_note(
 ) {
     for i in 0..num_frames {
         let sample_pos = current_position + i as f64 - preview.start_position;
-        if sample_pos > 0.0 && sample_pos < sample_rate * 0.5 {
+        if sample_pos > 0.0 && sample_pos < sample_rate * PREVIEW_NOTE_DURATION {
             let freq = 440.0 * 2.0_f32.powf((preview.pitch as f32 - 69.0) / 12.0);
             let phase = (sample_pos * freq as f64 / sample_rate) % 1.0;
             let envelope = (-(sample_pos * 4.0)).exp() as f32;
-            let sample = (phase * 2.0 * std::f64::consts::PI).sin() as f32 * envelope * 0.3;
+            let sample = (phase * 2.0 * std::f64::consts::PI).sin() as f32
+                * envelope
+                * PREVIEW_NOTE_AMPLITUDE;
 
             processor.input_buffer_l[i] += sample;
             processor.input_buffer_r[i] += sample;

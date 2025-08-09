@@ -3,6 +3,7 @@ mod audio_import;
 mod audio_state;
 mod automation_lane;
 mod command_processor;
+mod constants;
 mod level_meter;
 mod lv2_plugin_host;
 mod piano_roll;
@@ -15,7 +16,7 @@ use crossbeam_channel::bounded;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 
-use crate::plugin::PluginScanner;
+use crate::{constants::CHANNEL_QUEUE_SIZE, plugin::PluginScanner};
 
 fn main() -> Result<(), eframe::Error> {
     env_logger::init();
@@ -33,9 +34,9 @@ fn main() -> Result<(), eframe::Error> {
     println!("Found {} LV2 plugins", available_plugins.len());
 
     println!("Creating communication channels...");
-    let (ui_to_command_tx, ui_to_command_rx) = bounded(256);
-    let (realtime_tx, realtime_rx) = bounded(256);
-    let (audio_to_ui_tx, audio_to_ui_rx) = bounded(256);
+    let (ui_to_command_tx, ui_to_command_rx) = bounded(CHANNEL_QUEUE_SIZE);
+    let (realtime_tx, realtime_rx) = bounded(CHANNEL_QUEUE_SIZE);
+    let (audio_to_ui_tx, audio_to_ui_rx) = bounded(CHANNEL_QUEUE_SIZE);
 
     println!("Creating app state...");
     let app_state = Arc::new(Mutex::new(state::AppState::new()));
