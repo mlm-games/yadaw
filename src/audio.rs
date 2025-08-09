@@ -5,6 +5,7 @@ use crate::constants::{
     SINE_WAVE_AMPLITUDE,
 };
 use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
+use crate::mixer::{ChannelStrip, MixerEngine};
 use crate::state::{AudioClip, AutomationTarget, UIUpdate};
 use core::f32;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -27,6 +28,8 @@ struct AudioEngine {
     preview_note: Option<PreviewNote>,
     sample_rate: f64,
     updates: Sender<UIUpdate>,
+    mixer: MixerEngine,
+    channel_strips: Vec<ChannelStrip>,
 }
 
 struct TrackProcessor {
@@ -111,6 +114,8 @@ pub fn run_audio_thread(
         preview_note: None,
         sample_rate,
         updates: updates.clone(),
+        mixer: MixerEngine::new(),
+        channel_strips: Vec::new(),
     };
 
     // Start recording input thread if available
@@ -356,6 +361,20 @@ impl AudioEngine {
                         }
                     }
                 }
+            }
+        }
+
+        while self.channel_strips.len() < tracks.len() {
+            self.channel_strips.push(ChannelStrip::default());
+        }
+
+        // Update channel strips from track data
+        for (idx, track) in tracks.iter().enumerate() {
+            if let Some(strip) = self.channel_strips.get_mut(idx) {
+                strip.gain = track.volume;
+                strip.pan = track.pan;
+                strip.mute = track.muted;
+                strip.solo = track.solo;
             }
         }
     }

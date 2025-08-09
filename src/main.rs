@@ -7,6 +7,7 @@ mod config;
 mod constants;
 mod level_meter;
 mod lv2_plugin_host;
+mod mixer;
 mod piano_roll;
 mod plugin;
 mod project_manager;

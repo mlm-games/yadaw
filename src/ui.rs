@@ -731,8 +731,9 @@ impl eframe::App for YadawApp {
                 .set_file_name("untitled.yadaw")
                 .save_file()
             {
-                self.save_project(path.to_str().unwrap());
-                self.project_path = Some(path.to_str().unwrap().to_string());
+                let path_str = path.to_str().unwrap().to_string();
+                self.save_project(&path_str);
+                self.project_path = Some(path_str);
             }
             self.show_save_dialog = false;
         }
@@ -743,8 +744,9 @@ impl eframe::App for YadawApp {
                 .add_filter("All Files", &["*"])
                 .pick_file()
             {
-                self.load_project(path.to_str().unwrap());
-                self.project_path = Some(path.to_str().unwrap().to_string());
+                let path_str = path.to_str().unwrap().to_string();
+                self.load_project(&path_str);
+                self.project_path = Some(path_str);
             }
             self.show_load_dialog = false;
         }
