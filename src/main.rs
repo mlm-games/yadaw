@@ -3,6 +3,7 @@ mod audio_import;
 mod audio_state;
 mod automation_lane;
 mod command_processor;
+mod config;
 mod constants;
 mod level_meter;
 mod lv2_plugin_host;
@@ -23,9 +24,17 @@ fn main() -> Result<(), eframe::Error> {
 
     println!("Starting YADAW...");
 
-    // Initialize plugin host with a default sample rate
-    // This will be updated when the audio thread starts
-    plugin::initialize_plugin_host(44100.0, 2048).expect("Failed to initialize plugin host");
+    let config = match config::Config::load() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Failed to load config: {}, using defaults", e);
+            config::Config::default()
+        }
+    };
+
+    // Initialize plugin host with config sample rate
+    plugin::initialize_plugin_host(config.audio.sample_rate as f64, config.audio.buffer_size)
+        .expect("Failed to initialize plugin host");
 
     println!("Scanning for plugins...");
     let mut scanner = PluginScanner::new();
@@ -78,6 +87,7 @@ fn main() -> Result<(), eframe::Error> {
                 audio_state,
                 ui_to_command_tx,
                 audio_to_ui_rx,
+                config,
                 available_plugins,
             )))
         }),

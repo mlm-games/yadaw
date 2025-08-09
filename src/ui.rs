@@ -1,5 +1,6 @@
 use crate::audio_state::AudioState;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
+use crate::config;
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
@@ -35,6 +36,7 @@ pub struct YadawApp {
     audio_state: Arc<AudioState>,
     command_tx: Sender<AudioCommand>,
     ui_rx: Receiver<UIUpdate>,
+    config: config::Config,
     available_plugins: Vec<PluginInfo>,
     show_plugin_browser: bool,
     selected_track_for_plugin: Option<usize>,
@@ -70,6 +72,7 @@ impl YadawApp {
         audio_state: Arc<AudioState>,
         command_tx: Sender<AudioCommand>,
         ui_rx: Receiver<UIUpdate>,
+        config: config::Config,
         available_plugins: Vec<PluginInfo>,
     ) -> Self {
         let num_tracks = {
@@ -82,6 +85,7 @@ impl YadawApp {
             audio_state,
             command_tx,
             ui_rx,
+            config,
             available_plugins,
             show_plugin_browser: false,
             selected_track_for_plugin: None,
@@ -631,6 +635,21 @@ impl eframe::App for YadawApp {
 
                 ui.menu_button("View", |ui| {
                     if ui.checkbox(&mut self.show_mixer, "Mixer").clicked() {
+                        ui.close();
+                    }
+                });
+
+                ui.menu_button("Preferences", |ui| {
+                    if ui.button("Audio Settings...").clicked() {
+                        // TODO: Show audio settings dialog
+                        ui.close();
+                    }
+                    if ui.button("Save Preferences").clicked() {
+                        if let Err(e) = self.config.save() {
+                            self.show_message = Some(format!("Failed to save preferences: {}", e));
+                        } else {
+                            self.show_message = Some("Preferences saved".to_string());
+                        }
                         ui.close();
                     }
                 });
