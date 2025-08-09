@@ -1,5 +1,41 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationPoint {
+    pub beat: f64,
+    pub value: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationLane {
+    pub parameter: AutomationTarget,
+    pub points: BTreeMap<OrderedFloat<f64>, f32>,
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AutomationTarget {
+    TrackVolume,
+    TrackPan,
+    PluginParam {
+        plugin_idx: usize,
+        param_name: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct OrderedFloat<T>(pub T);
+
+impl Eq for OrderedFloat<f64> {}
+impl Ord for OrderedFloat<f64> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .partial_cmp(&other.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
@@ -14,6 +50,7 @@ pub struct Track {
     pub patterns: Vec<Pattern>,
     pub is_midi: bool,
     pub audio_clips: Vec<AudioClip>,
+    pub automation_lanes: Vec<AutomationLane>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +149,7 @@ impl AppState {
                     patterns: vec![],
                     is_midi: false,
                     audio_clips: Vec::new(),
+                    automation_lanes: vec![],
                 },
                 Track {
                     id: 1,
@@ -178,6 +216,7 @@ impl AppState {
                     }],
                     is_midi: true,
                     audio_clips: Vec::new(),
+                    automation_lanes: vec![],
                 },
             ],
             master_volume: 0.8,
@@ -250,6 +289,10 @@ pub enum AudioCommand {
     TrimClipEnd(usize, usize, f64),
     PreviewNote(usize, u8),
     StopPreviewNote,
+    AddAutomationPoint(usize, AutomationTarget, f64, f32), // track_id, target, beat, value
+    RemoveAutomationPoint(usize, usize, f64),              // track_id, lane_idx, beat
+    UpdateAutomationPoint(usize, usize, f64, f32),         // track_id, lane_idx, beat, new_value
+    SetAutomationVisible(usize, usize, bool),              // track_id, lane_idx, visible
 }
 
 #[derive(Debug, Clone)]
@@ -261,4 +304,5 @@ pub enum UIUpdate {
     RecordingFinished(usize, AudioClip),
     TrackLevels(Vec<(f32, f32)>),
     MasterLevel(f32, f32),
+    PushUndo(AppStateSnapshot),
 }

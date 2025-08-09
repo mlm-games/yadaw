@@ -1,6 +1,7 @@
 mod audio;
 mod audio_import;
 mod audio_state;
+mod automation_lane;
 mod command_processor;
 mod level_meter;
 mod lv2_plugin_host;

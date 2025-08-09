@@ -1,8 +1,10 @@
 use crate::audio_state::{AudioState, RealtimeCommand, TrackSnapshot};
+use crate::automation_lane::AutomationLaneWidget;
 use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
-use crate::state::{AudioClip, UIUpdate};
+use crate::state::{AudioClip, AutomationTarget, UIUpdate};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
+use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
@@ -34,6 +36,9 @@ struct TrackProcessor {
     output_buffer_r: Vec<f32>,
     active_notes: Vec<ActiveMidiNote>,
     last_pattern_position: f64,
+    automated_volume: f32,
+    automated_pan: f32,
+    automated_plugin_params: DashMap<(usize, String), f32>,
 }
 
 struct PluginProcessor {
@@ -315,6 +320,9 @@ impl AudioEngine {
                 output_buffer_r: Vec::with_capacity(MAX_BUFFER_SIZE),
                 active_notes: Vec::new(),
                 last_pattern_position: 0.0,
+                automated_volume: 0.0,
+                automated_pan: 0.0,
+                automated_plugin_params: DashMap::new(),
             });
         }
 
@@ -362,6 +370,9 @@ impl AudioEngine {
         let master_volume = self.audio_state.master_volume.load();
 
         let frames_to_process = num_frames.min(MAX_BUFFER_SIZE);
+
+        // Calculate current beat for automation
+        let current_beat = (current_position / self.sample_rate) * (bpm as f64 / 60.0);
 
         // Check for soloed tracks
         let any_track_soloed = tracks.iter().any(|t| t.solo);
@@ -443,7 +454,7 @@ impl AudioEngine {
                     .fold(0.0f32, f32::max);
                 track_levels.push((left_peak, right_peak));
 
-                // Mix to output with panning
+                // Mix to output with panning - USE TRACK VALUES (automation will be applied later)
                 let (left_gain, right_gain) = calculate_stereo_pan(track.volume, track.pan);
 
                 for i in 0..frames_to_process {
@@ -681,6 +692,29 @@ fn process_track_plugins(track: &TrackSnapshot, processor: &mut TrackProcessor, 
                         eprintln!("Plugin {} processing error: {}", plugin_desc.uri, e);
                     }
                 }
+            }
+        }
+    }
+}
+
+fn apply_automation(track: &TrackSnapshot, processor: &mut TrackProcessor, current_beat: f64) {
+    for lane in &track.automation_lanes {
+        let value = AutomationLaneWidget::get_value_at_beat(lane, current_beat);
+
+        match &lane.parameter {
+            AutomationTarget::TrackVolume => {
+                processor.automated_volume = value;
+            }
+            AutomationTarget::TrackPan => {
+                processor.automated_pan = value * 2.0 - 1.0; // Convert 0-1 to -1 to 1
+            }
+            AutomationTarget::PluginParam {
+                plugin_idx,
+                param_name,
+            } => {
+                processor
+                    .automated_plugin_params
+                    .insert((*plugin_idx, param_name.clone()), value);
             }
         }
     }

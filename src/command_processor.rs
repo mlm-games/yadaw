@@ -3,9 +3,10 @@ use crate::audio_state::{
     RealtimeCommand, TrackSnapshot,
 };
 use crate::plugin;
-use crate::state::{AppState, AudioCommand, Track, UIUpdate};
+use crate::state::{AppState, AudioCommand, AutomationLane, OrderedFloat, Track, UIUpdate};
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +37,24 @@ fn process_command(
     realtime_tx: &Sender<RealtimeCommand>,
     ui_tx: &Sender<UIUpdate>,
 ) {
+    let should_push_undo = matches!(
+        cmd,
+        AudioCommand::AddPlugin(..)
+            | AudioCommand::RemovePlugin(..)
+            | AudioCommand::AddNote(..)
+            | AudioCommand::RemoveNote(..)
+            | AudioCommand::UpdateNote(..)
+            | AudioCommand::AddAutomationPoint(..)
+            | AudioCommand::RemoveAutomationPoint(..)
+            | AudioCommand::UpdateAutomationPoint(..)
+    );
+
+    if should_push_undo {
+        if let Ok(state) = app_state.lock() {
+            let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+        }
+    }
+
     println!("Processing command: {:?}", cmd);
     match cmd {
         AudioCommand::Play => {
@@ -200,6 +219,64 @@ fn process_command(
                 }
             }
         }
+        AudioCommand::AddAutomationPoint(track_id, target, beat, value) => {
+            if let Ok(mut state) = app_state.lock() {
+                if let Some(track) = state.tracks.get_mut(track_id) {
+                    // Check if lane already exists
+                    let lane_exists = track.automation_lanes.iter().any(|l| l.parameter == target);
+
+                    if !lane_exists {
+                        // Create new lane
+                        track.automation_lanes.push(AutomationLane {
+                            parameter: target.clone(),
+                            points: BTreeMap::new(),
+                            visible: true,
+                        });
+                    }
+
+                    // Now find and update the lane
+                    if let Some(lane) = track
+                        .automation_lanes
+                        .iter_mut()
+                        .find(|l| l.parameter == target)
+                    {
+                        lane.points.insert(OrderedFloat(beat), value);
+                    }
+
+                    let tracks = create_track_snapshots(&state.tracks);
+                    let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(tracks));
+                }
+            }
+        }
+        AudioCommand::SetAutomationVisible(track_id, lane_idx, visible) => {
+            if let Ok(mut state) = app_state.lock() {
+                if let Some(lane) = state
+                    .tracks
+                    .get_mut(track_id)
+                    .and_then(|t| t.automation_lanes.get_mut(lane_idx))
+                {
+                    lane.visible = visible;
+
+                    let tracks = create_track_snapshots(&state.tracks);
+                    let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(tracks));
+                }
+            }
+        }
+
+        AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
+            if let Ok(mut state) = app_state.lock() {
+                if let Some(lane) = state
+                    .tracks
+                    .get_mut(track_id)
+                    .and_then(|t| t.automation_lanes.get_mut(lane_idx))
+                {
+                    lane.points.remove(&OrderedFloat(beat));
+
+                    let tracks = create_track_snapshots(&state.tracks);
+                    let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(tracks));
+                }
+            }
+        }
 
         AudioCommand::UpdateTracks => {
             println!("Updating tracks in audio thread");
@@ -296,6 +373,7 @@ fn create_track_snapshots(tracks: &[Track]) -> Vec<TrackSnapshot> {
                     })
                 })
                 .collect(),
+            automation_lanes: track.automation_lanes.clone(),
         })
         .collect()
 }

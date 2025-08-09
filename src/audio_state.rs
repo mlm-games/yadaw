@@ -3,6 +3,8 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use crate::state::AutomationLane;
+
 /// Lock-free audio state that can be safely accessed from audio thread
 pub struct AudioState {
     pub playing: AtomicBool,
@@ -48,6 +50,7 @@ pub struct TrackSnapshot {
     pub is_midi: bool,
     pub audio_clips: Vec<Arc<AudioClipSnapshot>>,
     pub(crate) armed: bool,
+    pub automation_lanes: Vec<AutomationLane>,
 }
 
 #[derive(Clone, Debug)]
