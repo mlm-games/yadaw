@@ -10,6 +10,7 @@ mod lv2_plugin_host;
 mod piano_roll;
 mod plugin;
 mod state;
+mod track_manager;
 mod transport;
 mod ui;
 mod waveform;

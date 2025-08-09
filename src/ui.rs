@@ -8,6 +8,7 @@ use crate::state::{
     AppState, AppStateSnapshot, AudioClip, AudioCommand, AutomationLane, AutomationTarget, Project,
     Track, UIUpdate,
 };
+use crate::track_manager::{TrackManager, TrackType, arm_track_exclusive, mute_track, solo_track};
 use crate::transport::{LoopMode, Transport, TransportState};
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
@@ -66,6 +67,7 @@ pub struct YadawApp {
     show_automation: bool,
     scroll_x: f32,
     transport: Transport,
+    track_manager: TrackManager,
 }
 
 impl YadawApp {
@@ -83,6 +85,7 @@ impl YadawApp {
         };
 
         let transport = Transport::new(audio_state.clone(), command_tx.clone());
+        let track_manager = TrackManager::new();
 
         Self {
             state,
@@ -118,6 +121,7 @@ impl YadawApp {
             show_automation: false,
             scroll_x: 0.0,
             transport,
+            track_manager,
         }
     }
 
@@ -844,283 +848,301 @@ impl eframe::App for YadawApp {
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     let mut commands_to_send = Vec::new();
-                    let mut add_track_clicked = false;
 
                     {
-                        let mut state = self.state.lock().unwrap();
-                        let num_tracks = state.tracks.len();
+                        let mut track_actions = Vec::new(); // Collect actions to perform
 
-                        for track_idx in 0..num_tracks {
-                            let is_selected = track_idx == self.selected_track;
+                        {
+                            let mut state = self.state.lock().unwrap();
+                            let num_tracks = state.tracks.len();
 
-                            ui.group(|ui| {
-                                let track = &mut state.tracks[track_idx];
+                            for track_idx in 0..num_tracks {
+                                let is_selected = track_idx == self.selected_track;
 
-                                ui.horizontal(|ui| {
-                                    if ui.selectable_label(is_selected, &track.name).clicked() {
-                                        self.selected_track = track_idx;
-                                    }
-                                    ui.label(if track.is_midi { "🎹" } else { "🎵" });
+                                ui.group(|ui| {
+                                    let track = &mut state.tracks[track_idx];
 
-                                    if ui
-                                        .small_button(if track.muted { "🔇" } else { "🔊" })
-                                        .clicked()
-                                    {
-                                        let muted = !track.muted;
-                                        commands_to_send
-                                            .push(AudioCommand::MuteTrack(track_idx, muted));
-                                    }
+                                    ui.horizontal(|ui| {
+                                        if ui.selectable_label(is_selected, &track.name).clicked() {
+                                            self.selected_track = track_idx;
+                                        }
+                                        ui.label(if track.is_midi { "🎹" } else { "🎵" });
 
-                                    if ui
-                                        .small_button(if track.solo { "S" } else { "s" })
-                                        .on_hover_text("Solo")
-                                        .clicked()
-                                    {
-                                        let solo = !track.solo;
-                                        commands_to_send
-                                            .push(AudioCommand::SoloTrack(track_idx, solo));
-                                    }
+                                        if ui
+                                            .small_button(if track.muted { "🔇" } else { "🔊" })
+                                            .clicked()
+                                        {
+                                            track_actions.push(("mute", track_idx));
+                                        }
 
-                                    if ui
-                                        .small_button(if track.armed { "🔴" } else { "⭕" })
-                                        .on_hover_text("Record Arm")
-                                        .clicked()
-                                    {
-                                        track.armed = !track.armed;
-                                    }
-                                });
+                                        if ui
+                                            .small_button(if track.solo { "S" } else { "s" })
+                                            .on_hover_text("Solo")
+                                            .clicked()
+                                        {
+                                            track_actions.push(("solo", track_idx));
+                                        }
 
-                                ui.horizontal(|ui| {
-                                    ui.label("Vol:");
-                                    let mut volume = track.volume;
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(&mut volume, 0.0..=1.0)
-                                                .show_value(false),
-                                        )
-                                        .changed()
-                                    {
-                                        commands_to_send
-                                            .push(AudioCommand::SetTrackVolume(track_idx, volume));
-                                    }
-                                    ui.label(format!("{:.0}%", volume * 100.0));
-                                });
+                                        if ui
+                                            .small_button(if track.armed { "🔴" } else { "⭕" })
+                                            .on_hover_text("Record Arm")
+                                            .clicked()
+                                        {
+                                            track_actions.push(("arm", track_idx));
+                                        }
+                                    });
 
-                                ui.horizontal(|ui| {
-                                    ui.label("Pan:");
-                                    let mut pan = track.pan;
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(&mut pan, -1.0..=1.0)
-                                                .show_value(false),
-                                        )
-                                        .changed()
-                                    {
-                                        commands_to_send
-                                            .push(AudioCommand::SetTrackPan(track_idx, pan));
-                                    }
-                                    let pan_text = if pan.abs() < 0.01 {
-                                        "C".to_string()
-                                    } else if pan < 0.0 {
-                                        format!("L{:.0}", -pan * 100.0)
-                                    } else {
-                                        format!("R{:.0}", pan * 100.0)
-                                    };
-                                    ui.label(pan_text);
-                                });
-
-                                // Plugin chain
-                                ui.separator();
-                                ui.horizontal(|ui| {
-                                    ui.label("Plugins:");
-                                    if ui.small_button("+").clicked() {
-                                        self.show_plugin_browser = true;
-                                        self.selected_track_for_plugin = Some(track_idx);
-                                    }
-                                });
-
-                                ui.menu_button("Automate", |ui| {
-                                    if ui.button("Volume").clicked() {
-                                        // Create volume automation lane
-                                        let _ =
-                                            self.command_tx.send(AudioCommand::AddAutomationPoint(
-                                                track_idx,
-                                                AutomationTarget::TrackVolume,
-                                                0.0,
-                                                track.volume,
+                                    ui.horizontal(|ui| {
+                                        ui.label("Vol:");
+                                        let mut volume = track.volume;
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut volume, 0.0..=1.0)
+                                                    .show_value(false),
+                                            )
+                                            .changed()
+                                        {
+                                            commands_to_send.push(AudioCommand::SetTrackVolume(
+                                                track_idx, volume,
                                             ));
-                                        ui.close();
-                                    }
+                                        }
+                                        ui.label(format!("{:.0}%", volume * 100.0));
+                                    });
 
-                                    if ui.button("Pan").clicked() {
-                                        // Create pan automation lane
-                                        let _ =
-                                            self.command_tx.send(AudioCommand::AddAutomationPoint(
-                                                track_idx,
-                                                AutomationTarget::TrackPan,
-                                                0.0,
-                                                (track.pan + 1.0) / 2.0,
-                                            ));
-                                        ui.close();
-                                    }
+                                    ui.horizontal(|ui| {
+                                        ui.label("Pan:");
+                                        let mut pan = track.pan;
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut pan, -1.0..=1.0)
+                                                    .show_value(false),
+                                            )
+                                            .changed()
+                                        {
+                                            commands_to_send
+                                                .push(AudioCommand::SetTrackPan(track_idx, pan));
+                                        }
+                                        let pan_text = if pan.abs() < 0.01 {
+                                            "C".to_string()
+                                        } else if pan < 0.0 {
+                                            format!("L{:.0}", -pan * 100.0)
+                                        } else {
+                                            format!("R{:.0}", pan * 100.0)
+                                        };
+                                        ui.label(pan_text);
+                                    });
 
+                                    // Plugin chain
                                     ui.separator();
+                                    ui.horizontal(|ui| {
+                                        ui.label("Plugins:");
+                                        if ui.small_button("+").clicked() {
+                                            self.show_plugin_browser = true;
+                                            self.selected_track_for_plugin = Some(track_idx);
+                                        }
+                                    });
 
-                                    // Plugin parameters
-                                    for (plugin_idx, plugin) in
-                                        track.plugin_chain.iter().enumerate()
-                                    {
-                                        ui.menu_button(&plugin.name, |ui| {
-                                            for (param_name, param) in &plugin.params {
-                                                if ui.button(&param.name).clicked() {
-                                                    let normalized = (param.value - param.min)
-                                                        / (param.max - param.min);
-                                                    let _ = self.command_tx.send(
-                                                        AudioCommand::AddAutomationPoint(
-                                                            track_idx,
-                                                            AutomationTarget::PluginParam {
-                                                                plugin_idx,
-                                                                param_name: param_name.clone(),
-                                                            },
-                                                            0.0,
-                                                            normalized,
-                                                        ),
-                                                    );
-                                                    ui.close();
-                                                }
-                                            }
-                                        });
-                                    }
-                                });
+                                    ui.menu_button("Automate", |ui| {
+                                        if ui.button("Volume").clicked() {
+                                            // Create volume automation lane
+                                            let _ = self.command_tx.send(
+                                                AudioCommand::AddAutomationPoint(
+                                                    track_idx,
+                                                    AutomationTarget::TrackVolume,
+                                                    0.0,
+                                                    track.volume,
+                                                ),
+                                            );
+                                            ui.close();
+                                        }
 
-                                if !track.automation_lanes.is_empty() {
-                                    ui.separator();
-                                    ui.label(format!(
-                                        "🎛️ {} automation lanes",
-                                        track.automation_lanes.len()
-                                    ));
-                                }
+                                        if ui.button("Pan").clicked() {
+                                            // Create pan automation lane
+                                            let _ = self.command_tx.send(
+                                                AudioCommand::AddAutomationPoint(
+                                                    track_idx,
+                                                    AutomationTarget::TrackPan,
+                                                    0.0,
+                                                    (track.pan + 1.0) / 2.0,
+                                                ),
+                                            );
+                                            ui.close();
+                                        }
 
-                                let mut plugin_to_remove = None;
-                                for (j, plugin) in track.plugin_chain.iter().enumerate() {
-                                    ui.collapsing(&plugin.name, |ui| {
-                                        ui.horizontal(|ui| {
-                                            // Bypass toggle
-                                            let mut bypass = plugin.bypass;
-                                            if ui.checkbox(&mut bypass, "Bypass").changed() {
-                                                commands_to_send.push(
-                                                    AudioCommand::SetPluginBypass(
-                                                        track_idx, j, bypass,
-                                                    ),
-                                                );
-                                            }
+                                        ui.separator();
 
-                                            // Remove button
-                                            if ui.small_button("×").clicked() {
-                                                plugin_to_remove = Some(j);
-                                            }
-                                        });
-
-                                        // Parameter controls
-                                        for (param_name, param) in &plugin.params {
-                                            ui.horizontal(|ui| {
-                                                ui.label(&param.name);
-                                                let mut value = param.value;
-
-                                                // Use appropriate widget based on parameter range
-                                                if param.max - param.min <= 1.0 && param.min == 0.0
-                                                {
-                                                    // Likely a toggle
-                                                    let mut enabled = value > 0.5;
-                                                    if ui.checkbox(&mut enabled, "").changed() {
-                                                        value = if enabled { 1.0 } else { 0.0 };
-                                                        commands_to_send.push(
-                                                            AudioCommand::SetPluginParam(
+                                        // Plugin parameters
+                                        for (plugin_idx, plugin) in
+                                            track.plugin_chain.iter().enumerate()
+                                        {
+                                            ui.menu_button(&plugin.name, |ui| {
+                                                for (param_name, param) in &plugin.params {
+                                                    if ui.button(&param.name).clicked() {
+                                                        let normalized = (param.value - param.min)
+                                                            / (param.max - param.min);
+                                                        let _ = self.command_tx.send(
+                                                            AudioCommand::AddAutomationPoint(
                                                                 track_idx,
-                                                                j,
-                                                                param_name.clone(),
-                                                                value,
+                                                                AutomationTarget::PluginParam {
+                                                                    plugin_idx,
+                                                                    param_name: param_name.clone(),
+                                                                },
+                                                                0.0,
+                                                                normalized,
                                                             ),
                                                         );
+                                                        ui.close();
                                                     }
-                                                } else {
-                                                    // Slider
-                                                    if ui
-                                                        .add(
-                                                            egui::Slider::new(
-                                                                &mut value,
-                                                                param.min..=param.max,
+                                                }
+                                            });
+                                        }
+                                    });
+
+                                    if !track.automation_lanes.is_empty() {
+                                        ui.separator();
+                                        ui.label(format!(
+                                            "🎛️ {} automation lanes",
+                                            track.automation_lanes.len()
+                                        ));
+                                    }
+
+                                    let mut plugin_to_remove = None;
+                                    for (j, plugin) in track.plugin_chain.iter().enumerate() {
+                                        ui.collapsing(&plugin.name, |ui| {
+                                            ui.horizontal(|ui| {
+                                                // Bypass toggle
+                                                let mut bypass = plugin.bypass;
+                                                if ui.checkbox(&mut bypass, "Bypass").changed() {
+                                                    commands_to_send.push(
+                                                        AudioCommand::SetPluginBypass(
+                                                            track_idx, j, bypass,
+                                                        ),
+                                                    );
+                                                }
+
+                                                // Remove button
+                                                if ui.small_button("×").clicked() {
+                                                    plugin_to_remove = Some(j);
+                                                }
+                                            });
+
+                                            // Parameter controls
+                                            for (param_name, param) in &plugin.params {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(&param.name);
+                                                    let mut value = param.value;
+
+                                                    // Use appropriate widget based on parameter range
+                                                    if param.max - param.min <= 1.0
+                                                        && param.min == 0.0
+                                                    {
+                                                        // Likely a toggle
+                                                        let mut enabled = value > 0.5;
+                                                        if ui.checkbox(&mut enabled, "").changed() {
+                                                            value = if enabled { 1.0 } else { 0.0 };
+                                                            commands_to_send.push(
+                                                                AudioCommand::SetPluginParam(
+                                                                    track_idx,
+                                                                    j,
+                                                                    param_name.clone(),
+                                                                    value,
+                                                                ),
+                                                            );
+                                                        }
+                                                    } else {
+                                                        // Slider
+                                                        if ui
+                                                            .add(
+                                                                egui::Slider::new(
+                                                                    &mut value,
+                                                                    param.min..=param.max,
+                                                                )
+                                                                .show_value(true),
                                                             )
-                                                            .show_value(true),
-                                                        )
-                                                        .changed()
+                                                            .changed()
+                                                        {
+                                                            commands_to_send.push(
+                                                                AudioCommand::SetPluginParam(
+                                                                    track_idx,
+                                                                    j,
+                                                                    param_name.clone(),
+                                                                    value,
+                                                                ),
+                                                            );
+                                                        }
+                                                    }
+
+                                                    // Reset button
+                                                    if ui
+                                                        .small_button("↺")
+                                                        .on_hover_text("Reset to default")
+                                                        .clicked()
                                                     {
                                                         commands_to_send.push(
                                                             AudioCommand::SetPluginParam(
                                                                 track_idx,
                                                                 j,
                                                                 param_name.clone(),
-                                                                value,
+                                                                param.default,
                                                             ),
                                                         );
                                                     }
-                                                }
+                                                });
+                                            }
+                                        });
+                                    }
 
-                                                // Reset button
-                                                if ui
-                                                    .small_button("↺")
-                                                    .on_hover_text("Reset to default")
-                                                    .clicked()
-                                                {
-                                                    commands_to_send.push(
-                                                        AudioCommand::SetPluginParam(
-                                                            track_idx,
-                                                            j,
-                                                            param_name.clone(),
-                                                            param.default,
-                                                        ),
-                                                    );
-                                                }
-                                            });
-                                        }
-                                    });
+                                    if let Some(j) = plugin_to_remove {
+                                        commands_to_send
+                                            .push(AudioCommand::RemovePlugin(track_idx, j));
+                                    }
+                                });
+                                ui.add_space(5.0);
+                            }
+
+                            // Add track buttons
+                            ui.horizontal(|ui| {
+                                if ui.button("➕ Audio Track").clicked() {
+                                    track_actions.push(("add_audio", 0));
                                 }
 
-                                if let Some(j) = plugin_to_remove {
-                                    commands_to_send.push(AudioCommand::RemovePlugin(track_idx, j));
+                                if ui.button("➕ MIDI Track").clicked() {
+                                    track_actions.push(("add_midi", 0));
                                 }
                             });
-                            ui.add_space(5.0);
                         }
 
-                        if ui.button("➕ Add Track").clicked() {
-                            add_track_clicked = true;
+                        // applying the actions after releasing the lock
+                        for (action, track_idx) in track_actions {
+                            let mut state = self.state.lock().unwrap();
+                            match action {
+                                "mute" => {
+                                    mute_track(&mut state.tracks, track_idx, &self.command_tx)
+                                }
+                                "solo" => {
+                                    solo_track(&mut state.tracks, track_idx, &self.command_tx)
+                                }
+                                "arm" => arm_track_exclusive(&mut state.tracks, track_idx),
+                                "add_audio" => {
+                                    let new_track =
+                                        self.track_manager.create_track(TrackType::Audio, None);
+                                    state.tracks.push(new_track);
+                                    self.track_meters.push(LevelMeter::default());
+                                }
+                                "add_midi" => {
+                                    let new_track =
+                                        self.track_manager.create_track(TrackType::Midi, None);
+                                    state.tracks.push(new_track);
+                                    self.track_meters.push(LevelMeter::default());
+                                }
+                                _ => {}
+                            }
                         }
-                    }
 
-                    if add_track_clicked {
-                        let mut state = self.state.lock().unwrap();
-                        let new_track_id = state.tracks.len();
-                        state.tracks.push(Track {
-                            id: new_track_id,
-                            name: format!("Track {}", new_track_id + 1),
-                            volume: 0.7,
-                            pan: 0.0,
-                            muted: false,
-                            solo: false,
-                            armed: false,
-                            plugin_chain: vec![],
-                            patterns: vec![],
-                            is_midi: false,
-                            audio_clips: vec![],
-                            automation_lanes: vec![],
-                        });
-                        self.track_meters.push(LevelMeter::default());
-                    }
-
-                    // Send commands after releasing the lock
-                    for cmd in commands_to_send {
-                        let _ = self.command_tx.send(cmd);
+                        // Send commands after releasing the lock
+                        for cmd in commands_to_send {
+                            let _ = self.command_tx.send(cmd);
+                        }
                     }
                 });
             });
