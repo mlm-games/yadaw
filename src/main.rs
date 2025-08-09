@@ -10,6 +10,7 @@ mod lv2_plugin_host;
 mod piano_roll;
 mod plugin;
 mod state;
+mod transport;
 mod ui;
 mod waveform;
 
@@ -87,8 +88,8 @@ fn main() -> Result<(), eframe::Error> {
                 audio_state,
                 ui_to_command_tx,
                 audio_to_ui_rx,
-                config,
                 available_plugins,
+                config,
             )))
         }),
     )

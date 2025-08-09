@@ -265,6 +265,7 @@ impl AppState {
 pub enum AudioCommand {
     Play,
     Stop,
+    Pause,
     Record,
     UpdateTracks,
     StopRecording,

@@ -8,6 +8,7 @@ use crate::state::{
     AppState, AppStateSnapshot, AudioClip, AudioCommand, AutomationLane, AutomationTarget, Project,
     Track, UIUpdate,
 };
+use crate::transport::{LoopMode, Transport, TransportState};
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
 use std::sync::atomic::Ordering;
@@ -64,6 +65,7 @@ pub struct YadawApp {
     automation_widgets: Vec<AutomationLaneWidget>,
     show_automation: bool,
     scroll_x: f32,
+    transport: Transport,
 }
 
 impl YadawApp {
@@ -72,13 +74,15 @@ impl YadawApp {
         audio_state: Arc<AudioState>,
         command_tx: Sender<AudioCommand>,
         ui_rx: Receiver<UIUpdate>,
-        config: config::Config,
         available_plugins: Vec<PluginInfo>,
+        config: config::Config,
     ) -> Self {
         let num_tracks = {
             let state_lock = state.lock().unwrap();
             state_lock.tracks.len()
         };
+
+        let transport = Transport::new(audio_state.clone(), command_tx.clone());
 
         Self {
             state,
@@ -90,7 +94,7 @@ impl YadawApp {
             show_plugin_browser: false,
             selected_track_for_plugin: None,
             piano_roll: PianoRoll::default(),
-            selected_track: 1, // Start with MIDI track selected
+            selected_track: 1,
             selected_pattern: 0,
             project_path: None,
             show_save_dialog: false,
@@ -113,6 +117,7 @@ impl YadawApp {
             automation_widgets: vec![],
             show_automation: false,
             scroll_x: 0.0,
+            transport,
         }
     }
 
@@ -696,40 +701,38 @@ impl eframe::App for YadawApp {
         // Top panel - Transport controls
         egui::TopBottomPanel::top("transport").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // Read from audio state for real-time values
-                let is_playing = self.audio_state.playing.load(Ordering::Relaxed);
-                let is_recording = self.audio_state.recording.load(Ordering::Relaxed);
-                let position = self.audio_state.get_position();
-                let sample_rate = self.audio_state.sample_rate.load();
-                let bpm = self.audio_state.bpm.load();
-                let master_volume = self.audio_state.master_volume.load();
-
-                if ui.button(if is_playing { "⏸" } else { "▶" }).clicked() {
-                    if is_playing {
-                        let _ = self.command_tx.send(AudioCommand::Stop);
+                // Transport buttons
+                if ui
+                    .button(if self.transport.state == TransportState::Playing {
+                        "⏸"
                     } else {
-                        let _ = self.command_tx.send(AudioCommand::Play);
-                    }
+                        "▶"
+                    })
+                    .on_hover_text("Play/Pause")
+                    .clicked()
+                {
+                    self.transport.toggle_playback();
                 }
 
-                if ui.button("⏹").clicked() {
-                    let _ = self.command_tx.send(AudioCommand::Stop);
+                if ui.button("⏹").on_hover_text("Stop").clicked() {
+                    self.transport.stop();
                 }
 
+                let is_recording = self.transport.state == TransportState::Recording;
                 if ui
                     .button(if is_recording { "⏺ Recording" } else { "⏺" })
                     .on_hover_text("Record")
                     .clicked()
                 {
                     if is_recording {
-                        let _ = self.command_tx.send(AudioCommand::StopRecording);
+                        self.transport.stop_recording();
                     } else {
                         let state = self.state.lock().unwrap();
                         let armed_track = state.tracks.iter().position(|t| t.armed && !t.is_midi);
                         drop(state);
 
                         if let Some(track_id) = armed_track {
-                            let _ = self.command_tx.send(AudioCommand::StartRecording(track_id));
+                            self.transport.start_recording(track_id);
                         } else {
                             self.show_message =
                                 Some("Please arm an audio track for recording".to_string());
@@ -739,29 +742,69 @@ impl eframe::App for YadawApp {
 
                 ui.separator();
 
-                // Time display
-                let time_seconds = position / sample_rate as f64;
-                let minutes = (time_seconds / 60.0) as i32;
-                let seconds = time_seconds % 60.0;
-                ui.label(format!("{:02}:{:05.2}", minutes, seconds));
+                // Loop button
+                let loop_active = self.transport.loop_mode != LoopMode::Off;
+                if ui
+                    .selectable_label(loop_active, "🔁")
+                    .on_hover_text("Loop")
+                    .clicked()
+                {
+                    self.transport.toggle_loop();
+                }
+
+                // Metronome button
+                if ui
+                    .selectable_label(self.transport.metronome_enabled, "🎵")
+                    .on_hover_text("Metronome")
+                    .clicked()
+                {
+                    self.transport.toggle_metronome();
+                }
 
                 ui.separator();
-                ui.label(format!("BPM: {:.1}", bpm));
+
+                // Position display (bars:beats:sixteenths)
+                let position_beats = self.transport.get_position_beats();
+                ui.label(self.transport.format_time(position_beats));
 
                 ui.separator();
-                ui.label("Master Vol:");
-                let mut master_vol = master_volume;
+
+                // Time display (minutes:seconds)
+                let position_samples = self.audio_state.get_position();
+                ui.label(self.transport.format_time_seconds(position_samples));
+
+                ui.separator();
+
+                // BPM control
+                ui.label("BPM:");
+                let mut bpm = self.transport.get_bpm();
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut bpm)
+                            .speed(0.5)
+                            .clamp_range(20.0..=999.0),
+                    )
+                    .changed()
+                {
+                    self.transport.set_bpm(bpm);
+                }
+
+                ui.separator();
+
+                // Master volume
+                ui.label("Master:");
+                let mut master_vol = self.audio_state.master_volume.load();
                 if ui
                     .add(egui::Slider::new(&mut master_vol, 0.0..=1.0).show_value(false))
                     .changed()
                 {
                     self.audio_state.master_volume.store(master_vol);
-                    // Also update app state for persistence
                     if let Ok(mut state) = self.state.lock() {
                         state.master_volume = master_vol;
                     }
                 }
 
+                // Recording indicator
                 if is_recording {
                     ui.separator();
                     ui.colored_label(egui::Color32::RED, "● REC");
