@@ -8,6 +8,7 @@ mod constants;
 mod edit_actions;
 mod level_meter;
 mod lv2_plugin_host;
+mod midi_engine;
 mod mixer;
 mod piano_roll;
 mod plugin;
