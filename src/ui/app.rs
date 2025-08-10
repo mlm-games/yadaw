@@ -1,14 +1,23 @@
 use super::*;
 use crate::audio_state::AudioState;
+use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config::Config;
+use crate::edit_actions::EditProcessor;
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
 use crate::performance::PerformanceMonitor;
-use crate::piano_roll::PianoRoll;
+use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::project_manager::ProjectManager;
-use crate::state::{AppState, AppStateSnapshot, AudioClip};
-use crate::track_manager::TrackManager;
-use crate::transport::{Transport, TransportState};
+use crate::state::{
+    AppState, AppStateSnapshot, AudioClip, AudioCommand, AutomationTarget, UIUpdate,
+};
+use crate::track_manager::{TrackManager, TrackType};
+use crate::transport::Transport;
+use crossbeam_channel::{Receiver, Sender};
+use eframe::egui;
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 pub struct YadawApp {
     // Core state
@@ -34,6 +43,7 @@ pub struct YadawApp {
 
     // Plugin management
     pub(super) available_plugins: Vec<PluginInfo>,
+    pub(super) selected_track_for_plugin: Option<usize>,
 
     // Selection state
     pub(super) selected_track: usize,
@@ -49,6 +59,17 @@ pub struct YadawApp {
     pub(super) clipboard: Option<Vec<AudioClip>>,
     pub(super) show_performance: bool,
     pub(super) performance_monitor: PerformanceMonitor,
+    pub(super) track_manager: TrackManager,
+    pub(super) project_manager: ProjectManager,
+
+    // Touch support
+    touch_state: TouchState,
+}
+
+struct TouchState {
+    last_touch_pos: Option<egui::Pos2>,
+    pinch_distance: Option<f32>,
+    gesture_start_time: Option<std::time::Instant>,
 }
 
 impl YadawApp {
@@ -61,9 +82,12 @@ impl YadawApp {
         config: Config,
     ) -> Self {
         let transport = Transport::new(audio_state.clone(), command_tx.clone());
+        let theme = match config.ui.theme {
+            crate::config::Theme::Dark => super::theme::Theme::Dark,
+            crate::config::Theme::Light => super::theme::Theme::Light,
+        };
 
         Self {
-            // Initialize transport UI with the transport
             transport_ui: super::transport::TransportUI::new(transport),
             tracks_ui: super::tracks::TracksPanel::new(),
             timeline_ui: super::timeline::TimelineView::new(),
@@ -71,7 +95,7 @@ impl YadawApp {
             menu_bar: super::menu_bar::MenuBar::new(),
             piano_roll_view: super::piano_roll_view::PianoRollView::new(),
             dialogs: super::dialogs::DialogManager::new(),
-            theme_manager: super::theme::ThemeManager::new(config.ui.theme.clone()),
+            theme_manager: super::theme::ThemeManager::new(theme),
 
             state,
             audio_state,
@@ -83,6 +107,7 @@ impl YadawApp {
             selected_track: 0,
             selected_pattern: 0,
             selected_clips: Vec::new(),
+            selected_track_for_plugin: None,
 
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -91,9 +116,18 @@ impl YadawApp {
             clipboard: None,
             show_performance: false,
             performance_monitor: PerformanceMonitor::new(),
+            track_manager: TrackManager::new(),
+            project_manager: ProjectManager::new(),
+
+            touch_state: TouchState {
+                last_touch_pos: None,
+                pinch_distance: None,
+                gesture_start_time: None,
+            },
         }
     }
 
+    // Core functionality methods
     pub(super) fn push_undo(&mut self) {
         let state = self.state.lock().unwrap();
         self.undo_stack.push(state.snapshot());
@@ -110,6 +144,8 @@ impl YadawApp {
             let current = state.snapshot();
             self.redo_stack.push(current);
             state.restore(snapshot);
+            drop(state);
+            let _ = self.command_tx.send(AudioCommand::UpdateTracks);
         }
     }
 
@@ -119,57 +155,530 @@ impl YadawApp {
             let current = state.snapshot();
             self.undo_stack.push(current);
             state.restore(snapshot);
+            drop(state);
+            let _ = self.command_tx.send(AudioCommand::UpdateTracks);
         }
     }
-}
 
-impl eframe::App for YadawApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Apply theme
-        self.theme_manager.apply_theme(ctx);
+    // Track management
+    pub fn add_audio_track(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        let track = self.track_manager.create_track(TrackType::Audio, None);
+        state.tracks.push(track);
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+    }
 
-        // Process UI updates from audio thread
-        while let Ok(update) = self.ui_rx.try_recv() {
-            self.process_ui_update(update);
+    pub fn add_midi_track(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        let track = self.track_manager.create_track(TrackType::Midi, None);
+        state.tracks.push(track);
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+    }
+
+    pub fn add_bus_track(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        let track = self.track_manager.create_track(TrackType::Bus, None);
+        state.tracks.push(track);
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+    }
+
+    pub fn duplicate_selected_track(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get(self.selected_track) {
+            let new_track = self.track_manager.duplicate_track(track);
+            state.tracks.insert(self.selected_track + 1, new_track);
+            drop(state);
+            let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+        }
+    }
+
+    pub fn delete_selected_track(&mut self) {
+        if self.state.lock().unwrap().tracks.len() <= 1 {
+            self.dialogs.show_message("Cannot delete the last track");
+            return;
         }
 
-        // Draw menu bar
-        self.menu_bar.show(ctx, self);
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        state.tracks.remove(self.selected_track);
+        if self.selected_track >= state.tracks.len() {
+            self.selected_track = state.tracks.len() - 1;
+        }
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+    }
 
-        // Draw transport
-        self.transport_ui.show(ctx, self);
+    // Clipboard operations
+    pub fn cut_selected(&mut self) {
+        self.copy_selected();
+        self.delete_selected();
+    }
 
-        // Draw main panels
-        self.show_main_panels(ctx);
+    pub fn copy_selected(&mut self) {
+        let state = self.state.lock().unwrap();
+        let mut clips = Vec::new();
 
-        // Draw floating windows
-        self.show_floating_windows(ctx);
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get(*track_id) {
+                if let Some(clip) = track.audio_clips.get(*clip_id) {
+                    clips.push(clip.clone());
+                }
+            }
+        }
 
-        // Handle global shortcuts
-        self.handle_global_shortcuts(ctx);
+        self.clipboard = Some(clips);
+    }
 
-        // Request repaint if playing
-        if self
-            .audio_state
-            .playing
-            .load(std::sync::atomic::Ordering::Relaxed)
+    pub fn paste_at_playhead(&mut self) {
+        self.push_undo();
+
+        if let Some(clips) = &self.clipboard {
+            if clips.is_empty() {
+                return;
+            }
+
+            let current_beat = {
+                let position = self.audio_state.get_position();
+                let sample_rate = self.audio_state.sample_rate.load();
+                let bpm = self.audio_state.bpm.load();
+                (position / sample_rate as f64) * (bpm as f64 / 60.0)
+            };
+
+            let mut state = self.state.lock().unwrap();
+            if let Some(track) = state.tracks.get_mut(self.selected_track) {
+                if !track.is_midi {
+                    for clip in clips {
+                        let mut new_clip = clip.clone();
+                        new_clip.start_beat = current_beat;
+                        track.audio_clips.push(new_clip);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn delete_selected(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        // Sort clips by index in reverse order to delete from end to start
+        let mut clips_to_delete = self.selected_clips.clone();
+        clips_to_delete.sort_by(|a, b| b.1.cmp(&a.1));
+
+        for (track_id, clip_id) in clips_to_delete {
+            if let Some(track) = state.tracks.get_mut(track_id) {
+                if clip_id < track.audio_clips.len() {
+                    track.audio_clips.remove(clip_id);
+                }
+            }
+        }
+
+        self.selected_clips.clear();
+    }
+
+    // Selection
+    pub fn select_all(&mut self) {
+        let state = self.state.lock().unwrap();
+        self.selected_clips.clear();
+
+        for (track_idx, track) in state.tracks.iter().enumerate() {
+            for clip_idx in 0..track.audio_clips.len() {
+                self.selected_clips.push((track_idx, clip_idx));
+            }
+        }
+    }
+
+    pub fn deselect_all(&mut self) {
+        self.selected_clips.clear();
+    }
+
+    // Project management
+    pub fn new_project(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        *state = AppState::new();
+        drop(state);
+
+        self.project_path = None;
+        self.selected_track = 0;
+        self.selected_clips.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+    }
+
+    pub fn save_project(&mut self) {
+        let save_path = &self.project_path.clone();
+
+        if let Some(path) = save_path {
+            self.save_project_to_path(Path::new(path));
+        } else {
+            self.dialogs.show_save_dialog();
+        }
+    }
+
+    pub fn save_project_to_path(&mut self, path: &Path) {
+        let state = self.state.lock().unwrap();
+        if let Err(e) = self.project_manager.save_project(&*state, path) {
+            self.dialogs
+                .show_message(&format!("Failed to save project: {}", e));
+        } else {
+            self.project_path = Some(path.to_string_lossy().to_string());
+            self.dialogs.show_message("Project saved successfully");
+        }
+    }
+
+    pub fn load_project_from_path(&mut self, path: &Path) {
+        match self.project_manager.load_project(path) {
+            Ok(project) => {
+                let mut state = self.state.lock().unwrap();
+                state.load_project(project);
+                drop(state);
+
+                self.project_path = Some(path.to_string_lossy().to_string());
+                self.selected_track = 0;
+                self.selected_clips.clear();
+                self.undo_stack.clear();
+                self.redo_stack.clear();
+
+                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+            }
+            Err(e) => {
+                self.dialogs
+                    .show_message(&format!("Failed to load project: {}", e));
+            }
+        }
+    }
+
+    // Audio operations
+    pub fn normalize_selected(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    // Find peak
+                    let peak = clip
+                        .samples
+                        .iter()
+                        .map(|s| s.abs())
+                        .fold(0.0f32, |a, b| a.max(b));
+
+                    if peak > 0.0 {
+                        let gain = 0.989 / peak; // Normalize to -0.1 dB
+                        for sample in &mut clip.samples {
+                            *sample *= gain;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn reverse_selected(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    clip.samples.reverse();
+                }
+            }
+        }
+    }
+
+    pub fn apply_fade_in(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    EditProcessor::apply_fade_in(clip, 0.25);
+                }
+            }
+        }
+    }
+
+    pub fn apply_fade_out(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    EditProcessor::apply_fade_out(clip, 0.25);
+                }
+            }
+        }
+    }
+
+    pub fn split_selected_at_playhead(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let current_beat = {
+            let position = self.audio_state.get_position();
+            let sample_rate = self.audio_state.sample_rate.load();
+            let bpm = self.audio_state.bpm.load();
+            (position / sample_rate as f64) * (bpm as f64 / 60.0)
+        };
+
+        let mut state = self.state.lock().unwrap();
+        let bpm = state.bpm;
+
+        let selected_clips = self.selected_clips.clone();
+        for (track_id, clip_id) in selected_clips {
+            if let Some(track) = state.tracks.get_mut(track_id) {
+                if let Some(clip) = track.audio_clips.get(clip_id) {
+                    if let Some((first_half, second_half)) =
+                        EditProcessor::split_clip(clip, current_beat, bpm)
+                    {
+                        track.audio_clips[clip_id] = first_half;
+                        track.audio_clips.insert(clip_id + 1, second_half);
+                    }
+                }
+            }
+        }
+
+        self.selected_clips.clear();
+    }
+
+    // MIDI operations
+    pub fn quantize_selected_notes(&mut self, strength: f32) {
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::quantize_notes(
+                    &mut pattern.notes,
+                    crate::constants::DEFAULT_GRID_SNAP as f64,
+                    strength,
+                );
+            }
+        }
+    }
+
+    pub fn quantize_selected_notes_with_params(&mut self, strength: f32, grid: f32, _swing: f32) {
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::quantize_notes(&mut pattern.notes, grid as f64, strength);
+            }
+        }
+    }
+
+    pub fn transpose_selected_notes(&mut self, semitones: i32) {
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::transpose_notes(&mut pattern.notes, semitones);
+            }
+        }
+    }
+
+    pub fn humanize_selected_notes(&mut self, amount: f32) {
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::humanize_notes(&mut pattern.notes, amount);
+            }
+        }
+    }
+
+    // UI operations
+    pub fn show_plugin_browser_for_track(&mut self, track_id: usize) {
+        self.selected_track_for_plugin = Some(track_id);
+        self.dialogs.show_plugin_browser();
+    }
+
+    pub fn add_automation_lane(&mut self, track_id: usize, target: AutomationTarget) {
+        let _ = self
+            .command_tx
+            .send(AudioCommand::AddAutomationPoint(track_id, target, 0.0, 0.5));
+    }
+
+    pub fn zoom_to_fit(&mut self) {
+        // Calculate the extent of all content
+        let state = self.state.lock().unwrap();
+        let mut max_beat: f64 = 4.0; // Minimum 4 beats
+
+        for track in &state.tracks {
+            for clip in &track.audio_clips {
+                max_beat = max_beat.max(clip.start_beat + clip.length_beats);
+            }
+        }
+
+        // Calculate zoom level to fit content
+        let available_width = 800.0; // Should get from UI
+        self.timeline_ui.zoom_x = (available_width / max_beat as f32).min(200.0).max(10.0);
+        self.timeline_ui.scroll_x = 0.0;
+    }
+
+    pub fn reset_layout(&mut self) {
+        // Reset all UI components to default positions
+        self.timeline_ui = super::timeline::TimelineView::new();
+        self.mixer_ui = super::mixer::MixerWindow::new();
+        self.tracks_ui = super::tracks::TracksPanel::new();
+    }
+
+    pub fn tap_tempo(&mut self) {
+        // Implement tap tempo with timing detection
+        static mut TAP_TIMES: Vec<std::time::Instant> = Vec::new();
+
+        unsafe {
+            let now = std::time::Instant::now();
+
+            // Clear old taps if more than 2 seconds have passed
+            TAP_TIMES.retain(|t| now.duration_since(*t).as_secs() < 2);
+
+            TAP_TIMES.push(now);
+
+            if TAP_TIMES.len() >= 2 {
+                // Calculate average interval
+                let mut total_interval = 0.0;
+                for i in 1..TAP_TIMES.len() {
+                    total_interval += TAP_TIMES[i].duration_since(TAP_TIMES[i - 1]).as_secs_f64();
+                }
+
+                let avg_interval = total_interval / (TAP_TIMES.len() - 1) as f64;
+                let bpm = (60.0 / avg_interval) as f32;
+
+                if bpm >= 20.0 && bpm <= 999.0 {
+                    self.transport_ui.transport.set_bpm(bpm);
+                    self.audio_state.bpm.store(bpm);
+                }
+            }
+        }
+    }
+
+    pub fn import_audio_dialog(&mut self) {
+        let bpm = self.audio_state.bpm.load();
+
+        if let Some(paths) = rfd::FileDialog::new()
+            .add_filter("Audio Files", &["wav", "mp3", "flac", "ogg"])
+            .add_filter("All Files", &["*"])
+            .pick_files()
         {
-            ctx.request_repaint();
+            self.push_undo();
+
+            for path in paths {
+                match crate::audio_import::import_audio_file(&path, bpm) {
+                    Ok(clip) => {
+                        let mut state = self.state.lock().unwrap();
+                        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+                            if !track.is_midi {
+                                track.audio_clips.push(clip);
+                            } else {
+                                self.dialogs
+                                    .show_message("Cannot import audio to MIDI track");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.dialogs.show_message(&format!(
+                            "Failed to import {}: {}",
+                            path.display(),
+                            e
+                        ));
+                    }
+                }
+            }
         }
     }
-}
 
-impl YadawApp {
+    pub fn export_audio_dialog(&mut self) {
+        // TODO: Implement audio export
+        self.dialogs
+            .show_message("Audio export not yet implemented");
+    }
+
+    pub fn is_selected_track_midi(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state
+            .tracks
+            .get(self.selected_track)
+            .map(|t| t.is_midi)
+            .unwrap_or(false)
+    }
+
     fn process_ui_update(&mut self, update: UIUpdate) {
-        // Handle UI updates from audio thread
         match update {
             UIUpdate::Position(pos) => {
-                // Update position displays
+                if let Ok(state) = self.state.lock() {
+                    let current_beat = state.position_to_beats(pos);
+                    self.ctx().memory_mut(|mem| {
+                        mem.data
+                            .insert_temp(egui::Id::new("current_beat"), current_beat);
+                    });
+                }
             }
             UIUpdate::TrackLevels(levels) => {
                 self.tracks_ui.update_levels(levels);
             }
-            // ... handle other updates
+            UIUpdate::RecordingFinished(track_id, clip) => {
+                let mut state = self.state.lock().unwrap();
+                if let Some(track) = state.tracks.get_mut(track_id) {
+                    track.audio_clips.push(clip);
+                }
+            }
+            UIUpdate::RecordingLevel(level) => {
+                // Update recording level display
+            }
+            UIUpdate::MasterLevel(left, right) => {
+                // Update master meter
+            }
+            UIUpdate::PushUndo(snapshot) => {
+                self.undo_stack.push(snapshot);
+                self.redo_stack.clear();
+                if self.undo_stack.len() > 100 {
+                    self.undo_stack.remove(0);
+                }
+            }
             _ => {}
         }
     }
@@ -208,9 +717,58 @@ impl YadawApp {
         }
     }
 
+    fn show_performance_window(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Performance Monitor")
+            .open(&mut self.show_performance)
+            .show(ctx, |ui| {
+                if let Some(metrics) = self.performance_monitor.get_current_metrics() {
+                    ui.label(format!("CPU Usage: {:.1}%", metrics.cpu_usage * 100.0));
+                    ui.label(format!(
+                        "Memory: {} MB",
+                        metrics.memory_usage / (1024 * 1024)
+                    ));
+                    ui.label(format!("Latency: {:.1} ms", metrics.latency_ms));
+                    ui.label(format!("XRuns: {}", metrics.xruns));
+
+                    ui.separator();
+                    ui.label("Optimization Hints:");
+
+                    for hint in self.performance_monitor.get_optimization_hints() {
+                        ui.horizontal(|ui| {
+                            let color = match hint.severity {
+                                crate::performance::Severity::Info => egui::Color32::LIGHT_BLUE,
+                                crate::performance::Severity::Warning => egui::Color32::YELLOW,
+                                crate::performance::Severity::Critical => egui::Color32::RED,
+                            };
+                            ui.colored_label(color, &hint.message);
+                        });
+                        ui.label(&hint.suggestion);
+                    }
+                }
+            });
+    }
+
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
+            // File shortcuts
             if i.modifiers.ctrl {
+                if i.key_pressed(egui::Key::N) {
+                    self.new_project();
+                }
+
+                if i.key_pressed(egui::Key::O) {
+                    self.dialogs.show_open_dialog();
+                }
+
+                if i.key_pressed(egui::Key::S) {
+                    if i.modifiers.shift {
+                        self.dialogs.show_save_dialog();
+                    } else {
+                        self.save_project();
+                    }
+                }
+
+                // Edit shortcuts
                 if i.key_pressed(egui::Key::Z) {
                     if i.modifiers.shift {
                         self.redo();
@@ -219,359 +777,174 @@ impl YadawApp {
                     }
                 }
 
-                if i.key_pressed(egui::Key::S) {
-                    self.save_project();
+                if i.key_pressed(egui::Key::X) {
+                    self.cut_selected();
+                }
+
+                if i.key_pressed(egui::Key::C) {
+                    self.copy_selected();
+                }
+
+                if i.key_pressed(egui::Key::V) {
+                    self.paste_at_playhead();
+                }
+
+                if i.key_pressed(egui::Key::A) {
+                    self.select_all();
                 }
             }
 
+            // Transport shortcuts
             if i.key_pressed(egui::Key::Space) {
                 self.transport_ui.toggle_playback(&self.command_tx);
+            }
+
+            if i.key_pressed(egui::Key::Home) {
+                self.transport_ui.transport.set_position(0.0);
+            }
+
+            // Delete
+            if i.key_pressed(egui::Key::Delete) {
+                if !self.selected_clips.is_empty() {
+                    self.delete_selected();
+                }
+            }
+
+            // View shortcuts
+            if i.key_pressed(egui::Key::M) && !i.modifiers.ctrl {
+                self.mixer_ui.toggle_visibility();
             }
         });
     }
 
-    fn is_selected_track_midi(&self) -> bool {
-        let state = self.state.lock().unwrap();
-        state
-            .tracks
-            .get(self.selected_track)
-            .map(|t| t.is_midi)
-            .unwrap_or(false)
-    }
-
-    fn show_performance_window(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Performance Monitor")
-            .open(&mut self.show_performance)
-            .show(ctx, |ui| {
-                // Performance monitor UI
-            });
-    }
-
-    pub fn add_audio_track(&mut self) {
-        let mut state = self.state.lock().unwrap();
-        let track = self
-            .track_manager
-            .create_track(crate::track_manager::TrackType::Audio, None);
-        state.tracks.push(track);
-        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-    }
-
-    pub fn add_midi_track(&mut self) {
-        let mut state = self.state.lock().unwrap();
-        let track = self
-            .track_manager
-            .create_track(crate::track_manager::TrackType::Midi, None);
-        state.tracks.push(track);
-        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-    }
-
-    pub fn add_bus_track(&mut self) {
-        // Implementation for bus tracks
-    }
-
-    pub fn duplicate_selected_track(&mut self) {
-        let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get(self.selected_track) {
-            let new_track = self.track_manager.duplicate_track(track);
-            state.tracks.insert(self.selected_track + 1, new_track);
-            let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-        }
-    }
-
-    pub fn delete_selected_track(&mut self) {
-        let mut state = self.state.lock().unwrap();
-        if state.tracks.len() > 1 {
-            state.tracks.remove(self.selected_track);
-            if self.selected_track >= state.tracks.len() {
-                self.selected_track = state.tracks.len() - 1;
-            }
-            let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-        }
-    }
-
-    // Clipboard operations
-    pub fn cut_selected(&mut self) {
-        self.copy_selected();
-        self.delete_selected();
-    }
-
-    pub fn copy_selected(&mut self) {
-        let state = self.state.lock().unwrap();
-        let mut clips = Vec::new();
-
-        for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get(*track_id) {
-                if let Some(clip) = track.audio_clips.get(*clip_id) {
-                    clips.push(clip.clone());
+    fn handle_touch_gestures(&mut self, ctx: &egui::Context) {
+        ctx.input(|i| {
+            // Handle touch events
+            if let Some(touch) = i.events.iter().find_map(|e| {
+                if let egui::Event::Touch { .. } = e {
+                    Some(e)
+                } else {
+                    None
                 }
-            }
-        }
+            }) {
+                if let egui::Event::Touch {
+                    device_id: _,
+                    id: _,
+                    phase,
+                    pos,
+                    force: _,
+                } = touch
+                {
+                    match phase {
+                        egui::TouchPhase::Start => {
+                            self.touch_state.last_touch_pos = Some(*pos);
+                            self.touch_state.gesture_start_time = Some(std::time::Instant::now());
+                        }
+                        egui::TouchPhase::Move => {
+                            if let Some(last_pos) = self.touch_state.last_touch_pos {
+                                let delta = *pos - last_pos;
 
-        self.clipboard = Some(clips);
-    }
+                                // Pan gesture
+                                if delta.length() > 5.0 {
+                                    self.timeline_ui.scroll_x -= delta.x;
+                                    self.timeline_ui.scroll_y -= delta.y;
+                                }
 
-    pub fn paste_at_playhead(&mut self) {
-        // Implementation from original
-    }
+                                self.touch_state.last_touch_pos = Some(*pos);
+                            }
+                        }
+                        egui::TouchPhase::End => {
+                            // Check for tap vs long press
+                            if let Some(start_time) = self.touch_state.gesture_start_time {
+                                let duration = std::time::Instant::now().duration_since(start_time);
 
-    pub fn delete_selected(&mut self) {
-        // Implementation from original
-    }
+                                if duration.as_millis() < 200 {
+                                    // Tap - treat as click
+                                } else {
+                                    // Long press - show context menu
+                                }
+                            }
 
-    // Selection
-    pub fn select_all(&mut self) {
-        let state = self.state.lock().unwrap();
-        self.selected_clips.clear();
-
-        for (track_idx, track) in state.tracks.iter().enumerate() {
-            for clip_idx in 0..track.audio_clips.len() {
-                self.selected_clips.push((track_idx, clip_idx));
-            }
-        }
-    }
-
-    pub fn deselect_all(&mut self) {
-        self.selected_clips.clear();
-    }
-
-    // Project management
-    pub fn new_project(&mut self) {
-        let mut state = self.state.lock().unwrap();
-        *state = crate::state::AppState::new();
-        self.project_path = None;
-        self.selected_track = 0;
-        self.selected_clips.clear();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-    }
-
-    pub fn save_project(&mut self) {
-        if let Some(path) = &self.project_path {
-            self.save_project_to_path(&std::path::Path::new(path));
-        } else {
-            self.dialogs.show_save_dialog();
-        }
-    }
-
-    pub fn save_project_to_path(&mut self, path: &std::path::Path) {
-        let state = self.state.lock().unwrap();
-        if let Err(e) = self.project_manager.save_project(&*state, path) {
-            self.dialogs
-                .show_message(&format!("Failed to save project: {}", e));
-        } else {
-            self.project_path = Some(path.to_string_lossy().to_string());
-            self.dialogs.show_message("Project saved successfully");
-        }
-    }
-
-    pub fn load_project_from_path(&mut self, path: &std::path::Path) {
-        match self.project_manager.load_project(path) {
-            Ok(project) => {
-                let mut state = self.state.lock().unwrap();
-                state.load_project(project);
-                self.project_path = Some(path.to_string_lossy().to_string());
-                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-            }
-            Err(e) => {
-                self.dialogs
-                    .show_message(&format!("Failed to load project: {}", e));
-            }
-        }
-    }
-
-    // Audio operations
-    fn normalize_selected(&mut self) {
-        if self.selected_clips.is_empty() {
-            return;
-        }
-
-        self.push_undo();
-
-        let mut state = self.state.lock().unwrap();
-
-        for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    // Find peak
-                    let peak = clip
-                        .samples
-                        .iter()
-                        .map(|s| s.abs())
-                        .fold(0.0f32, |a, b| a.max(b));
-
-                    if peak > 0.0 {
-                        // Normalize to -0.1 dB (0.989)
-                        let gain = 0.989 / peak;
-                        for sample in &mut clip.samples {
-                            *sample *= gain;
+                            self.touch_state.last_touch_pos = None;
+                            self.touch_state.gesture_start_time = None;
+                        }
+                        egui::TouchPhase::Cancel => {
+                            self.touch_state.last_touch_pos = None;
+                            self.touch_state.gesture_start_time = None;
                         }
                     }
                 }
             }
-        }
-    }
 
-    fn reverse_selected(&mut self) {
-        if self.selected_clips.is_empty() {
-            return;
-        }
-
-        self.push_undo();
-
-        let mut state = self.state.lock().unwrap();
-
-        for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    clip.samples.reverse();
-                }
-            }
-        }
-    }
-
-    fn apply_fade_in(&mut self) {
-        self.push_undo();
-        let mut state = self.state.lock().unwrap();
-        for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    EditProcessor::apply_fade_in(clip, 0.25); // Quarter beat fade
-                }
-            }
-        }
-    }
-
-    fn apply_fade_out(&mut self) {
-        self.push_undo();
-        let mut state = self.state.lock().unwrap();
-        for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    EditProcessor::apply_fade_out(clip, 0.25); // Quarter beat fade
-                }
-            }
-        }
-    }
-
-    fn split_selected_at_playhead(&mut self) {
-        if self.selected_clips.is_empty() {
-            return;
-        }
-        let selected_clips = self.selected_clips.clone();
-
-        self.push_undo();
-
-        let current_beat = {
-            let position = self.audio_state.get_position();
-            let sample_rate = self.audio_state.sample_rate.load();
-            let bpm = self.audio_state.bpm.load();
-            (position / sample_rate as f64) * (bpm as f64 / 60.0)
-        };
-
-        let mut state = self.state.lock().unwrap();
-        let bpm = state.bpm;
-
-        for (track_id, clip_id) in selected_clips {
-            if let Some(track) = state.tracks.get_mut(track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(clip_id) {
-                    // Check if playhead is within clip
-                    if current_beat > clip.start_beat
-                        && current_beat < clip.start_beat + clip.length_beats
-                    {
-                        // Calculate split point
-                        let split_offset = current_beat - clip.start_beat;
-                        let split_sample =
-                            (split_offset * 60.0 / bpm as f64 * clip.sample_rate as f64) as usize;
-
-                        if split_sample < clip.samples.len() {
-                            // Create new clip from split point
-                            let new_clip = AudioClip {
-                                name: format!("{} (2)", clip.name),
-                                start_beat: current_beat,
-                                length_beats: clip.length_beats - split_offset,
-                                samples: clip.samples[split_sample..].to_vec(),
-                                sample_rate: clip.sample_rate,
-                            };
-
-                            clip.length_beats = split_offset;
-                            clip.samples.truncate(split_sample);
-
-                            track.audio_clips.push(new_clip);
-                        }
+            // Handle multi-touch (pinch zoom)
+            let touches: Vec<_> = i
+                .events
+                .iter()
+                .filter_map(|e| {
+                    if let egui::Event::Touch { pos, .. } = e {
+                        Some(*pos)
+                    } else {
+                        None
                     }
+                })
+                .collect();
+
+            if touches.len() == 2 {
+                let distance = (touches[0] - touches[1]).length();
+
+                if let Some(last_distance) = self.touch_state.pinch_distance {
+                    let scale = distance / last_distance;
+
+                    // Apply zoom
+                    self.timeline_ui.zoom_x *= scale;
+                    self.timeline_ui.zoom_x = self.timeline_ui.zoom_x.clamp(10.0, 500.0);
                 }
+
+                self.touch_state.pinch_distance = Some(distance);
+            } else {
+                self.touch_state.pinch_distance = None;
             }
+        });
+    }
+
+    fn ctx(&self) -> &egui::Context {
+        // This would need to be passed in or stored
+        // For now, return a placeholder
+        todo!("Context should be passed to methods that need it")
+    }
+}
+
+impl eframe::App for YadawApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Apply theme
+        self.theme_manager.apply_theme(ctx);
+
+        // Process UI updates from audio thread
+        while let Ok(update) = self.ui_rx.try_recv() {
+            self.process_ui_update(update);
         }
-    }
 
-    // MIDI operations
-    fn quantize_selected_notes(&mut self, strength: f32) {
-        self.push_undo();
-        let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
-                EditProcessor::quantize_notes(
-                    &mut pattern.notes,
-                    DEFAULT_GRID_SNAP as f64,
-                    strength,
-                );
-            }
+        // Handle touch gestures
+        self.handle_touch_gestures(ctx);
+
+        // Draw menu bar
+        self.menu_bar.show(ctx, self);
+
+        // Draw transport
+        self.transport_ui.show(ctx, self);
+
+        // Draw main panels
+        self.show_main_panels(ctx);
+
+        // Draw floating windows
+        self.show_floating_windows(ctx);
+
+        // Handle global shortcuts
+        self.handle_global_shortcuts(ctx);
+
+        // Request repaint if playing
+        if self.audio_state.playing.load(Ordering::Relaxed) {
+            ctx.request_repaint();
         }
-    }
-
-    pub fn quantize_selected_notes_with_params(&mut self, strength: f32, grid: f32, swing: f32) {
-        // Extended quantize implementation
-    }
-
-    fn transpose_selected_notes(&mut self, semitones: i32) {
-        self.push_undo();
-        let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
-                EditProcessor::transpose_notes(&mut pattern.notes, semitones);
-            }
-        }
-    }
-
-    fn humanize_selected_notes(&mut self, amount: f32) {
-        self.push_undo();
-        let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
-                EditProcessor::humanize_notes(&mut pattern.notes, amount);
-            }
-        }
-    }
-
-    // UI operations
-    pub fn show_plugin_browser_for_track(&mut self, track_id: usize) {
-        self.selected_track_for_plugin = Some(track_id);
-        self.dialogs.show_plugin_browser();
-    }
-
-    pub fn add_automation_lane(&mut self, track_id: usize, target: crate::state::AutomationTarget) {
-        let _ = self
-            .command_tx
-            .send(AudioCommand::AddAutomationPoint(track_id, target, 0.0, 0.5));
-    }
-
-    pub fn zoom_to_fit(&mut self) {
-        // Calculate zoom to fit all content
-    }
-
-    pub fn reset_layout(&mut self) {
-        // Reset UI layout to defaults
-    }
-
-    pub fn tap_tempo(&mut self) {
-        // Implement tap tempo functionality
-    }
-
-    pub fn import_audio_dialog(&mut self) {
-        // Implementation from original
-    }
-
-    pub fn export_audio_dialog(&mut self) {
-        // Show export dialog
     }
 }

@@ -27,7 +27,7 @@ pub struct UIConfig {
     pub smooth_scrolling: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Theme {
     Dark,
     Light,

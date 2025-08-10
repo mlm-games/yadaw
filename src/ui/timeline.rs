@@ -171,8 +171,10 @@ impl TimelineView {
         // Draw grid
         self.draw_grid(&painter, rect, bpm);
 
+        let binding = app.state.clone();
+
         // Draw tracks
-        let mut state = app.state.lock().unwrap();
+        let mut state = binding.lock().unwrap();
         for track_idx in 0..num_tracks {
             let track_rect = egui::Rect::from_min_size(
                 rect.min + egui::vec2(0.0, track_idx as f32 * self.track_height),

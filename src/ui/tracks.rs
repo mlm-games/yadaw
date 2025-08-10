@@ -85,7 +85,8 @@ impl TracksPanel {
         let mut track_actions = Vec::new();
 
         {
-            let mut state = app.state.lock().unwrap();
+            let binding = app.state.clone();
+            let mut state = binding.lock().unwrap();
             let num_tracks = state.tracks.len();
 
             for track_idx in 0..num_tracks {
@@ -125,24 +126,24 @@ impl TracksPanel {
                 response.response.context_menu(|ui| {
                     if ui.button("Duplicate Track").clicked() {
                         track_actions.push(("duplicate", track_idx));
-                        ui.close_menu();
+                        ui.close();
                     }
 
                     if ui.button("Delete Track").clicked() {
                         track_actions.push(("delete", track_idx));
-                        ui.close_menu();
+                        ui.close();
                     }
 
                     ui.separator();
 
                     if ui.button("Add to Group...").clicked() {
                         track_actions.push(("group", track_idx));
-                        ui.close_menu();
+                        ui.close();
                     }
 
                     if ui.button("Track Color...").clicked() {
                         track_actions.push(("color", track_idx));
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             }
@@ -266,12 +267,12 @@ impl TracksPanel {
             ui.menu_button("➕", |ui| {
                 if ui.button("Volume").clicked() {
                     app.add_automation_lane(idx, crate::state::AutomationTarget::TrackVolume);
-                    ui.close_menu();
+                    ui.close();
                 }
 
                 if ui.button("Pan").clicked() {
                     app.add_automation_lane(idx, crate::state::AutomationTarget::TrackPan);
-                    ui.close_menu();
+                    ui.close();
                 }
 
                 ui.separator();
@@ -288,7 +289,7 @@ impl TracksPanel {
                                         param_name: param_name.clone(),
                                     },
                                 );
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     });

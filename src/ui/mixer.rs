@@ -3,7 +3,7 @@ use crate::level_meter::LevelMeter;
 use crate::state::AudioCommand;
 
 pub struct MixerWindow {
-    visible: bool,
+    pub visible: bool,
     size: egui::Vec2,
     position: Option<egui::Pos2>,
 
@@ -87,7 +87,8 @@ impl MixerWindow {
 
         window.show(ctx, |ui| {
             // Store window position for next frame
-            if let Some(pos) = ui.cursor().left_top() {
+            let pos = ui.cursor().left_top();
+            {
                 self.position = Some(pos);
             }
 
@@ -148,7 +149,8 @@ impl MixerWindow {
 
     fn draw_mixer_channels(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         ui.horizontal(|ui| {
-            let state = app.state.lock().unwrap();
+            let binding = app.state.clone();
+            let state = binding.lock().unwrap();
 
             // Ensure we have enough channel strips
             while self.channel_strips.len() < state.tracks.len() {

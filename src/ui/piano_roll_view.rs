@@ -215,7 +215,7 @@ impl PianoRollView {
                 ui.add(
                     egui::DragValue::new(&mut self.midi_octave_offset)
                         .speed(1)
-                        .clamp_range(-4..=4),
+                        .range(-4..=4),
                 );
             }
 

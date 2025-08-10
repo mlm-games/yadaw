@@ -4,7 +4,7 @@ use crate::transport::{LoopMode, Transport, TransportState};
 use std::sync::atomic::Ordering;
 
 pub struct TransportUI {
-    transport: Transport,
+    pub transport: Transport,
 }
 
 impl TransportUI {

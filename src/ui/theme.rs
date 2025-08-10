@@ -41,6 +41,7 @@ impl From<Color32Ser> for egui::Color32 {
     }
 }
 
+#[derive(Clone)]
 pub struct ThemeManager {
     current_theme: Theme,
     custom_themes: Vec<CustomTheme>,
