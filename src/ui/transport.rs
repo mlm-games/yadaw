@@ -14,7 +14,7 @@ impl TransportUI {
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        if let Some(_transport) = &mut self.transport {
+        if self.transport.is_some() {
             egui::TopBottomPanel::top("transport_panel").show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     self.draw_transport_controls(ui, app);
@@ -30,50 +30,74 @@ impl TransportUI {
     }
 
     fn draw_transport_controls(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        if let Some(transport) = &mut self.transport {
-            // Play/Pause button
-            let is_playing = transport.state == TransportState::Playing;
-            if ui
-                .button(if is_playing { "⏸" } else { "▶" })
-                .on_hover_text("Play/Pause")
-                .clicked()
-            {
-                self.toggle_playback(&app.command_tx);
-            }
+        // Extract state before the closure to avoid borrow issues
+        let is_playing = self
+            .transport
+            .as_ref()
+            .map(|t| t.state == TransportState::Playing)
+            .unwrap_or(false);
 
-            // Stop button
-            if ui.button("⏹").on_hover_text("Stop").clicked() {
-                self.stop(&app.command_tx);
-            }
+        let is_recording = self
+            .transport
+            .as_ref()
+            .map(|t| t.state == TransportState::Recording)
+            .unwrap_or(false);
 
-            // Record button
-            let is_recording = transport.state == TransportState::Recording;
-            if ui
-                .button(if is_recording { "⏺ Recording" } else { "⏺" })
-                .on_hover_text("Record")
-                .clicked()
-            {
-                self.toggle_recording(app);
-            }
+        let loop_active = self
+            .transport
+            .as_ref()
+            .map(|t| t.loop_mode != LoopMode::Off)
+            .unwrap_or(false);
 
-            ui.separator();
+        let metronome_enabled = self
+            .transport
+            .as_ref()
+            .map(|t| t.metronome_enabled)
+            .unwrap_or(false);
 
-            // Loop button
-            let loop_active = transport.loop_mode != LoopMode::Off;
-            if ui
-                .selectable_label(loop_active, "🔁")
-                .on_hover_text("Loop")
-                .clicked()
-            {
+        // Play/Pause button
+        if ui
+            .button(if is_playing { "⏸" } else { "▶" })
+            .on_hover_text("Play/Pause")
+            .clicked()
+        {
+            self.toggle_playback(&app.command_tx);
+        }
+
+        // Stop button
+        if ui.button("⏹").on_hover_text("Stop").clicked() {
+            self.stop(&app.command_tx);
+        }
+
+        // Record button
+        if ui
+            .button(if is_recording { "⏺ Recording" } else { "⏺" })
+            .on_hover_text("Record")
+            .clicked()
+        {
+            self.toggle_recording(app);
+        }
+
+        ui.separator();
+
+        // Loop button
+        if ui
+            .selectable_label(loop_active, "🔁")
+            .on_hover_text("Loop")
+            .clicked()
+        {
+            if let Some(transport) = &mut self.transport {
                 transport.toggle_loop();
             }
+        }
 
-            // Metronome button
-            if ui
-                .selectable_label(transport.metronome_enabled, "🎵")
-                .on_hover_text("Metronome")
-                .clicked()
-            {
+        // Metronome button
+        if ui
+            .selectable_label(metronome_enabled, "🎵")
+            .on_hover_text("Metronome")
+            .clicked()
+        {
+            if let Some(transport) = &mut self.transport {
                 transport.toggle_metronome();
             }
         }
