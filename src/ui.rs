@@ -5,6 +5,7 @@ use crate::constants::DEFAULT_GRID_SNAP;
 use crate::edit_actions::{EditAction, EditProcessor};
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
+use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::project_manager::ProjectManager;
 use crate::state::{
@@ -75,6 +76,8 @@ pub struct YadawApp {
     project_manager: ProjectManager,
     pending_save: Option<String>,
     pending_load: Option<String>,
+    performance_monitor: PerformanceMonitor,
+    show_performance: bool,
 }
 
 impl YadawApp {
@@ -94,6 +97,7 @@ impl YadawApp {
         let transport = Transport::new(audio_state.clone(), command_tx.clone());
         let track_manager = TrackManager::new();
         let project_manager = ProjectManager::new();
+        let performance_monitor = PerformanceMonitor::new();
 
         Self {
             state,
@@ -133,6 +137,8 @@ impl YadawApp {
             project_manager,
             pending_load: None,
             pending_save: None,
+            performance_monitor,
+            show_performance: false,
         }
     }
 
@@ -835,6 +841,14 @@ impl eframe::App for YadawApp {
 
                 ui.menu_button("View", |ui| {
                     if ui.checkbox(&mut self.show_mixer, "Mixer").clicked() {
+                        ui.close();
+                    }
+
+                    ui.separator();
+                    if ui
+                        .checkbox(&mut self.show_performance, "Performance Monitor")
+                        .clicked()
+                    {
                         ui.close();
                     }
                 });
@@ -2108,6 +2122,43 @@ impl eframe::App for YadawApp {
                                 });
                             });
                         });
+                    });
+            }
+
+            if self.show_performance {
+                egui::Window::new("Performance Monitor")
+                    .open(&mut self.show_performance)
+                    .show(ctx, |ui| {
+                        if let Some(metrics) = self.performance_monitor.get_current_metrics() {
+                            ui.label(format!("CPU Usage: {:.1}%", metrics.cpu_usage * 100.0));
+                            ui.label(format!(
+                                "Memory: {} MB",
+                                metrics.memory_usage / (1024 * 1024)
+                            ));
+                            ui.label(format!("Latency: {:.1} ms", metrics.latency_ms));
+                            ui.label(format!("XRuns: {}", metrics.xruns));
+
+                            ui.separator();
+                            ui.label("Optimization Hints:");
+
+                            for hint in self.performance_monitor.get_optimization_hints() {
+                                ui.horizontal(|ui| {
+                                    let color = match hint.severity {
+                                        crate::performance::Severity::Info => {
+                                            egui::Color32::LIGHT_BLUE
+                                        }
+                                        crate::performance::Severity::Warning => {
+                                            egui::Color32::YELLOW
+                                        }
+                                        crate::performance::Severity::Critical => {
+                                            egui::Color32::RED
+                                        }
+                                    };
+                                    ui.colored_label(color, &hint.message);
+                                });
+                                ui.label(&hint.suggestion);
+                            }
+                        }
                     });
             }
 

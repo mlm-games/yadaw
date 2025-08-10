@@ -11,6 +11,7 @@ mod level_meter;
 mod lv2_plugin_host;
 mod midi_engine;
 mod mixer;
+mod performance;
 mod piano_roll;
 mod plugin;
 mod plugin_host;
