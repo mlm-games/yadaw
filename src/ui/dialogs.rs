@@ -773,7 +773,9 @@ impl ProjectSettingsDialog {
                 ui.horizontal(|ui| {
                     if ui.button("Apply").clicked() {
                         app.audio_state.bpm.store(self.bpm);
-                        app.transport_ui.transport.set_bpm(self.bpm);
+                        if let Some(transport) = &mut app.transport_ui.transport {
+                            transport.set_bpm(self.bpm);
+                        }
                         self.closed = true;
                     }
 
@@ -1206,5 +1208,11 @@ impl ProgressBar {
 
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+}
+
+impl Default for DialogManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

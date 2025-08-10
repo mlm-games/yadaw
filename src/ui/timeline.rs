@@ -566,3 +566,9 @@ impl TimelineView {
         }
     }
 }
+
+impl Default for TimelineView {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -306,7 +306,9 @@ impl MenuBar {
             ui.separator();
 
             if ui.button("Go to Start").clicked() {
-                app.transport_ui.transport.set_position(0.0);
+                if let Some(transport) = &mut app.transport_ui.transport {
+                    transport.set_position(0.0);
+                }
                 ui.close();
             }
 
@@ -317,13 +319,17 @@ impl MenuBar {
 
             ui.separator();
 
-            if ui
-                .checkbox(
-                    &mut app.transport_ui.transport.metronome_enabled,
-                    "Metronome",
-                )
-                .clicked()
-            {
+            let mut metronome_enabled = app
+                .transport_ui
+                .transport
+                .as_ref()
+                .map(|t| t.metronome_enabled)
+                .unwrap_or(false);
+
+            if ui.checkbox(&mut metronome_enabled, "Metronome").clicked() {
+                if let Some(transport) = &mut app.transport_ui.transport {
+                    transport.metronome_enabled = metronome_enabled;
+                }
                 ui.close();
             }
 
@@ -627,4 +633,10 @@ fn draw_keyboard_shortcuts_static(ui: &mut egui::Ui) {
         ui.label("Ctrl+- - Zoom Out");
         ui.label("M - Toggle Mixer");
     });
+}
+
+impl Default for MenuBar {
+    fn default() -> Self {
+        Self::new()
+    }
 }

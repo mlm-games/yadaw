@@ -589,7 +589,10 @@ impl YadawApp {
                 let bpm = (60.0 / avg_interval) as f32;
 
                 if bpm >= 20.0 && bpm <= 999.0 {
-                    self.transport_ui.transport.set_bpm(bpm);
+                    // Fix: Handle Option<Transport>
+                    if let Some(transport) = &mut self.transport_ui.transport {
+                        transport.set_bpm(bpm);
+                    }
                     self.audio_state.bpm.store(bpm);
                 }
             }
@@ -646,12 +649,60 @@ impl YadawApp {
             .unwrap_or(false)
     }
 
-    fn process_ui_update(&mut self, update: UIUpdate) {
+    fn show_main_panels(&mut self, ctx: &egui::Context) {
+        // Use a flag to determine what to show in central panel
+        let show_midi = self.is_selected_track_midi();
+
+        // Left panel - Tracks
+        egui::SidePanel::left("tracks_panel")
+            .default_width(300.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Use mem::take to temporarily own the tracks_ui
+                let mut tracks_ui = std::mem::take(&mut self.tracks_ui);
+                tracks_ui.show(ui, self);
+                self.tracks_ui = tracks_ui;
+            });
+
+        // Central panel - Timeline or Piano Roll
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if show_midi {
+                let mut piano_roll = std::mem::take(&mut self.piano_roll_view);
+                piano_roll.show(ui, self);
+                self.piano_roll_view = piano_roll;
+            } else {
+                let mut timeline = std::mem::take(&mut self.timeline_ui);
+                timeline.show(ui, self);
+                self.timeline_ui = timeline;
+            }
+        });
+    }
+
+    fn show_floating_windows(&mut self, ctx: &egui::Context) {
+        // Mixer window
+        if self.mixer_ui.is_visible() {
+            let mut mixer = std::mem::take(&mut self.mixer_ui);
+            mixer.show(ctx, self);
+            self.mixer_ui = mixer;
+        }
+
+        // Dialogs
+        let mut dialogs = std::mem::take(&mut self.dialogs);
+        dialogs.show_all(ctx, self);
+        self.dialogs = dialogs;
+
+        // Performance monitor
+        if self.show_performance {
+            self.show_performance_window(ctx);
+        }
+    }
+
+    fn process_ui_update(&mut self, update: UIUpdate, ctx: &egui::Context) {
         match update {
             UIUpdate::Position(pos) => {
                 if let Ok(state) = self.state.lock() {
                     let current_beat = state.position_to_beats(pos);
-                    self.ctx().memory_mut(|mem| {
+                    ctx.memory_mut(|mem| {
                         mem.data
                             .insert_temp(egui::Id::new("current_beat"), current_beat);
                     });
@@ -666,10 +717,10 @@ impl YadawApp {
                     track.audio_clips.push(clip);
                 }
             }
-            UIUpdate::RecordingLevel(level) => {
+            UIUpdate::RecordingLevel(_level) => {
                 // Update recording level display
             }
-            UIUpdate::MasterLevel(left, right) => {
+            UIUpdate::MasterLevel(_left, _right) => {
                 // Update master meter
             }
             UIUpdate::PushUndo(snapshot) => {
@@ -680,40 +731,6 @@ impl YadawApp {
                 }
             }
             _ => {}
-        }
-    }
-
-    fn show_main_panels(&mut self, ctx: &egui::Context) {
-        // Left panel - Tracks
-        egui::SidePanel::left("tracks_panel")
-            .default_width(300.0)
-            .resizable(true)
-            .show(ctx, |ui| {
-                self.tracks_ui.show(ui, self);
-            });
-
-        // Central panel - Timeline or Piano Roll
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if self.is_selected_track_midi() {
-                self.piano_roll_view.show(ui, self);
-            } else {
-                self.timeline_ui.show(ui, self);
-            }
-        });
-    }
-
-    fn show_floating_windows(&mut self, ctx: &egui::Context) {
-        // Mixer window
-        if self.mixer_ui.is_visible() {
-            self.mixer_ui.show(ctx, self);
-        }
-
-        // Dialogs
-        self.dialogs.show_all(ctx, self);
-
-        // Performance monitor
-        if self.show_performance {
-            self.show_performance_window(ctx);
         }
     }
 
@@ -800,7 +817,9 @@ impl YadawApp {
             }
 
             if i.key_pressed(egui::Key::Home) {
-                self.transport_ui.transport.set_position(0.0);
+                if let Some(transport) = &mut self.transport_ui.transport {
+                    transport.set_position(0.0);
+                }
             }
 
             // Delete
@@ -921,17 +940,21 @@ impl eframe::App for YadawApp {
 
         // Process UI updates from audio thread
         while let Ok(update) = self.ui_rx.try_recv() {
-            self.process_ui_update(update);
+            self.process_ui_update(update, ctx);
         }
 
         // Handle touch gestures
         self.handle_touch_gestures(ctx);
 
         // Draw menu bar
-        self.menu_bar.show(ctx, self);
+        let mut menu_bar = std::mem::take(&mut self.menu_bar);
+        menu_bar.show(ctx, self);
+        self.menu_bar = menu_bar;
 
         // Draw transport
-        self.transport_ui.show(ctx, self);
+        let mut transport_ui = std::mem::take(&mut self.transport_ui);
+        transport_ui.show(ctx, self);
+        self.transport_ui = transport_ui;
 
         // Draw main panels
         self.show_main_panels(ctx);

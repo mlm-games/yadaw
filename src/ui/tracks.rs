@@ -417,3 +417,9 @@ impl TracksPanel {
         }
     }
 }
+
+impl Default for TracksPanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}

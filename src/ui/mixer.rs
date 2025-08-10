@@ -425,3 +425,9 @@ impl MixerWindow {
         );
     }
 }
+
+impl Default for MixerWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -472,3 +472,9 @@ impl PianoRollView {
         });
     }
 }
+
+impl Default for PianoRollView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
