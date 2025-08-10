@@ -654,7 +654,7 @@ impl eframe::App for YadawApp {
         self.show_plugin_browser = show_browser;
 
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("New Project").clicked() {
                         let mut state = self.state.lock().unwrap();
@@ -1001,7 +1001,7 @@ impl eframe::App for YadawApp {
                     .add(
                         egui::DragValue::new(&mut bpm)
                             .speed(0.5)
-                            .clamp_range(20.0..=999.0),
+                            .range(20.0..=999.0),
                     )
                     .changed()
                 {
