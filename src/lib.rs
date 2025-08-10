@@ -1,0 +1,27 @@
+pub mod audio;
+pub mod audio_import;
+pub mod audio_state;
+pub mod automation;
+pub mod automation_lane;
+pub mod command_processor;
+pub mod config;
+pub mod constants;
+pub mod edit_actions;
+pub mod error;
+pub mod integration;
+pub mod level_meter;
+pub mod lv2_plugin_host;
+pub mod midi_engine;
+pub mod mixer;
+pub mod performance;
+pub mod piano_roll;
+pub mod plugin;
+pub mod plugin_host;
+pub mod project_manager;
+pub mod state;
+pub mod track_manager;
+pub mod transport;
+pub mod ui;
+pub mod waveform;
+
+pub use integration::DawCore;
