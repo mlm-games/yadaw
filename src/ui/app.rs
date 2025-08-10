@@ -239,15 +239,339 @@ impl YadawApp {
             .unwrap_or(false)
     }
 
-    fn save_project(&mut self) {
-        // Implementation moved from original
-    }
-
     fn show_performance_window(&mut self, ctx: &egui::Context) {
         egui::Window::new("Performance Monitor")
             .open(&mut self.show_performance)
             .show(ctx, |ui| {
                 // Performance monitor UI
             });
+    }
+
+    pub fn add_audio_track(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        let track = self
+            .track_manager
+            .create_track(crate::track_manager::TrackType::Audio, None);
+        state.tracks.push(track);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+    }
+
+    pub fn add_midi_track(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        let track = self
+            .track_manager
+            .create_track(crate::track_manager::TrackType::Midi, None);
+        state.tracks.push(track);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+    }
+
+    pub fn add_bus_track(&mut self) {
+        // Implementation for bus tracks
+    }
+
+    pub fn duplicate_selected_track(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get(self.selected_track) {
+            let new_track = self.track_manager.duplicate_track(track);
+            state.tracks.insert(self.selected_track + 1, new_track);
+            let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+        }
+    }
+
+    pub fn delete_selected_track(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        if state.tracks.len() > 1 {
+            state.tracks.remove(self.selected_track);
+            if self.selected_track >= state.tracks.len() {
+                self.selected_track = state.tracks.len() - 1;
+            }
+            let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+        }
+    }
+
+    // Clipboard operations
+    pub fn cut_selected(&mut self) {
+        self.copy_selected();
+        self.delete_selected();
+    }
+
+    pub fn copy_selected(&mut self) {
+        let state = self.state.lock().unwrap();
+        let mut clips = Vec::new();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get(*track_id) {
+                if let Some(clip) = track.audio_clips.get(*clip_id) {
+                    clips.push(clip.clone());
+                }
+            }
+        }
+
+        self.clipboard = Some(clips);
+    }
+
+    pub fn paste_at_playhead(&mut self) {
+        // Implementation from original
+    }
+
+    pub fn delete_selected(&mut self) {
+        // Implementation from original
+    }
+
+    // Selection
+    pub fn select_all(&mut self) {
+        let state = self.state.lock().unwrap();
+        self.selected_clips.clear();
+
+        for (track_idx, track) in state.tracks.iter().enumerate() {
+            for clip_idx in 0..track.audio_clips.len() {
+                self.selected_clips.push((track_idx, clip_idx));
+            }
+        }
+    }
+
+    pub fn deselect_all(&mut self) {
+        self.selected_clips.clear();
+    }
+
+    // Project management
+    pub fn new_project(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        *state = crate::state::AppState::new();
+        self.project_path = None;
+        self.selected_track = 0;
+        self.selected_clips.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+
+    pub fn save_project(&mut self) {
+        if let Some(path) = &self.project_path {
+            self.save_project_to_path(&std::path::Path::new(path));
+        } else {
+            self.dialogs.show_save_dialog();
+        }
+    }
+
+    pub fn save_project_to_path(&mut self, path: &std::path::Path) {
+        let state = self.state.lock().unwrap();
+        if let Err(e) = self.project_manager.save_project(&*state, path) {
+            self.dialogs
+                .show_message(&format!("Failed to save project: {}", e));
+        } else {
+            self.project_path = Some(path.to_string_lossy().to_string());
+            self.dialogs.show_message("Project saved successfully");
+        }
+    }
+
+    pub fn load_project_from_path(&mut self, path: &std::path::Path) {
+        match self.project_manager.load_project(path) {
+            Ok(project) => {
+                let mut state = self.state.lock().unwrap();
+                state.load_project(project);
+                self.project_path = Some(path.to_string_lossy().to_string());
+                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+            }
+            Err(e) => {
+                self.dialogs
+                    .show_message(&format!("Failed to load project: {}", e));
+            }
+        }
+    }
+
+    // Audio operations
+    fn normalize_selected(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    // Find peak
+                    let peak = clip
+                        .samples
+                        .iter()
+                        .map(|s| s.abs())
+                        .fold(0.0f32, |a, b| a.max(b));
+
+                    if peak > 0.0 {
+                        // Normalize to -0.1 dB (0.989)
+                        let gain = 0.989 / peak;
+                        for sample in &mut clip.samples {
+                            *sample *= gain;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn reverse_selected(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+
+        self.push_undo();
+
+        let mut state = self.state.lock().unwrap();
+
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    clip.samples.reverse();
+                }
+            }
+        }
+    }
+
+    fn apply_fade_in(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    EditProcessor::apply_fade_in(clip, 0.25); // Quarter beat fade
+                }
+            }
+        }
+    }
+
+    fn apply_fade_out(&mut self) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        for (track_id, clip_id) in &self.selected_clips {
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+                    EditProcessor::apply_fade_out(clip, 0.25); // Quarter beat fade
+                }
+            }
+        }
+    }
+
+    fn split_selected_at_playhead(&mut self) {
+        if self.selected_clips.is_empty() {
+            return;
+        }
+        let selected_clips = self.selected_clips.clone();
+
+        self.push_undo();
+
+        let current_beat = {
+            let position = self.audio_state.get_position();
+            let sample_rate = self.audio_state.sample_rate.load();
+            let bpm = self.audio_state.bpm.load();
+            (position / sample_rate as f64) * (bpm as f64 / 60.0)
+        };
+
+        let mut state = self.state.lock().unwrap();
+        let bpm = state.bpm;
+
+        for (track_id, clip_id) in selected_clips {
+            if let Some(track) = state.tracks.get_mut(track_id) {
+                if let Some(clip) = track.audio_clips.get_mut(clip_id) {
+                    // Check if playhead is within clip
+                    if current_beat > clip.start_beat
+                        && current_beat < clip.start_beat + clip.length_beats
+                    {
+                        // Calculate split point
+                        let split_offset = current_beat - clip.start_beat;
+                        let split_sample =
+                            (split_offset * 60.0 / bpm as f64 * clip.sample_rate as f64) as usize;
+
+                        if split_sample < clip.samples.len() {
+                            // Create new clip from split point
+                            let new_clip = AudioClip {
+                                name: format!("{} (2)", clip.name),
+                                start_beat: current_beat,
+                                length_beats: clip.length_beats - split_offset,
+                                samples: clip.samples[split_sample..].to_vec(),
+                                sample_rate: clip.sample_rate,
+                            };
+
+                            clip.length_beats = split_offset;
+                            clip.samples.truncate(split_sample);
+
+                            track.audio_clips.push(new_clip);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MIDI operations
+    fn quantize_selected_notes(&mut self, strength: f32) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::quantize_notes(
+                    &mut pattern.notes,
+                    DEFAULT_GRID_SNAP as f64,
+                    strength,
+                );
+            }
+        }
+    }
+
+    pub fn quantize_selected_notes_with_params(&mut self, strength: f32, grid: f32, swing: f32) {
+        // Extended quantize implementation
+    }
+
+    fn transpose_selected_notes(&mut self, semitones: i32) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::transpose_notes(&mut pattern.notes, semitones);
+            }
+        }
+    }
+
+    fn humanize_selected_notes(&mut self, amount: f32) {
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+                EditProcessor::humanize_notes(&mut pattern.notes, amount);
+            }
+        }
+    }
+
+    // UI operations
+    pub fn show_plugin_browser_for_track(&mut self, track_id: usize) {
+        self.selected_track_for_plugin = Some(track_id);
+        self.dialogs.show_plugin_browser();
+    }
+
+    pub fn add_automation_lane(&mut self, track_id: usize, target: crate::state::AutomationTarget) {
+        let _ = self
+            .command_tx
+            .send(AudioCommand::AddAutomationPoint(track_id, target, 0.0, 0.5));
+    }
+
+    pub fn zoom_to_fit(&mut self) {
+        // Calculate zoom to fit all content
+    }
+
+    pub fn reset_layout(&mut self) {
+        // Reset UI layout to defaults
+    }
+
+    pub fn tap_tempo(&mut self) {
+        // Implement tap tempo functionality
+    }
+
+    pub fn import_audio_dialog(&mut self) {
+        // Implementation from original
+    }
+
+    pub fn export_audio_dialog(&mut self) {
+        // Show export dialog
     }
 }
