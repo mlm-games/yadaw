@@ -24,7 +24,7 @@ mod transport;
 mod ui;
 mod waveform;
 
-use audio_state::AudioState;
+use audio_state::{AudioState, RealtimeCommand};
 use command_processor::run_command_processor;
 use config::Config;
 use plugin::PluginScanner;
@@ -46,11 +46,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create channels for communication
     let (command_tx, command_rx) = crossbeam_channel::unbounded::<AudioCommand>();
-    let (realtime_tx, _realtime_rx) = crossbeam_channel::unbounded();
+    let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
     let (ui_tx, ui_rx) = crossbeam_channel::unbounded::<UIUpdate>();
 
-    // Initialize plugin host
-    plugin::initialize_plugin_host(config.audio.sample_rate as f64, config.audio.buffer_size)?;
+    // Initialize plugin host with audio settings
+    plugin::initialize_plugin_host(
+        audio_state.sample_rate.load() as f64,
+        constants::MAX_BUFFER_SIZE,
+    )?;
 
     println!("Scanning for plugins...");
     let mut plugin_scanner = PluginScanner::new();
@@ -59,30 +62,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Found {} LV2 plugins", available_plugins.len());
 
+    // Clone for audio thread
+    let ui_tx_audio = ui_tx.clone();
+
+    // Start audio thread FIRST (it needs to be running)
+    {
+        let audio_state_clone = audio_state.clone();
+        std::thread::spawn(move || {
+            audio::run_audio_thread(audio_state_clone, realtime_rx, ui_tx_audio);
+        });
+    }
+
     println!("Starting command processor thread...");
     {
         let app_state_clone = app_state.clone();
         let audio_state_clone = audio_state.clone();
+        let ui_tx_clone = ui_tx.clone();
         std::thread::spawn(move || {
             run_command_processor(
                 app_state_clone,
                 audio_state_clone,
                 command_rx,
                 realtime_tx,
-                ui_tx,
+                ui_tx_clone,
             );
         });
     }
 
     println!("Starting audio thread...");
-
     {
-        let audio_state_clone = audio_state.clone();
-        let realtime_rx = crossbeam_channel::unbounded().1; // Create new receiver for audio
-        let updates_tx = crossbeam_channel::unbounded().0;
-        std::thread::spawn(move || {
-            audio::run_audio_thread(audio_state_clone, realtime_rx, updates_tx);
-        });
+        let _ = command_tx.send(AudioCommand::UpdateTracks);
     }
 
     println!("Starting UI...");
