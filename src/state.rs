@@ -95,7 +95,7 @@ pub struct Pattern {
     pub notes: Vec<MidiNote>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct AppState {
     pub tracks: Vec<Track>,
     pub master_volume: f32,

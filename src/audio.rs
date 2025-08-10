@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 static PLUGIN_HOST: Lazy<parking_lot::Mutex<Option<LV2PluginHost>>> =
     Lazy::new(|| parking_lot::Mutex::new(None));
 
-struct AudioEngine {
+pub(crate) struct AudioEngine {
     tracks: Arc<RwLock<Vec<TrackSnapshot>>>,
     audio_state: Arc<AudioState>,
     track_processors: Vec<TrackProcessor>,

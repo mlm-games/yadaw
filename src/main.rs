@@ -7,6 +7,7 @@ mod command_processor;
 mod config;
 mod constants;
 mod edit_actions;
+mod integration;
 mod level_meter;
 mod lv2_plugin_host;
 mod midi_engine;
