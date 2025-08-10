@@ -1,6 +1,7 @@
 mod audio;
 mod audio_import;
 mod audio_state;
+mod automation;
 mod automation_lane;
 mod command_processor;
 mod config;
@@ -12,6 +13,7 @@ mod midi_engine;
 mod mixer;
 mod piano_roll;
 mod plugin;
+mod plugin_host;
 mod project_manager;
 mod state;
 mod track_manager;
