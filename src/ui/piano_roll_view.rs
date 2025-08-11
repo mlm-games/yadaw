@@ -1,3 +1,5 @@
+use std::fs::read_to_string;
+
 use super::*;
 use crate::constants::PIANO_KEY_WIDTH;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
@@ -49,35 +51,43 @@ impl PianoRollView {
 
     pub fn show(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         ui.vertical(|ui| {
-            // Piano roll header
+            // Header
             self.draw_header(ui, app);
-
             ui.separator();
 
-            // Main piano roll area
-            let available_height = ui.available_height();
+            let total_w = ui.available_width();
+            let total_h = ui.available_height();
+
             let piano_roll_height = if self.show_velocity_lane {
-                available_height - self.velocity_lane_height - 5.0
+                (total_h - self.velocity_lane_height - 6.0).max(0.0) // 6px spacing budget
             } else {
-                available_height
+                total_h
             };
 
-            ui.allocate_ui(egui::vec2(ui.available_width(), piano_roll_height), |ui| {
-                self.draw_piano_roll(ui, app);
-            });
+            // 1) Allocate rect for the piano roll area and draw inside a child UI
+            let (roll_resp, _roll_painter) =
+                ui.allocate_painter(egui::vec2(total_w, piano_roll_height), egui::Sense::hover());
+            let roll_rect = roll_resp.rect;
 
-            // Velocity lane
+            let mut roll_ui =
+                ui.child_ui(roll_rect, egui::Layout::top_down(egui::Align::Min), None);
+            self.draw_piano_roll(&mut roll_ui, app);
+
+            // 2) Velocity lane below
             if self.show_velocity_lane {
-                ui.separator();
-                ui.allocate_ui(
-                    egui::vec2(ui.available_width(), self.velocity_lane_height),
-                    |ui| {
-                        self.draw_velocity_lane(ui, app);
-                    },
+                ui.add_space(2.0);
+                let (lane_resp, _lane_painter) = ui.allocate_painter(
+                    egui::vec2(total_w, self.velocity_lane_height),
+                    egui::Sense::click_and_drag(),
                 );
+                let lane_rect = lane_resp.rect;
+
+                let mut lane_ui =
+                    ui.child_ui(lane_rect, egui::Layout::top_down(egui::Align::Min), None);
+                self.draw_velocity_lane(&mut lane_ui, app);
             }
 
-            // Controller lanes
+            // Controller lanes (if any)
             if self.show_controller_lanes {
                 ui.separator();
                 self.draw_controller_lanes(ui, app);
@@ -327,48 +337,42 @@ impl PianoRollView {
 
         if let Some(track) = state.tracks.get(app.selected_track) {
             if let Some(pattern) = track.patterns.get(self.selected_pattern) {
-                let (response, painter) = ui.allocate_painter(
-                    egui::vec2(ui.available_width(), self.velocity_lane_height),
-                    egui::Sense::click_and_drag(),
-                );
-                let lane_rect = response.rect;
+                let rect = ui.max_rect(); // this is the lane rect
+                let painter = ui.painter();
 
-                // Background
-                painter.rect_filled(lane_rect, 0.0, egui::Color32::from_gray(15));
+                // Backgrounds
+                painter.rect_filled(rect, 0.0, egui::Color32::from_gray(15));
 
-                // Keyboard gutter on the left (same as piano keys width)
-                let grid_left = lane_rect.left() + PIANO_KEY_WIDTH;
-                let gutter_rect = egui::Rect::from_min_max(
-                    lane_rect.min,
-                    egui::pos2(grid_left, lane_rect.bottom()),
-                );
+                // Keyboard gutter at left
+                let grid_left = rect.left() + PIANO_KEY_WIDTH;
+                let gutter_rect =
+                    egui::Rect::from_min_max(rect.min, egui::pos2(grid_left, rect.bottom()));
                 painter.rect_filled(gutter_rect, 0.0, egui::Color32::from_gray(10));
 
                 // Horizontal guides
                 for i in 0..=4 {
-                    let y = lane_rect.top() + (i as f32 / 4.0) * lane_rect.height();
+                    let y = rect.top() + (i as f32 / 4.0) * rect.height();
                     painter.line_segment(
-                        [egui::pos2(grid_left, y), egui::pos2(lane_rect.right(), y)],
+                        [egui::pos2(grid_left, y), egui::pos2(rect.right(), y)],
                         egui::Stroke::new(1.0, egui::Color32::from_gray(30)),
                     );
                 }
 
-                // Draw velocity bars, anchored at lane bottom
+                // Bars
                 for (i, note) in pattern.notes.iter().enumerate() {
                     let x = grid_left
                         + (note.start as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
                     let width = (note.duration as f32 * self.piano_roll.zoom_x).max(2.0);
-                    let height = (note.velocity as f32 / 127.0) * lane_rect.height();
+                    let height = (note.velocity as f32 / 127.0) * rect.height();
 
-                    // Clip bars to the grid area (right of the gutter)
                     let left = x.max(grid_left);
-                    let right = (x + width).min(lane_rect.right());
+                    let right = (x + width).min(rect.right());
                     if right <= left {
                         continue;
                     }
 
                     let bar_rect = egui::Rect::from_min_size(
-                        egui::pos2(left, lane_rect.bottom() - height),
+                        egui::pos2(left, rect.bottom() - height),
                         egui::vec2(right - left, height),
                     );
 
@@ -378,22 +382,21 @@ impl PianoRollView {
                     } else {
                         egui::Color32::from_rgb(60, 90, 150)
                     };
+
                     painter.rect_filled(bar_rect, 0.0, color);
 
-                    // Interaction: drag to change velocity
+                    // Drag to change velocity
                     let resp = ui.interact(
                         bar_rect,
                         ui.id().with(("velocity", i)),
                         egui::Sense::click_and_drag(),
                     );
-
                     if resp.dragged() {
                         if let Some(pos) = resp.interact_pointer_pos() {
-                            // Compute velocity from lane bottom
-                            let new_velocity =
-                                ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
-                                    .round()
-                                    .clamp(0.0, 127.0) as u8;
+                            let new_velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
+                                .round()
+                                .clamp(0.0, 127.0)
+                                as u8;
 
                             if new_velocity != note.velocity {
                                 let mut new_note = *note;
@@ -412,8 +415,11 @@ impl PianoRollView {
                 }
 
                 // Hover readout
-                if let Some(pos) = response.hover_pos() {
-                    let velocity = ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
+                if let Some(pos) = ui
+                    .interact(rect, ui.id().with("velocity_lane"), egui::Sense::hover())
+                    .hover_pos()
+                {
+                    let velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
                         .round()
                         .clamp(0.0, 127.0) as u8;
 
@@ -427,12 +433,12 @@ impl PianoRollView {
                 }
 
                 // debug -> outline the lane rect to see where "bottom" is
-                painter.rect_stroke(
-                    lane_rect,
-                    0.0,
-                    egui::Stroke::new(1.0, egui::Color32::RED),
-                    egui::StrokeKind::Outside,
-                );
+                // painter.rect_stroke(
+                //     rect,
+                //     0.0,
+                //     egui::Stroke::new(1.0, egui::Color32::RED),
+                //     egui::StrokeKind::Outside,
+                // );
             }
         }
     }

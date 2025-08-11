@@ -43,9 +43,39 @@ impl TracksPanel {
             ui.heading("Tracks");
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("⚙").on_hover_text("Track Options").clicked() {
-                    // Show track options menu
-                }
+                ui.menu_button("⚙", |ui| {
+                    ui.label(format!("Track Options"));
+                    ui.separator();
+
+                    if ui.button("Rename...").clicked() {
+                        // TODO..
+                        ui.close();
+                    }
+
+                    if ui.button("Change Color...").clicked() {
+                        // TODO
+                        ui.close();
+                    }
+
+                    if ui.button("Freeze Track").clicked() {
+                        // TODO
+                        ui.close();
+                    }
+
+                    ui.separator();
+
+                    if ui.button("Duplicate").clicked() {
+                        app.duplicate_selected_track();
+                        ui.close();
+                    }
+
+                    if ui.button("Delete").clicked() {
+                        app.delete_selected_track();
+                        ui.close();
+                    }
+                })
+                .response
+                .on_hover_text("Track Options");
 
                 ui.toggle_value(&mut self.show_mixer_strip, "🎚")
                     .on_hover_text("Show/Hide Mixer Strip");
@@ -83,6 +113,7 @@ impl TracksPanel {
 
     fn draw_track_list(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         let mut track_actions = Vec::new();
+        let mut selected_track_changed = None;
 
         {
             let binding = app.state.clone();
@@ -119,8 +150,7 @@ impl TracksPanel {
 
                 // Handle track selection
                 if response.response.clicked() {
-                    println!("Track {} clicked", track_idx);
-                    app.selected_track = track_idx;
+                    selected_track_changed = Some((track_idx, state.tracks[track_idx].is_midi));
                 }
 
                 // Context menu
@@ -148,6 +178,11 @@ impl TracksPanel {
                     }
                 });
             }
+        }
+
+        if let Some((track_idx, is_midi)) = selected_track_changed {
+            println!("Track {} clicked, is_midi: {}", track_idx, is_midi);
+            app.selected_track = track_idx;
         }
 
         // Apply track actions
