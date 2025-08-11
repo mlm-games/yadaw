@@ -589,7 +589,6 @@ impl YadawApp {
                 let bpm = (60.0 / avg_interval) as f32;
 
                 if bpm >= 20.0 && bpm <= 999.0 {
-                    // Fix: Handle Option<Transport>
                     if let Some(transport) = &mut self.transport_ui.transport {
                         transport.set_bpm(bpm);
                     }
