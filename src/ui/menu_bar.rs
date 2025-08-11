@@ -400,7 +400,12 @@ impl MenuBar {
             }
 
             if ui.button("Piano Roll").clicked() {
-                // Switch to piano roll view
+                app.switch_to_piano_roll();
+                ui.close();
+            }
+
+            if ui.button("Timeline").clicked() {
+                app.switch_to_timeline();
                 ui.close();
             }
 
