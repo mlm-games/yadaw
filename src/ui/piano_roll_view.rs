@@ -1,4 +1,5 @@
 use super::*;
+use crate::constants::PIANO_KEY_WIDTH;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::state::{AudioCommand, MidiNote};
 
@@ -94,7 +95,7 @@ impl PianoRollView {
             ui.label("Pattern:");
             let state = app.state.lock().unwrap();
             if let Some(track) = state.tracks.get(app.selected_track) {
-                egui::ComboBox::from_id_source("pattern_selector")
+                egui::ComboBox::from_id_salt("pattern_selector")
                     .selected_text(
                         track
                             .patterns
@@ -183,7 +184,7 @@ impl PianoRollView {
 
             // Snap settings
             ui.label("Snap:");
-            egui::ComboBox::from_id_source("piano_roll_snap")
+            egui::ComboBox::from_id_salt("piano_roll_snap")
                 .selected_text(format!("1/{}", (1.0 / self.piano_roll.grid_snap) as i32))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.piano_roll.grid_snap, 1.0, "1/1");
@@ -333,28 +334,41 @@ impl PianoRollView {
 
                 let rect = response.rect;
 
-                // Background
+                // Backgrounds
                 painter.rect_filled(rect, 0.0, egui::Color32::from_gray(15));
 
-                // Grid lines
+                // Keyboard gutter (same width as the piano keys)
+                let grid_left = rect.left() + PIANO_KEY_WIDTH;
+                let gutter_rect =
+                    egui::Rect::from_min_max(rect.min, egui::pos2(grid_left, rect.bottom()));
+                painter.rect_filled(gutter_rect, 0.0, egui::Color32::from_gray(10));
+
+                // Horizontal guide lines
                 for i in 0..=4 {
                     let y = rect.top() + (i as f32 / 4.0) * rect.height();
                     painter.line_segment(
-                        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                        [egui::pos2(grid_left, y), egui::pos2(rect.right(), y)],
                         egui::Stroke::new(1.0, egui::Color32::from_gray(30)),
                     );
                 }
 
-                // Draw velocity bars for each note
+                // Draw velocity bars
                 for (i, note) in pattern.notes.iter().enumerate() {
-                    let x = rect.left()
+                    let x = grid_left
                         + (note.start as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
                     let width = (note.duration as f32 * self.piano_roll.zoom_x).max(2.0);
                     let height = (note.velocity as f32 / 127.0) * rect.height();
 
+                    // Clip to grid area (avoid drawing into the gutter)
+                    let left = x.max(grid_left);
+                    let right = (x + width).min(rect.right());
+                    if right <= left {
+                        continue;
+                    }
+
                     let bar_rect = egui::Rect::from_min_size(
-                        egui::pos2(x, rect.bottom() - height),
-                        egui::vec2(width, height),
+                        egui::pos2(left, rect.bottom() - height),
+                        egui::vec2(right - left, height),
                     );
 
                     let is_selected = self.piano_roll.selected_notes.contains(&i);
@@ -366,34 +380,36 @@ impl PianoRollView {
 
                     painter.rect_filled(bar_rect, 0.0, color);
 
-                    // Handle velocity editing
-                    if bar_rect.contains(response.hover_pos().unwrap_or_default()) {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                    // Handle velocity editing on drag
+                    let resp = ui.interact(
+                        bar_rect,
+                        ui.id().with(("velocity", i)),
+                        egui::Sense::click_and_drag(),
+                    );
 
-                        if response.dragged() {
-                            if let Some(pos) = response.interact_pointer_pos() {
-                                let new_velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
-                                    .round()
-                                    .clamp(0.0, 127.0)
-                                    as u8;
+                    if resp.dragged() {
+                        if let Some(pos) = resp.interact_pointer_pos() {
+                            let new_velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
+                                .round()
+                                .clamp(0.0, 127.0)
+                                as u8;
 
-                                if new_velocity != note.velocity {
-                                    let mut new_note = *note;
-                                    new_note.velocity = new_velocity;
+                            if new_velocity != note.velocity {
+                                let mut new_note = *note;
+                                new_note.velocity = new_velocity;
 
-                                    let _ = app.command_tx.send(AudioCommand::UpdateNote(
-                                        app.selected_track,
-                                        self.selected_pattern,
-                                        i,
-                                        new_note,
-                                    ));
-                                }
+                                let _ = app.command_tx.send(AudioCommand::UpdateNote(
+                                    app.selected_track,
+                                    self.selected_pattern,
+                                    i,
+                                    new_note,
+                                ));
                             }
                         }
                     }
                 }
 
-                // Draw velocity value on hover
+                // Hover velocity readout
                 if let Some(pos) = response.hover_pos() {
                     let velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
                         .round()
@@ -418,7 +434,7 @@ impl PianoRollView {
             ui.horizontal(|ui| {
                 ui.label("Controller:");
 
-                egui::ComboBox::from_id_source("controller_select")
+                egui::ComboBox::from_id_salt("controller_select")
                     .selected_text("Modulation")
                     .show_ui(ui, |ui| {
                         ui.selectable_label(false, "Modulation (CC1)");

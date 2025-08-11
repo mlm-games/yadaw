@@ -1,6 +1,9 @@
 use std::vec;
 
-use crate::state::{MidiNote, Pattern};
+use crate::{
+    constants::PIANO_KEY_WIDTH,
+    state::{MidiNote, Pattern},
+};
 use eframe::{egui, egui_glow::painter};
 
 pub struct PianoRoll {
@@ -81,7 +84,7 @@ impl PianoRoll {
             .rect_filled(available_rect, 0.0, egui::Color32::from_gray(20));
 
         // Draw piano keys and grid
-        let piano_width = 60.0;
+        let piano_width = PIANO_KEY_WIDTH;
         let piano_rect = egui::Rect::from_min_size(
             available_rect.min,
             egui::vec2(piano_width, available_rect.height()),
@@ -681,60 +684,6 @@ impl PianoRoll {
     // Helper function to convert pitch to screen Y coordinate
     fn pitch_to_y(&self, pitch: f32, rect: egui::Rect) -> f32 {
         rect.min.y + (127.0 - pitch) * self.zoom_y - self.scroll_y
-    }
-
-    fn draw_velocity_lane(
-        &mut self,
-        ui: &mut egui::Ui,
-        pattern: &mut Pattern,
-        rect: egui::Rect,
-    ) -> Vec<PianoRollAction> {
-        let mut actions = Vec::new();
-
-        // Background
-        ui.painter()
-            .rect_filled(rect, 0.0, egui::Color32::from_gray(15));
-
-        // Draw velocity bars
-        for (i, note) in pattern.notes.iter().enumerate() {
-            let x = rect.min.x + (note.start as f32 * self.zoom_x - self.scroll_x);
-            let width = note.duration as f32 * self.zoom_x;
-            let height = (note.velocity as f32 / 127.0) * rect.height();
-
-            let bar_rect = egui::Rect::from_min_size(
-                egui::pos2(x, rect.max.y - height),
-                egui::vec2(width, height),
-            );
-
-            let color = if self.selected_notes.contains(&i) {
-                egui::Color32::from_rgb(100, 150, 255)
-            } else {
-                egui::Color32::from_rgb(60, 90, 150)
-            };
-
-            ui.painter().rect_filled(bar_rect, 0.0, color);
-
-            // Handle velocity editing
-            let response = ui.interact(
-                bar_rect,
-                ui.id().with(("velocity", i)),
-                egui::Sense::click_and_drag(),
-            );
-
-            if response.dragged() {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    let new_velocity = ((rect.max.y - pos.y) / rect.height() * 127.0)
-                        .round()
-                        .clamp(0.0, 127.0) as u8;
-
-                    let mut new_note = *note;
-                    new_note.velocity = new_velocity;
-                    actions.push(PianoRollAction::UpdateNote(i, new_note));
-                }
-            }
-        }
-
-        actions
     }
 }
 

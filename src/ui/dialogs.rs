@@ -331,7 +331,7 @@ impl PluginBrowserDialog {
                     ui.separator();
 
                     ui.label("Category:");
-                    egui::ComboBox::from_id_source("plugin_category")
+                    egui::ComboBox::from_id_salt("plugin_category")
                         .selected_text(&self.selected_category)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -492,7 +492,7 @@ impl QuantizeDialog {
 
                 ui.horizontal(|ui| {
                     ui.label("Grid:");
-                    egui::ComboBox::from_id_source("quantize_grid")
+                    egui::ComboBox::from_id_salt("quantize_grid")
                         .selected_text(format!("1/{}", (1.0 / self.grid_size) as i32))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut self.grid_size, 1.0, "1/1");
@@ -811,7 +811,7 @@ impl ProjectSettingsDialog {
                             .range(1..=32),
                     );
                     ui.label("/");
-                    egui::ComboBox::from_id_source("time_sig_denom")
+                    egui::ComboBox::from_id_salt("time_sig_denom")
                         .selected_text(format!("{}", self.time_signature.1))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut self.time_signature.1, 2, "2");
