@@ -457,7 +457,7 @@ impl MenuBar {
                         ui.label("Version 0.1.0");
                         ui.separator();
                         ui.label("A practice DAW implementation in Rust");
-                        ui.hyperlink("https://github.com/yourusername/yadaw");
+                        ui.hyperlink("https://github.com/mlm-games/yadaw");
                     });
                 });
         }

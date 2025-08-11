@@ -1,7 +1,7 @@
 use super::*;
 use crate::level_meter::LevelMeter;
 use crate::state::{AudioCommand, Track};
-use crate::track_manager::{TrackType, arm_track_exclusive, mute_track, solo_track};
+use crate::track_manager::{arm_track_exclusive, mute_track, solo_track, TrackType};
 
 pub struct TracksPanel {
     track_meters: Vec<LevelMeter>,
@@ -119,6 +119,7 @@ impl TracksPanel {
 
                 // Handle track selection
                 if response.response.clicked() {
+                    println!("Track {} clicked", track_idx);
                     app.selected_track = track_idx;
                 }
 

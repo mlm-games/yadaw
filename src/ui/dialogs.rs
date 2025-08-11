@@ -54,50 +54,105 @@ impl DialogManager {
     }
 
     pub fn show_all(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        // Process each dialog one at a time to avoid borrow conflicts
-
-        // Open dialog
-        if self.open_dialog.is_some() {
-            let mut dialog = self.open_dialog.take().unwrap();
-            dialog.show(ctx, app);
-            if !dialog.is_closed() {
-                self.open_dialog = Some(dialog);
+        // File dialogs
+        if let Some(mut d) = self.open_dialog.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.open_dialog = Some(d);
+            }
+        }
+        if let Some(mut d) = self.save_dialog.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.save_dialog = Some(d);
             }
         }
 
-        // Save dialog
-        if self.save_dialog.is_some() {
-            let mut dialog = self.save_dialog.take().unwrap();
-            dialog.show(ctx, app);
-            if !dialog.is_closed() {
-                self.save_dialog = Some(dialog);
+        // Tools / audio dialogs
+        if let Some(mut d) = self.audio_setup.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.audio_setup = Some(d);
+            }
+        }
+        if let Some(mut d) = self.plugin_browser.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.plugin_browser = Some(d);
+            }
+        }
+        if let Some(mut d) = self.plugin_manager.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.plugin_manager = Some(d);
             }
         }
 
-        // Theme editor - special handling for color pickers
-        if self.theme_editor.is_some() {
-            let mut dialog = self.theme_editor.take().unwrap();
-            dialog.show(ctx, app);
-            if !dialog.is_closed() {
-                self.theme_editor = Some(dialog);
+        // Edit dialogs
+        if let Some(mut d) = self.quantize_dialog.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.quantize_dialog = Some(d);
+            }
+        }
+        if let Some(mut d) = self.transpose_dialog.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.transpose_dialog = Some(d);
+            }
+        }
+        if let Some(mut d) = self.humanize_dialog.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.humanize_dialog = Some(d);
+            }
+        }
+        if let Some(mut d) = self.time_stretch_dialog.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.time_stretch_dialog = Some(d);
             }
         }
 
-        // Other dialogs...
-        if self.quantize_dialog.is_some() {
-            let mut dialog = self.quantize_dialog.take().unwrap();
-            dialog.show(ctx, app);
-            if !dialog.is_closed() {
-                self.quantize_dialog = Some(dialog);
+        // Project dialogs
+        if let Some(mut d) = self.project_settings.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.project_settings = Some(d);
+            }
+        }
+        if let Some(mut d) = self.export_dialog.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.export_dialog = Some(d);
             }
         }
 
-        // Message box
-        if self.message_box.is_some() {
-            let mut dialog = self.message_box.take().unwrap();
-            dialog.show(ctx);
-            if !dialog.is_closed() {
-                self.message_box = Some(dialog);
+        // UI dialogs
+        if let Some(mut d) = self.theme_editor.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.theme_editor = Some(d);
+            }
+        }
+        if let Some(mut d) = self.layout_manager.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.layout_manager = Some(d);
+            }
+        }
+
+        // Utility
+        if let Some(mut d) = self.message_box.take() {
+            d.show(ctx);
+            if !d.is_closed() {
+                self.message_box = Some(d);
+            }
+        }
+        if let Some(mut d) = self.progress_bar.take() {
+            d.show(ctx);
+            if !d.is_closed() {
+                self.progress_bar = Some(d);
             }
         }
     }
@@ -374,10 +429,13 @@ impl PluginBrowserDialog {
                     if ui.button("Add to Track").clicked() {
                         if let Some(idx) = self.selected_plugin {
                             if let Some(plugin) = app.available_plugins.get(idx) {
-                                let _ = app.command_tx.send(AudioCommand::AddPlugin(
-                                    app.selected_track,
-                                    plugin.uri.clone(),
-                                ));
+                                let track_id = app
+                                    .selected_track_for_plugin
+                                    .take()
+                                    .unwrap_or(app.selected_track);
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
                                 self.closed = true;
                             }
                         }
