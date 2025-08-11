@@ -331,43 +331,44 @@ impl PianoRollView {
                     egui::vec2(ui.available_width(), self.velocity_lane_height),
                     egui::Sense::click_and_drag(),
                 );
+                let lane_rect = response.rect;
 
-                let rect = response.rect;
+                // Background
+                painter.rect_filled(lane_rect, 0.0, egui::Color32::from_gray(15));
 
-                // Backgrounds
-                painter.rect_filled(rect, 0.0, egui::Color32::from_gray(15));
-
-                // Keyboard gutter (same width as the piano keys)
-                let grid_left = rect.left() + PIANO_KEY_WIDTH;
-                let gutter_rect =
-                    egui::Rect::from_min_max(rect.min, egui::pos2(grid_left, rect.bottom()));
+                // Keyboard gutter on the left (same as piano keys width)
+                let grid_left = lane_rect.left() + PIANO_KEY_WIDTH;
+                let gutter_rect = egui::Rect::from_min_max(
+                    lane_rect.min,
+                    egui::pos2(grid_left, lane_rect.bottom()),
+                );
                 painter.rect_filled(gutter_rect, 0.0, egui::Color32::from_gray(10));
 
-                // Horizontal guide lines
+                // Horizontal guides
                 for i in 0..=4 {
-                    let y = rect.top() + (i as f32 / 4.0) * rect.height();
+                    let y = lane_rect.top() + (i as f32 / 4.0) * lane_rect.height();
                     painter.line_segment(
-                        [egui::pos2(grid_left, y), egui::pos2(rect.right(), y)],
+                        [egui::pos2(grid_left, y), egui::pos2(lane_rect.right(), y)],
                         egui::Stroke::new(1.0, egui::Color32::from_gray(30)),
                     );
                 }
 
-                // Draw velocity bars
+                // Draw velocity bars, anchored at lane bottom
                 for (i, note) in pattern.notes.iter().enumerate() {
                     let x = grid_left
                         + (note.start as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
                     let width = (note.duration as f32 * self.piano_roll.zoom_x).max(2.0);
-                    let height = (note.velocity as f32 / 127.0) * rect.height();
+                    let height = (note.velocity as f32 / 127.0) * lane_rect.height();
 
-                    // Clip to grid area (avoid drawing into the gutter)
+                    // Clip bars to the grid area (right of the gutter)
                     let left = x.max(grid_left);
-                    let right = (x + width).min(rect.right());
+                    let right = (x + width).min(lane_rect.right());
                     if right <= left {
                         continue;
                     }
 
                     let bar_rect = egui::Rect::from_min_size(
-                        egui::pos2(left, rect.bottom() - height),
+                        egui::pos2(left, lane_rect.bottom() - height),
                         egui::vec2(right - left, height),
                     );
 
@@ -377,10 +378,9 @@ impl PianoRollView {
                     } else {
                         egui::Color32::from_rgb(60, 90, 150)
                     };
-
                     painter.rect_filled(bar_rect, 0.0, color);
 
-                    // Handle velocity editing on drag
+                    // Interaction: drag to change velocity
                     let resp = ui.interact(
                         bar_rect,
                         ui.id().with(("velocity", i)),
@@ -389,29 +389,31 @@ impl PianoRollView {
 
                     if resp.dragged() {
                         if let Some(pos) = resp.interact_pointer_pos() {
-                            let new_velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
-                                .round()
-                                .clamp(0.0, 127.0)
-                                as u8;
+                            // Compute velocity from lane bottom
+                            let new_velocity =
+                                ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
+                                    .round()
+                                    .clamp(0.0, 127.0) as u8;
 
                             if new_velocity != note.velocity {
                                 let mut new_note = *note;
                                 new_note.velocity = new_velocity;
 
-                                let _ = app.command_tx.send(AudioCommand::UpdateNote(
-                                    app.selected_track,
-                                    self.selected_pattern,
-                                    i,
-                                    new_note,
-                                ));
+                                let _ =
+                                    app.command_tx.send(crate::state::AudioCommand::UpdateNote(
+                                        app.selected_track,
+                                        self.selected_pattern,
+                                        i,
+                                        new_note,
+                                    ));
                             }
                         }
                     }
                 }
 
-                // Hover velocity readout
+                // Hover readout
                 if let Some(pos) = response.hover_pos() {
-                    let velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
+                    let velocity = ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
                         .round()
                         .clamp(0.0, 127.0) as u8;
 
@@ -423,6 +425,14 @@ impl PianoRollView {
                         egui::Color32::WHITE,
                     );
                 }
+
+                // debug -> outline the lane rect to see where "bottom" is
+                painter.rect_stroke(
+                    lane_rect,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::RED),
+                    egui::StrokeKind::Outside,
+                );
             }
         }
     }
