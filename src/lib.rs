@@ -16,7 +16,6 @@ pub mod mixer;
 pub mod performance;
 pub mod piano_roll;
 pub mod plugin;
-pub mod plugin_host;
 pub mod project_manager;
 pub mod state;
 pub mod track_manager;

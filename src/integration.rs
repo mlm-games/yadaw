@@ -3,7 +3,6 @@ use crate::automation::AutomationEngine;
 use crate::midi_engine::MidiEngine;
 use crate::mixer::MixerEngine;
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
-use crate::plugin_host::PluginHost;
 use crate::project_manager::ProjectManager;
 use crate::state::AppState;
 use crate::track_manager::TrackManager;
@@ -16,7 +15,6 @@ pub struct DawCore {
     pub mixer: Arc<RwLock<MixerEngine>>,
     pub track_manager: Arc<RwLock<TrackManager>>,
     pub project_manager: Arc<RwLock<ProjectManager>>,
-    pub plugin_host: Arc<RwLock<PluginHost>>,
     pub automation: Arc<RwLock<AutomationEngine>>,
     pub midi_engine: Arc<RwLock<MidiEngine>>,
     pub performance: Arc<RwLock<PerformanceMonitor>>,
@@ -29,7 +27,6 @@ impl DawCore {
             mixer: Arc::new(RwLock::new(MixerEngine::new())),
             track_manager: Arc::new(RwLock::new(TrackManager::new())),
             project_manager: Arc::new(RwLock::new(ProjectManager::new())),
-            plugin_host: Arc::new(RwLock::new(PluginHost::new())),
             automation: Arc::new(RwLock::new(AutomationEngine::new())),
             midi_engine: Arc::new(RwLock::new(MidiEngine::new())),
             performance: Arc::new(RwLock::new(PerformanceMonitor::new())),
@@ -61,8 +58,7 @@ impl DawCore {
         // MIDI processing would happen here
 
         // Process plugins
-        let plugin_host = self.plugin_host.read();
-        // Plugin processing would happen here
+        // TODO?
 
         // Update performance metrics
         let processing_time = start_time.elapsed();

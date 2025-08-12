@@ -16,7 +16,6 @@ mod mixer;
 mod performance;
 mod piano_roll;
 mod plugin;
-mod plugin_host;
 mod project_manager;
 mod state;
 mod track_manager;

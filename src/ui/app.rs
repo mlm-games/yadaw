@@ -649,7 +649,6 @@ impl YadawApp {
     }
 
     fn show_main_panels(&mut self, ctx: &egui::Context) {
-        // Use a flag to determine what to show in central panel
         let show_midi = self.is_selected_track_midi();
 
         // Left panel - Tracks
@@ -657,7 +656,6 @@ impl YadawApp {
             .default_width(300.0)
             .resizable(true)
             .show(ctx, |ui| {
-                // Use mem::take to temporarily own the tracks_ui
                 let mut tracks_ui = std::mem::take(&mut self.tracks_ui);
                 tracks_ui.show(ui, self);
                 self.tracks_ui = tracks_ui;
@@ -666,6 +664,7 @@ impl YadawApp {
         // Central panel - Timeline or Piano Roll
         egui::CentralPanel::default().show(ctx, |ui| {
             if show_midi {
+                ui.heading("Piano Roll View");
                 let mut piano_roll = std::mem::take(&mut self.piano_roll_view);
                 piano_roll.show(ui, self);
                 self.piano_roll_view = piano_roll;
@@ -923,6 +922,31 @@ impl YadawApp {
                 self.touch_state.pinch_distance = None;
             }
         });
+    }
+
+    pub fn switch_to_piano_roll(&mut self) {
+        let midi_idx = {
+            let state = self.state.lock().unwrap();
+            state.tracks.iter().position(|t| t.is_midi)
+        };
+        if let Some(idx) = midi_idx {
+            self.selected_track = idx;
+        } else {
+            self.dialogs
+                .show_message("No MIDI track found. Add a MIDI track first.");
+        }
+    }
+
+    pub fn switch_to_timeline(&mut self) {
+        let audio_idx = {
+            let state = self.state.lock().unwrap();
+            state.tracks.iter().position(|t| !t.is_midi)
+        };
+        if let Some(idx) = audio_idx {
+            self.selected_track = idx;
+        } else {
+            self.dialogs.show_message("No audio track found.");
+        }
     }
 
     fn ctx(&self) -> &egui::Context {
