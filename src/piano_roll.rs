@@ -225,7 +225,7 @@ impl PianoRoll {
                         // Calculate new position based on mouse position
                         let grid_pos = current_pos - grid_rect.min;
                         let beat = (grid_pos.x - click_offset.x + self.scroll_x) / self.zoom_x;
-                        let snapped_beat = ((beat / self.grid_snap).round() * self.grid_snap);
+                        let snapped_beat = (beat / self.grid_snap).round() * self.grid_snap;
 
                         let pitch_y = grid_pos.y - click_offset.y + self.scroll_y;
                         let pitch_float = 127.0 - (pitch_y / self.zoom_y);

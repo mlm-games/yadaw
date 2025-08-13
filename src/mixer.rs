@@ -107,11 +107,6 @@ impl MixerEngine {
         }
     }
 
-    pub fn add_send(&mut self, from_track: usize, to_bus: usize, amount: f32, pre_fader: bool) {
-        // This would be implemented on the track side
-        // Just showing the structure here
-    }
-
     pub fn process_mix(
         &self,
         track_outputs: &[(f32, f32)], // (left, right) for each track
@@ -193,22 +188,6 @@ impl MixerEngine {
         // Apply limiting to prevent clipping
         master_out.0 = soft_clip(master_out.0);
         master_out.1 = soft_clip(master_out.1);
-    }
-
-    pub fn get_buses(&self) -> &[Bus] {
-        &self.buses
-    }
-
-    pub fn get_master_strip(&self) -> &ChannelStrip {
-        &self.master_strip
-    }
-
-    pub fn set_master_volume(&mut self, volume: f32) {
-        self.master_strip.gain = volume;
-    }
-
-    pub fn set_master_pan(&mut self, pan: f32) {
-        self.master_strip.pan = pan;
     }
 }
 

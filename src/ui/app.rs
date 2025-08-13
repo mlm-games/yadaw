@@ -664,7 +664,7 @@ impl YadawApp {
         // Central panel - Timeline or Piano Roll
         egui::CentralPanel::default().show(ctx, |ui| {
             if show_midi {
-                ui.heading("Piano Roll View");
+                // ui.heading("Piano Roll View");
                 let mut piano_roll = std::mem::take(&mut self.piano_roll_view);
                 piano_roll.show(ui, self);
                 self.piano_roll_view = piano_roll;

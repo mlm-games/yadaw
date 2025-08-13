@@ -320,10 +320,10 @@ impl PluginBrowserDialog {
 
         egui::Window::new("Plugin Browser")
             .open(&mut open)
-            .default_size(egui::vec2(600.0, 400.0))
             .resizable(true)
+            .default_size(egui::vec2(420.0, 220.0))
             .show(ctx, |ui| {
-                // Search bar
+                // Header controls
                 ui.horizontal(|ui| {
                     ui.label("Search:");
                     ui.text_edit_singleline(&mut self.search_text);
@@ -377,6 +377,7 @@ impl PluginBrowserDialog {
                 // Plugin list
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
+                    .max_height(220.0)
                     .show(ui, |ui| {
                         for (idx, plugin) in app.available_plugins.iter().enumerate() {
                             // Filter by search
@@ -392,12 +393,23 @@ impl PluginBrowserDialog {
 
                             // Filter by category
                             if self.selected_category != "All" {
-                                // Add category filtering logic
+                                // TODOO: Add category filtering logic
                             }
 
                             let selected = self.selected_plugin == Some(idx);
+                            let resp = ui.selectable_label(selected, &plugin.name);
 
-                            if ui.selectable_label(selected, &plugin.name).clicked() {
+                            if resp.double_clicked() {
+                                // Adds immediately on double-click
+                                let track_id = app
+                                    .selected_track_for_plugin
+                                    .take()
+                                    .unwrap_or(app.selected_track);
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
+                                self.closed = true; // FIXME: Not closing would cause plugins to go to the first track due to the ref being dropped.
+                            } else if resp.clicked() {
                                 self.selected_plugin = Some(idx);
                             }
                         }
@@ -408,7 +420,8 @@ impl PluginBrowserDialog {
                 // Plugin info
                 if let Some(idx) = self.selected_plugin {
                     if let Some(plugin) = app.available_plugins.get(idx) {
-                        ui.label(format!("Name: {}", plugin.name));
+                        ui.heading(&plugin.name);
+                        ui.separator();
                         ui.label(format!(
                             "Type: {}",
                             if plugin.is_instrument {
@@ -417,16 +430,42 @@ impl PluginBrowserDialog {
                                 "Effect"
                             }
                         ));
-                        ui.label(format!("Inputs: {}", plugin.audio_inputs));
-                        ui.label(format!("Outputs: {}", plugin.audio_outputs));
+                        ui.label(format!(
+                            "Audio I/O: {} inputs / {} outputs",
+                            plugin.audio_inputs, plugin.audio_outputs
+                        ));
+                        if plugin.has_midi {
+                            ui.label("MIDI: Yes");
+                        }
+                        ui.separator();
+                        ui.heading("Parameters");
+                        if plugin.control_ports.is_empty() {
+                            ui.label("This plugin exposes no control parameters.");
+                        } else {
+                            for cp in &plugin.control_ports {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{} [{}]", cp.name, cp.symbol));
+                                    ui.label(format!(
+                                        "default: {:.3} [{:.3}..{:.3}]",
+                                        cp.default, cp.min, cp.max
+                                    ));
+                                });
+                            }
+                        }
                     }
+                } else {
+                    ui.label("Select a plugin to see details.");
                 }
 
                 ui.separator();
 
-                // Buttons
+                // Footer
                 ui.horizontal(|ui| {
-                    if ui.button("Add to Track").clicked() {
+                    let can_add = self.selected_plugin.is_some();
+                    if ui
+                        .add_enabled(can_add, egui::Button::new("Add to Track"))
+                        .clicked()
+                    {
                         if let Some(idx) = self.selected_plugin {
                             if let Some(plugin) = app.available_plugins.get(idx) {
                                 let track_id = app
