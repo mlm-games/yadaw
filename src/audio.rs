@@ -1,4 +1,5 @@
 use crate::audio_state::{AudioState, RealtimeCommand, TrackSnapshot};
+use crate::audio_utils::calculate_stereo_gains;
 use crate::automation_lane::AutomationLaneWidget;
 use crate::constants::{
     MAX_BUFFER_SIZE, PREVIEW_NOTE_AMPLITUDE, PREVIEW_NOTE_DURATION, RECORDING_BUFFER_SIZE,
@@ -14,8 +15,8 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 static PLUGIN_HOST: Lazy<parking_lot::Mutex<Option<LV2PluginHost>>> =
     Lazy::new(|| parking_lot::Mutex::new(None));
@@ -444,7 +445,7 @@ impl AudioEngine {
                 };
 
                 // Use final_volume and final_pan for mixing
-                let (left_gain, right_gain) = calculate_stereo_pan(final_volume, final_pan);
+                let (left_gain, right_gain) = calculate_stereo_gains(final_volume, final_pan);
 
                 // Process track content
                 if track.is_midi {
@@ -530,12 +531,6 @@ impl AudioEngine {
             .updates
             .try_send(UIUpdate::MasterLevel(master_left_peak, master_right_peak));
     }
-}
-
-fn calculate_stereo_pan(volume: f32, pan: f32) -> (f32, f32) {
-    let p = (pan.clamp(-1.0, 1.0) + 1.0) / 2.0;
-    let angle = p * std::f32::consts::FRAC_PI_2;
-    (volume * angle.cos(), volume * angle.sin())
 }
 
 fn process_midi_track(

@@ -1,3 +1,4 @@
+use crate::audio_utils::{calculate_stereo_gains, soft_clip};
 use crate::constants::{DEFAULT_TRACK_VOLUME, NORMALIZE_TARGET_LINEAR};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -129,7 +130,7 @@ impl MixerEngine {
                     let strip = &track_strips[track_id];
 
                     if !strip.mute {
-                        let (gain_l, gain_r) = calculate_pan_gains(strip.gain, strip.pan);
+                        let (gain_l, gain_r) = calculate_stereo_gains(strip.gain, strip.pan);
                         bus_sum.0 += left * gain_l * strip.output_gain;
                         bus_sum.1 += right * gain_r * strip.output_gain;
                     }
@@ -138,7 +139,7 @@ impl MixerEngine {
 
             // Apply bus strip processing
             if !bus.strip.mute {
-                let (gain_l, gain_r) = calculate_pan_gains(bus.strip.gain, bus.strip.pan);
+                let (gain_l, gain_r) = calculate_stereo_gains(bus.strip.gain, bus.strip.pan);
                 bus_buffers[bus_idx] = (
                     bus_sum.0 * gain_l * bus.strip.output_gain,
                     bus_sum.1 * gain_r * bus.strip.output_gain,
@@ -160,7 +161,7 @@ impl MixerEngine {
                 .any(|bus| bus.input_tracks.contains(&track_id));
 
             if !routed_to_bus && !strip.mute {
-                let (gain_l, gain_r) = calculate_pan_gains(strip.gain, strip.pan);
+                let (gain_l, gain_r) = calculate_stereo_gains(strip.gain, strip.pan);
                 master_sum.0 += left * gain_l * strip.output_gain;
                 master_sum.1 += right * gain_r * strip.output_gain;
             }
@@ -178,7 +179,7 @@ impl MixerEngine {
 
         // Apply master strip
         let (master_gain_l, master_gain_r) =
-            calculate_pan_gains(self.master_strip.gain, self.master_strip.pan);
+            calculate_stereo_gains(self.master_strip.gain, self.master_strip.pan);
 
         *master_out = (
             master_sum.0 * master_gain_l * self.master_strip.output_gain,
@@ -188,22 +189,6 @@ impl MixerEngine {
         // Apply limiting to prevent clipping
         master_out.0 = soft_clip(master_out.0);
         master_out.1 = soft_clip(master_out.1);
-    }
-}
-
-fn calculate_pan_gains(volume: f32, pan: f32) -> (f32, f32) {
-    // Equal power panning
-    let pan_norm = (pan.clamp(-1.0, 1.0) + 1.0) / 2.0;
-    let angle = pan_norm * std::f32::consts::FRAC_PI_2;
-    (volume * angle.cos(), volume * angle.sin())
-}
-
-fn soft_clip(x: f32) -> f32 {
-    if x.abs() <= 0.5 {
-        x
-    } else {
-        let sign = x.signum();
-        sign * (0.5 + (x.abs() - 0.5).tanh() * 0.5)
     }
 }
 

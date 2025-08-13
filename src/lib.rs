@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod audio_import;
 pub mod audio_state;
+pub mod audio_utils;
 pub mod automation;
 pub mod automation_lane;
 pub mod command_processor;

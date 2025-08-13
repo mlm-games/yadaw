@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
 use crate::state::AudioCommand;
 
@@ -302,7 +303,7 @@ impl MixerWindow {
                                 .vertical()
                                 .show_value(false),
                         );
-                        ui.label(format!("{:.1}", 20.0 * volume.max(0.0001).log10()));
+                        ui.label(format!("{:.1}", linear_to_db(volume)));
                     });
 
                     if (volume - track.volume).abs() > 0.001 {
@@ -324,13 +325,7 @@ impl MixerWindow {
                         let _ = app.command_tx.send(AudioCommand::SetTrackPan(idx, pan));
                     }
 
-                    let pan_text = if pan.abs() < 0.01 {
-                        "C".to_string()
-                    } else if pan < 0.0 {
-                        format!("L{:.0}", -pan * 100.0)
-                    } else {
-                        format!("R{:.0}", pan * 100.0)
-                    };
+                    let pan_text = format_pan(pan);
                     ui.label(pan_text);
                 });
 

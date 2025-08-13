@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
 use crate::plugin::PluginParameterUpdate;
 use crate::state::{AudioCommand, Track};
@@ -267,7 +268,7 @@ impl TracksPanel {
                     .show_value(false)
                     .logarithmic(true),
             );
-            ui.label(format!("{:.1}dB", 20.0 * track.volume.max(0.0001).log10()));
+            ui.label(format!("{:.1}", linear_to_db(track.volume)));
         });
 
         // Pan knob
@@ -275,13 +276,7 @@ impl TracksPanel {
             ui.label("Pan:");
             ui.add(egui::Slider::new(&mut track.pan, -1.0..=1.0).show_value(false));
 
-            let pan_text = if track.pan.abs() < 0.01 {
-                "C".to_string()
-            } else if track.pan < 0.0 {
-                format!("L{:.0}", -track.pan * 100.0)
-            } else {
-                format!("R{:.0}", track.pan * 100.0)
-            };
+            let pan_text = format_pan(track.pan);
             ui.label(pan_text);
         });
 

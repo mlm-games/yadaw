@@ -1,6 +1,7 @@
 mod audio;
 mod audio_import;
 mod audio_state;
+mod audio_utils;
 mod automation;
 mod automation_lane;
 mod command_processor;
