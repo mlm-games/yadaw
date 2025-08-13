@@ -1,5 +1,6 @@
 use super::*;
 use crate::edit_actions::EditProcessor;
+use crate::error::UserNotification;
 use crate::state::AudioCommand;
 use crate::ui::theme;
 
@@ -32,6 +33,24 @@ macro_rules! simple_dialog {
             }
         }
     };
+}
+
+impl UserNotification for DialogManager {
+    fn show_error(&mut self, message: &str) {
+        self.message_box = Some(DialogWrapper::new(MessageContent::new(message.to_string())));
+    }
+
+    fn show_success(&mut self, message: &str) {
+        self.show_message(message);
+    }
+
+    fn show_warning(&mut self, message: &str) {
+        self.show_message(message);
+    }
+
+    fn show_info(&mut self, message: &str) {
+        self.show_message(message);
+    }
 }
 
 /// Base trait for all dialog implementations

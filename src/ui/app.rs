@@ -3,6 +3,7 @@ use crate::audio_state::AudioState;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config::Config;
 use crate::edit_actions::EditProcessor;
+use crate::error::{common, ResultExt, UserNotification};
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
 use crate::performance::PerformanceMonitor;
@@ -331,18 +332,21 @@ impl YadawApp {
 
     pub fn save_project_to_path(&mut self, path: &Path) {
         let state = self.state.lock().unwrap();
-        if let Err(e) = self.project_manager.save_project(&*state, path) {
-            self.dialogs
-                .show_message(&format!("Failed to save project: {}", e));
-        } else {
-            self.project_path = Some(path.to_string_lossy().to_string());
-            self.dialogs.show_message("Project saved successfully");
-        }
+        self.project_manager
+            .save_project(&*state, path)
+            .map_err(common::project_save_failed)
+            .map(|_| {
+                self.project_path = Some(path.to_string_lossy().to_string());
+                self.dialogs.show_success("Project saved successfully");
+            })
+            .notify_user(&mut self.dialogs);
     }
 
     pub fn load_project_from_path(&mut self, path: &Path) {
-        match self.project_manager.load_project(path) {
-            Ok(project) => {
+        self.project_manager
+            .load_project(path)
+            .map_err(common::project_load_failed)
+            .map(|project| {
                 let mut state = self.state.lock().unwrap();
                 state.load_project(project);
                 drop(state);
@@ -354,12 +358,8 @@ impl YadawApp {
                 self.redo_stack.clear();
 
                 let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-            }
-            Err(e) => {
-                self.dialogs
-                    .show_message(&format!("Failed to load project: {}", e));
-            }
-        }
+            })
+            .notify_user(&mut self.dialogs);
     }
 
     // Audio operations
@@ -609,26 +609,20 @@ impl YadawApp {
             self.push_undo();
 
             for path in paths {
-                match crate::audio_import::import_audio_file(&path, bpm) {
-                    Ok(clip) => {
+                crate::audio_import::import_audio_file(&path, bpm)
+                    .map_err(|e| common::audio_import_failed(&path, e))
+                    .map(|clip| {
                         let mut state = self.state.lock().unwrap();
                         if let Some(track) = state.tracks.get_mut(self.selected_track) {
                             if !track.is_midi {
                                 track.audio_clips.push(clip);
                             } else {
                                 self.dialogs
-                                    .show_message("Cannot import audio to MIDI track");
+                                    .show_warning("Cannot import audio to MIDI track");
                             }
                         }
-                    }
-                    Err(e) => {
-                        self.dialogs.show_message(&format!(
-                            "Failed to import {}: {}",
-                            path.display(),
-                            e
-                        ));
-                    }
-                }
+                    })
+                    .notify_user(&mut self.dialogs);
             }
         }
     }
