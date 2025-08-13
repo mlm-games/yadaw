@@ -3,32 +3,227 @@ use crate::edit_actions::EditProcessor;
 use crate::state::AudioCommand;
 use crate::ui::theme;
 
+macro_rules! simple_dialog {
+    ($name:ident, $title:expr, $content:expr) => {
+        pub struct $name {
+            closed: bool,
+        }
+
+        impl $name {
+            pub fn new() -> Self {
+                Self { closed: false }
+            }
+
+            pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
+                let mut open = true;
+                egui::Window::new($title)
+                    .open(&mut open)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        $content(ui, app, &mut self.closed);
+                    });
+                if !open {
+                    self.closed = true;
+                }
+            }
+
+            pub fn is_closed(&self) -> bool {
+                self.closed
+            }
+        }
+    };
+}
+
+/// Base trait for all dialog implementations
+pub trait Dialog {
+    /// Draw the dialog content (returns true if dialog should close)
+    fn draw_content(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) -> bool;
+
+    /// Get the dialog title
+    fn title(&self) -> &str;
+
+    /// Check if dialog is closed
+    fn is_closed(&self) -> bool;
+
+    /// Optional: Configure window properties
+    fn configure_window<'a>(&self, window: egui::Window<'a>) -> egui::Window<'a> {
+        window.resizable(false).collapsible(false)
+    }
+}
+
+/// Generic dialog wrapper that handles common window logic
+pub struct DialogWrapper<T: Dialog> {
+    inner: T,
+    closed: bool,
+}
+
+impl<T: Dialog> DialogWrapper<T> {
+    pub fn new(inner: T) -> Self {
+        Self {
+            inner,
+            closed: false,
+        }
+    }
+
+    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
+        let mut open = !self.closed;
+
+        let window = egui::Window::new(self.inner.title()).open(&mut open);
+
+        let window = self.inner.configure_window(window);
+
+        window.show(ctx, |ui| {
+            if self.inner.draw_content(ui, app) {
+                self.closed = true;
+            }
+        });
+
+        if !open {
+            self.closed = true;
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed || self.inner.is_closed()
+    }
+}
+
+/// Simple message dialog
+pub struct MessageContent {
+    message: String,
+}
+
+impl MessageContent {
+    pub fn new(message: String) -> Self {
+        Self { message }
+    }
+}
+
+impl Dialog for MessageContent {
+    fn title(&self) -> &str {
+        "Message"
+    }
+
+    fn draw_content(&mut self, ui: &mut egui::Ui, _app: &mut super::app::YadawApp) -> bool {
+        ui.label(&self.message);
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            if ui.button("OK").clicked() {
+                return true; // Close dialog
+            } else {
+                false
+            }
+        });
+
+        false
+    }
+
+    fn is_closed(&self) -> bool {
+        false // Wrapper handles this
+    }
+}
+
+pub type MessageBox = DialogWrapper<MessageContent>;
+
+/// Quantize dialog using the new pattern
+pub struct QuantizeContent {
+    strength: f32,
+    grid_size: f32,
+    swing: f32,
+}
+
+impl QuantizeContent {
+    pub fn new() -> Self {
+        Self {
+            strength: 1.0,
+            grid_size: 0.25,
+            swing: 0.0,
+        }
+    }
+}
+
+impl Dialog for QuantizeContent {
+    fn title(&self) -> &str {
+        "Quantize"
+    }
+
+    fn draw_content(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) -> bool {
+        ui.horizontal(|ui| {
+            ui.label("Strength:");
+            ui.add(
+                egui::Slider::new(&mut self.strength, 0.0..=1.0)
+                    .suffix("%")
+                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
+            );
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Grid:");
+            egui::ComboBox::from_id_salt("quantize_grid")
+                .selected_text(format!("1/{}", (1.0 / self.grid_size) as i32))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.grid_size, 1.0, "1/1");
+                    ui.selectable_value(&mut self.grid_size, 0.5, "1/2");
+                    ui.selectable_value(&mut self.grid_size, 0.25, "1/4");
+                    ui.selectable_value(&mut self.grid_size, 0.125, "1/8");
+                    ui.selectable_value(&mut self.grid_size, 0.0625, "1/16");
+                    ui.selectable_value(&mut self.grid_size, 0.03125, "1/32");
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Swing:");
+            ui.add(egui::Slider::new(&mut self.swing, -50.0..=50.0).suffix("%"));
+        });
+
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            if ui.button("Apply").clicked() {
+                app.quantize_selected_notes_with_params(self.strength, self.grid_size, self.swing);
+                return true; // Close dialog
+            }
+
+            if ui.button("Cancel").clicked() {
+                return true; // Close dialog
+            } else {
+                false
+            }
+        });
+
+        false
+    }
+
+    fn is_closed(&self) -> bool {
+        false
+    }
+}
+
+pub type QuantizeDialog = DialogWrapper<QuantizeContent>;
+
 pub struct DialogManager {
-    // File dialogs
+    pub message_box: Option<MessageBox>,
+    pub quantize_dialog: Option<QuantizeDialog>,
+
     pub open_dialog: Option<OpenDialog>,
     pub save_dialog: Option<SaveDialog>,
 
-    // Audio dialogs
     pub audio_setup: Option<AudioSetupDialog>,
     pub plugin_browser: Option<PluginBrowserDialog>,
     pub plugin_manager: Option<PluginManagerDialog>,
 
-    // Edit dialogs
-    pub quantize_dialog: Option<QuantizeDialog>,
     pub transpose_dialog: Option<TransposeDialog>,
     pub humanize_dialog: Option<HumanizeDialog>,
     pub time_stretch_dialog: Option<TimeStretchDialog>,
 
-    // Project dialogs
     pub project_settings: Option<ProjectSettingsDialog>,
     pub export_dialog: Option<ExportDialog>,
 
-    // UI dialogs
     pub theme_editor: Option<ThemeEditorDialog>,
     pub layout_manager: Option<LayoutManagerDialog>,
 
     // Utility
-    pub message_box: Option<MessageBox>,
     pub progress_bar: Option<ProgressBar>,
 }
 
@@ -144,7 +339,7 @@ impl DialogManager {
 
         // Utility
         if let Some(mut d) = self.message_box.take() {
-            d.show(ctx);
+            d.show(ctx, app);
             if !d.is_closed() {
                 self.message_box = Some(d);
             }
@@ -166,7 +361,7 @@ impl DialogManager {
         self.plugin_manager = Some(PluginManagerDialog::new());
     }
     pub fn show_transpose_dialog(&mut self) {
-        self.transpose_dialog = Some(TransposeDialog::new());
+        self.transpose_dialog = Some(TransposeDialog::new(TransposeContent::new()));
     }
     pub fn show_humanize_dialog(&mut self) {
         self.humanize_dialog = Some(HumanizeDialog::new());
@@ -182,7 +377,11 @@ impl DialogManager {
     }
 
     pub fn show_message(&mut self, message: &str) {
-        self.message_box = Some(MessageBox::new(message.to_string()));
+        self.message_box = Some(DialogWrapper::new(MessageContent::new(message.to_string())));
+    }
+
+    pub fn show_quantize_dialog(&mut self) {
+        self.quantize_dialog = Some(DialogWrapper::new(QuantizeContent::new()));
     }
 
     pub fn show_open_dialog(&mut self) {
@@ -201,51 +400,12 @@ impl DialogManager {
         self.audio_setup = Some(AudioSetupDialog::new());
     }
 
-    pub fn show_quantize_dialog(&mut self) {
-        self.quantize_dialog = Some(QuantizeDialog::new());
-    }
-
     pub fn show_theme_editor(&mut self) {
         self.theme_editor = Some(ThemeEditorDialog::new());
     }
 }
 
 // Individual dialog implementations
-
-pub struct MessageBox {
-    message: String,
-    closed: bool,
-}
-
-impl MessageBox {
-    pub fn new(message: String) -> Self {
-        Self {
-            message,
-            closed: false,
-        }
-    }
-
-    pub fn show(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Message")
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(&self.message);
-                ui.separator();
-
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        self.closed = true;
-                    }
-                });
-            });
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
-    }
-}
-
 pub struct OpenDialog {
     closed: bool,
 }
@@ -496,176 +656,68 @@ impl PluginBrowserDialog {
     }
 }
 
-pub struct QuantizeDialog {
-    closed: bool,
-    strength: f32,
-    grid_size: f32,
-    swing: f32,
-}
-
-impl QuantizeDialog {
-    pub fn new() -> Self {
-        Self {
-            closed: false,
-            strength: 1.0,
-            grid_size: 0.25,
-            swing: 0.0,
+simple_dialog!(
+    AudioSetupDialog,
+    "Audio Setup",
+    |ui: &mut egui::Ui, _app: &mut super::app::YadawApp, closed: &mut bool| {
+        ui.label("Audio configuration would be shown here");
+        ui.label("(Not implemented in this example)");
+        ui.separator();
+        if ui.button("Close").clicked() {
+            *closed = true;
         }
     }
+);
 
-    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        let mut open = true;
-
-        egui::Window::new("Quantize")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Strength:");
-                    ui.add(
-                        egui::Slider::new(&mut self.strength, 0.0..=1.0)
-                            .suffix("%")
-                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
-                    );
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Grid:");
-                    egui::ComboBox::from_id_salt("quantize_grid")
-                        .selected_text(format!("1/{}", (1.0 / self.grid_size) as i32))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.grid_size, 1.0, "1/1");
-                            ui.selectable_value(&mut self.grid_size, 0.5, "1/2");
-                            ui.selectable_value(&mut self.grid_size, 0.25, "1/4");
-                            ui.selectable_value(&mut self.grid_size, 0.125, "1/8");
-                            ui.selectable_value(&mut self.grid_size, 0.0625, "1/16");
-                            ui.selectable_value(&mut self.grid_size, 0.03125, "1/32");
-                        });
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Swing:");
-                    ui.add(egui::Slider::new(&mut self.swing, -50.0..=50.0).suffix("%"));
-                });
-
-                ui.separator();
-
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        app.quantize_selected_notes_with_params(
-                            self.strength,
-                            self.grid_size,
-                            self.swing,
-                        );
-                        self.closed = true;
-                    }
-
-                    if ui.button("Cancel").clicked() {
-                        self.closed = true;
-                    }
-                });
-            });
-
-        if !open {
-            self.closed = true;
-        }
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
-    }
-}
-
-// Add more dialog implementations as needed...
-
-pub struct AudioSetupDialog {
-    closed: bool,
-}
-
-impl AudioSetupDialog {
-    pub fn new() -> Self {
-        Self { closed: false }
-    }
-
-    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        let mut open = true;
-
-        egui::Window::new("Audio Setup")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label("Audio configuration would be shown here");
-                ui.label("(Not implemented in this example)");
-
-                ui.separator();
-
-                if ui.button("Close").clicked() {
-                    self.closed = true;
-                }
-            });
-
-        if !open {
-            self.closed = true;
-        }
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
-    }
-}
-
-pub struct TransposeDialog {
-    closed: bool,
+pub struct TransposeContent {
     semitones: i32,
 }
 
-impl TransposeDialog {
+impl TransposeContent {
     pub fn new() -> Self {
-        Self {
-            closed: false,
-            semitones: 0,
-        }
-    }
-
-    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        let mut open = true;
-
-        egui::Window::new("Transpose")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Semitones:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.semitones)
-                            .speed(1)
-                            .range(-24..=24),
-                    );
-                });
-
-                ui.separator();
-
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        app.transpose_selected_notes(self.semitones);
-                        self.closed = true;
-                    }
-
-                    if ui.button("Cancel").clicked() {
-                        self.closed = true;
-                    }
-                });
-            });
-
-        if !open {
-            self.closed = true;
-        }
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
+        Self { semitones: 0 }
     }
 }
+
+impl Dialog for TransposeContent {
+    fn title(&self) -> &str {
+        "Transpose"
+    }
+
+    fn draw_content(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) -> bool {
+        ui.horizontal(|ui| {
+            ui.label("Semitones:");
+            ui.add(
+                egui::DragValue::new(&mut self.semitones)
+                    .speed(1)
+                    .range(-24..=24),
+            );
+        });
+
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            if ui.button("Apply").clicked() {
+                app.transpose_selected_notes(self.semitones);
+                return true;
+            }
+
+            if ui.button("Cancel").clicked() {
+                return true;
+            } else {
+                false
+            }
+        });
+
+        false
+    }
+
+    fn is_closed(&self) -> bool {
+        false
+    }
+}
+
+pub type TransposeDialog = DialogWrapper<TransposeContent>;
 
 pub struct HumanizeDialog {
     closed: bool,
