@@ -20,6 +20,7 @@ pub mod piano_roll;
 pub mod plugin;
 pub mod project_manager;
 pub mod state;
+pub mod time_utils;
 pub mod track_manager;
 pub mod transport;
 pub mod ui;

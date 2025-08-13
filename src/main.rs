@@ -20,6 +20,7 @@ mod piano_roll;
 mod plugin;
 mod project_manager;
 mod state;
+mod time_utils;
 mod track_manager;
 mod transport;
 mod ui;

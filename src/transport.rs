@@ -1,9 +1,10 @@
 use crate::audio_state::AudioState;
 use crate::constants::DEFAULT_BPM;
 use crate::state::AudioCommand;
+use crate::time_utils::{format_bars_beats_sixteenths, format_minutes_seconds, TimeConverter};
 use crossbeam_channel::Sender;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransportState {
@@ -96,18 +97,32 @@ impl Transport {
         }
     }
 
+    fn get_converter(&self) -> TimeConverter {
+        TimeConverter::new(
+            self.audio_state.sample_rate.load(),
+            self.audio_state.bpm.load(),
+        )
+    }
+
     pub fn set_position(&mut self, position_beats: f64) {
-        let sample_rate = self.audio_state.sample_rate.load();
-        let bpm = self.audio_state.bpm.load();
-        let position_samples = (position_beats * 60.0 / bpm as f64) * sample_rate as f64;
+        let converter = self.get_converter();
+        let position_samples = converter.beats_to_samples(position_beats);
         self.audio_state.set_position(position_samples);
     }
 
     pub fn get_position_beats(&self) -> f64 {
-        let position = self.audio_state.get_position();
-        let sample_rate = self.audio_state.sample_rate.load();
-        let bpm = self.audio_state.bpm.load();
-        (position / sample_rate as f64) * (bpm as f64 / 60.0)
+        let converter = self.get_converter();
+        converter.samples_to_beats(self.audio_state.get_position())
+    }
+
+    pub fn format_time(&self, beats: f64) -> String {
+        format_bars_beats_sixteenths(beats, 4) // assuming 4/4 time
+    }
+
+    pub fn format_time_seconds(&self, position_samples: f64) -> String {
+        let converter = self.get_converter();
+        let seconds = converter.samples_to_seconds(position_samples);
+        format_minutes_seconds(seconds)
     }
 
     pub fn set_bpm(&mut self, bpm: f32) {
@@ -132,20 +147,5 @@ impl Transport {
 
     pub fn toggle_metronome(&mut self) {
         self.metronome_enabled = !self.metronome_enabled;
-    }
-
-    pub fn format_time(&self, beats: f64) -> String {
-        let bars = (beats / 4.0) as i32 + 1;
-        let beat = (beats % 4.0) as i32 + 1;
-        let sixteenth = ((beats % 1.0) * 4.0) as i32 + 1;
-        format!("{:03}:{:02}:{:02}", bars, beat, sixteenth)
-    }
-
-    pub fn format_time_seconds(&self, position_samples: f64) -> String {
-        let sample_rate = self.audio_state.sample_rate.load();
-        let seconds = position_samples / sample_rate as f64;
-        let minutes = (seconds / 60.0) as i32;
-        let secs = seconds % 60.0;
-        format!("{:02}:{:05.2}", minutes, secs)
     }
 }

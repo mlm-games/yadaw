@@ -1,5 +1,6 @@
-use crate::constants::DEFAULT_GRID_SNAP;
+use crate::constants::{DEFAULT_GRID_SNAP, MIDI_TIMING_SAMPLE_RATE};
 use crate::state::{MidiNote, Pattern};
+use crate::time_utils::TimeConverter;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use std::collections::HashMap;
 
@@ -242,8 +243,8 @@ impl MidiEngine {
     }
 
     fn timestamp_to_beats(&self, timestamp: u64, bpm: f32) -> f64 {
-        let seconds = (timestamp - self.record_start_time) as f64 / 1_000_000.0;
-        seconds * (bpm as f64 / 60.0)
+        let converter = TimeConverter::new(MIDI_TIMING_SAMPLE_RATE, bpm);
+        converter.microseconds_to_beats(timestamp - self.record_start_time)
     }
 
     fn get_current_time(&self) -> u64 {

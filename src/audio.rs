@@ -8,6 +8,7 @@ use crate::constants::{
 use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
 use crate::mixer::{ChannelStrip, MixerEngine};
 use crate::state::{AudioClip, AutomationTarget, UIUpdate};
+use crate::time_utils::TimeConverter;
 use core::f32;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
@@ -189,11 +190,10 @@ pub fn run_audio_thread(
 
             if let Some(track_id) = engine.recording_state.recording_track {
                 if !engine.recording_state.accumulated_samples.is_empty() {
-                    let start_beat = (engine.recording_state.recording_start_position
-                        / sample_rate)
-                        * (engine.audio_state.bpm.load() as f64 / 60.0);
-                    let end_beat = (engine.audio_state.get_position() / sample_rate)
-                        * (engine.audio_state.bpm.load() as f64 / 60.0);
+                    let converter = TimeConverter::new(sample_rate as f32, engine.audio_state.bpm.load());
+                    let start_beat =
+                        converter.samples_to_beats(engine.recording_state.recording_start_position);
+                    let end_beat = converter.samples_to_beats(engine.audio_state.get_position());
 
                     let clip = AudioClip {
                         name: format!("Recording {}", chrono::Local::now().format("%H:%M:%S")),
@@ -380,6 +380,13 @@ impl AudioEngine {
         }
     }
 
+    fn get_converter(&self) -> TimeConverter {
+        TimeConverter::new(
+            self.audio_state.sample_rate.load(),
+            self.audio_state.bpm.load(),
+        )
+    }
+
     fn process_audio(
         &mut self,
         output: &mut [f32],
@@ -393,8 +400,9 @@ impl AudioEngine {
 
         let frames_to_process = num_frames.min(MAX_BUFFER_SIZE);
 
-        // Calculate current beat for automation
-        let current_beat = (current_position / self.sample_rate) * (bpm as f64 / 60.0);
+        // Use converter for time calculations
+        let converter = TimeConverter::new(self.sample_rate as f32, bpm);
+        let current_beat = converter.samples_to_beats(current_position);
 
         // Check for soloed tracks
         let any_track_soloed = tracks.iter().any(|t| t.solo);
@@ -542,7 +550,8 @@ fn process_midi_track(
     sample_rate: f64,
 ) {
     if let Some(pattern) = track.patterns.first() {
-        let current_beat = (current_position / sample_rate) * (bpm as f64 / 60.0);
+        let converter = TimeConverter::new(sample_rate as f32, bpm);
+        let current_beat = converter.samples_to_beats(current_position);
         let pattern_position = current_beat % pattern.length;
 
         // Check for new notes to trigger
@@ -611,12 +620,13 @@ fn process_audio_track(
     bpm: f32,
     sample_rate: f64,
 ) {
+    let converter = TimeConverter::new(sample_rate as f32, bpm);
     let buffer_start_abs = current_position;
     let buffer_end_abs = buffer_start_abs + num_frames as f64;
 
     for clip in &track.audio_clips {
-        let clip_start_abs = (clip.start_beat * 60.0 / bpm as f64) * sample_rate;
-        let clip_end_abs = clip_start_abs + (clip.length_beats * 60.0 / bpm as f64) * sample_rate;
+        let clip_start_abs = converter.beats_to_samples(clip.start_beat);
+        let clip_end_abs = clip_start_abs + converter.beats_to_samples(clip.length_beats);
 
         let overlap_start = buffer_start_abs.max(clip_start_abs);
         let overlap_end = buffer_end_abs.min(clip_end_abs);

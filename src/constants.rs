@@ -66,3 +66,6 @@ pub const DEFAULT_PROJECT_NAME: &str = "Untitled Project";
 // File Extensions
 pub const PROJECT_EXTENSION: &str = "yadaw";
 pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg"];
+
+// Others
+pub const MIDI_TIMING_SAMPLE_RATE: f32 = 44100.0; // Might need to change later

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+use crate::time_utils::TimeConverter;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutomationPoint {
     pub beat: f64,
@@ -158,11 +160,13 @@ impl AppState {
     }
 
     pub fn position_to_beats(&self, position: f64) -> f64 {
-        (position / self.sample_rate as f64) * (self.bpm as f64 / 60.0)
+        let converter = TimeConverter::new(self.sample_rate, self.bpm);
+        converter.samples_to_beats(position)
     }
 
     pub fn beats_to_samples(&self, beats: f64) -> f64 {
-        (beats * 60.0 / self.bpm as f64) * self.sample_rate as f64
+        let converter = TimeConverter::new(self.sample_rate, self.bpm);
+        converter.beats_to_samples(beats)
     }
 
     pub fn snapshot(&self) -> AppStateSnapshot {
