@@ -1,5 +1,5 @@
 use crate::lv2_plugin_host::{ControlPortInfo, LV2PluginHost, PluginInfo};
-use crate::state::{PluginDescriptor, PluginParam};
+use crate::state::{AudioCommand, PluginDescriptor, PluginParam};
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -74,4 +74,71 @@ pub fn initialize_plugin_host(sample_rate: f64, max_block_size: usize) -> Result
     let mut host_lock = PLUGIN_HOST.lock();
     *host_lock = Some(LV2PluginHost::new(sample_rate, max_block_size)?);
     Ok(())
+}
+
+pub struct PluginParameterUpdate {
+    pub track_id: usize,
+    pub plugin_idx: usize,
+    pub param_name: String,
+    pub value: f32,
+}
+
+impl PluginParameterUpdate {
+    pub fn apply_to_descriptor(
+        descriptor: &mut PluginDescriptor,
+        param_name: &str,
+        value: f32,
+    ) -> Result<()> {
+        descriptor
+            .params
+            .get_mut(param_name)
+            .map(|param| {
+                param.value = value.clamp(param.min, param.max);
+            })
+            .ok_or_else(|| anyhow::anyhow!("Parameter {} not found", param_name))
+    }
+
+    pub fn create_command(&self) -> AudioCommand {
+        AudioCommand::SetPluginParam(
+            self.track_id,
+            self.plugin_idx,
+            self.param_name.clone(),
+            self.value,
+        )
+    }
+}
+
+// Add a helper trait for Track
+pub trait PluginParameterAccess {
+    fn update_plugin_param(
+        &mut self,
+        plugin_idx: usize,
+        param_name: &str,
+        value: f32,
+    ) -> Result<()>;
+
+    fn get_plugin_param(&self, plugin_idx: usize, param_name: &str) -> Option<f32>;
+}
+
+impl PluginParameterAccess for crate::state::Track {
+    fn update_plugin_param(
+        &mut self,
+        plugin_idx: usize,
+        param_name: &str,
+        value: f32,
+    ) -> Result<()> {
+        self.plugin_chain
+            .get_mut(plugin_idx)
+            .ok_or_else(|| anyhow::anyhow!("Plugin index {} out of bounds", plugin_idx))
+            .and_then(|plugin| {
+                PluginParameterUpdate::apply_to_descriptor(plugin, param_name, value)
+            })
+    }
+
+    fn get_plugin_param(&self, plugin_idx: usize, param_name: &str) -> Option<f32> {
+        self.plugin_chain
+            .get(plugin_idx)
+            .and_then(|plugin| plugin.params.get(param_name))
+            .map(|param| param.value)
+    }
 }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::level_meter::LevelMeter;
+use crate::plugin::PluginParameterUpdate;
 use crate::state::{AudioCommand, Track};
 use crate::track_manager::{arm_track_exclusive, mute_track, solo_track, TrackType};
 
@@ -388,13 +389,15 @@ impl TracksPanel {
                             )
                             .changed()
                         {
-                            param.value = value;
-                            let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                                idx,
+                            let update = PluginParameterUpdate {
+                                track_id: idx,
                                 plugin_idx,
-                                param_name.clone(),
+                                param_name: param_name.clone(),
                                 value,
-                            ));
+                            };
+
+                            param.value = value;
+                            let _ = app.command_tx.send(update.create_command());
                         }
 
                         // Reset button

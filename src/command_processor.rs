@@ -150,14 +150,11 @@ fn process_command(
         }
 
         AudioCommand::SetPluginParam(track_id, plugin_idx, param_name, value) => {
+            use crate::plugin::PluginParameterAccess;
+
             if let Ok(mut state) = app_state.lock() {
-                if let Some(param) = state
-                    .tracks
-                    .get_mut(track_id)
-                    .and_then(|t| t.plugin_chain.get_mut(plugin_idx))
-                    .and_then(|p| p.params.get_mut(&param_name))
-                {
-                    param.value = value;
+                if let Some(track) = state.tracks.get_mut(track_id) {
+                    let _ = track.update_plugin_param(plugin_idx, &param_name, value);
                 }
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdatePluginParam(
