@@ -494,78 +494,6 @@ impl MenuBar {
             self.show_keyboard_shortcuts = show_keyboard_shortcuts;
         }
     }
-
-    fn draw_preferences(&self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        ui.horizontal(|ui| {
-            // Categories list
-            ui.vertical(|ui| {
-                ui.set_min_width(150.0);
-                ui.selectable_label(true, "Audio");
-                ui.selectable_label(false, "MIDI");
-                ui.selectable_label(false, "Appearance");
-                ui.selectable_label(false, "Behavior");
-                ui.selectable_label(false, "Plugins");
-                ui.selectable_label(false, "File Paths");
-            });
-
-            ui.separator();
-
-            // Settings panel
-            ui.vertical(|ui| {
-                ui.heading("Audio Settings");
-
-                ui.horizontal(|ui| {
-                    ui.label("Buffer Size:");
-                    ui.label(format!("{}", app.config.audio.buffer_size));
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Sample Rate:");
-                    ui.label(format!("{} Hz", app.config.audio.sample_rate));
-                });
-
-                ui.separator();
-
-                if ui.button("Apply").clicked() {
-                    // Apply settings
-                }
-            });
-        });
-    }
-
-    fn draw_keyboard_shortcuts(&self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Transport");
-            ui.label("Space - Play/Stop");
-            ui.label("R - Record");
-            ui.label("Home - Go to Start");
-
-            ui.separator();
-
-            ui.heading("Editing");
-            ui.label("Ctrl+Z - Undo");
-            ui.label("Ctrl+Shift+Z - Redo");
-            ui.label("Ctrl+X - Cut");
-            ui.label("Ctrl+C - Copy");
-            ui.label("Ctrl+V - Paste");
-            ui.label("Delete - Delete Selected");
-
-            ui.separator();
-
-            ui.heading("File");
-            ui.label("Ctrl+N - New Project");
-            ui.label("Ctrl+O - Open Project");
-            ui.label("Ctrl+S - Save Project");
-            ui.label("Ctrl+Shift+S - Save As");
-
-            ui.separator();
-
-            ui.heading("View");
-            ui.label("Ctrl++ - Zoom In");
-            ui.label("Ctrl+- - Zoom Out");
-            ui.label("M - Toggle Mixer");
-        });
-    }
 }
 
 fn draw_preferences_static(ui: &mut egui::Ui, config: &crate::config::Config) {
@@ -573,7 +501,7 @@ fn draw_preferences_static(ui: &mut egui::Ui, config: &crate::config::Config) {
         // Categories list
         ui.vertical(|ui| {
             ui.set_min_width(150.0);
-            ui.selectable_label(true, "Audio");
+            ui.selectable_label(true, "Audio"); // TODO for later
             ui.selectable_label(false, "MIDI");
             ui.selectable_label(false, "Appearance");
             ui.selectable_label(false, "Behavior");
