@@ -6,6 +6,7 @@ use crate::constants::{
     SINE_WAVE_AMPLITUDE,
 };
 use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
+use crate::midi_utils::{generate_sine_for_note, MidiNoteUtils};
 use crate::mixer::{ChannelStrip, MixerEngine};
 use crate::state::{AudioClip, AutomationTarget, UIUpdate};
 use crate::time_utils::TimeConverter;
@@ -190,7 +191,8 @@ pub fn run_audio_thread(
 
             if let Some(track_id) = engine.recording_state.recording_track {
                 if !engine.recording_state.accumulated_samples.is_empty() {
-                    let converter = TimeConverter::new(sample_rate as f32, engine.audio_state.bpm.load());
+                    let converter =
+                        TimeConverter::new(sample_rate as f32, engine.audio_state.bpm.load());
                     let start_beat =
                         converter.samples_to_beats(engine.recording_state.recording_start_position);
                     let end_beat = converter.samples_to_beats(engine.audio_state.get_position());
@@ -597,13 +599,12 @@ fn process_midi_track(
             let mut sample = 0.0;
 
             for note in &processor.active_notes {
-                let freq = 440.0 * 2.0_f32.powf((note.pitch as f32 - 69.0) / 12.0);
-                let phase = ((current_position + i as f64 - note.start_sample) * freq as f64
-                    / sample_rate)
-                    % 1.0;
-                sample += (phase * 2.0 * std::f64::consts::PI).sin() as f32
-                    * (note.velocity as f32 / 127.0)
-                    * 0.1;
+                sample += generate_sine_for_note(
+                    note.pitch,
+                    note.velocity,
+                    current_position + i as f64 - note.start_sample,
+                    sample_rate,
+                );
             }
 
             processor.input_buffer_l[i] = sample;
@@ -658,15 +659,16 @@ fn process_preview_note(
     for i in 0..num_frames {
         let sample_pos = current_position + i as f64 - preview.start_position;
         if sample_pos > 0.0 && sample_pos < sample_rate * PREVIEW_NOTE_DURATION {
-            let freq = 440.0 * 2.0_f32.powf((preview.pitch as f32 - 69.0) / 12.0);
-            let phase = (sample_pos * freq as f64 / sample_rate) % 1.0;
-            let envelope = (-(sample_pos * 4.0)).exp() as f32;
-            let sample = (phase * 2.0 * std::f64::consts::PI).sin() as f32
-                * envelope
-                * PREVIEW_NOTE_AMPLITUDE;
+            let sample = generate_sine_for_note(
+                preview.pitch,
+                100, // Default preview velocity
+                sample_pos,
+                sample_rate,
+            );
+            let envelope = (-(sample_pos * 4.0 / sample_rate)).exp() as f32;
 
-            processor.input_buffer_l[i] += sample;
-            processor.input_buffer_r[i] += sample;
+            processor.input_buffer_l[i] += sample * envelope * 3.0; // Boost for preview
+            processor.input_buffer_r[i] += sample * envelope * 3.0;
         }
     }
 }

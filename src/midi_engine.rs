@@ -1,4 +1,5 @@
 use crate::constants::{DEFAULT_GRID_SNAP, MIDI_TIMING_SAMPLE_RATE};
+use crate::midi_utils::{MidiNoteUtils, MidiVelocity};
 use crate::state::{MidiNote, Pattern};
 use crate::time_utils::TimeConverter;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
@@ -312,24 +313,4 @@ impl MidiEngine {
             }
         }
     }
-}
-
-// MIDI utility functions
-pub fn note_name(pitch: u8) -> String {
-    const NOTE_NAMES: &[&str] = &[
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    let octave = (pitch / 12) as i32 - 1;
-    let note = NOTE_NAMES[(pitch % 12) as usize];
-    format!("{}{}", note, octave)
-}
-
-pub fn frequency_from_pitch(pitch: u8) -> f32 {
-    440.0 * 2.0_f32.powf((pitch as f32 - 69.0) / 12.0)
-}
-
-pub fn pitch_from_frequency(freq: f32) -> u8 {
-    (69.0 + 12.0 * (freq / 440.0).log2())
-        .round()
-        .clamp(0.0, 127.0) as u8
 }
