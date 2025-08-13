@@ -14,15 +14,12 @@ fn main() {
         let mut track_manager = daw.track_manager.write();
         let mut state = daw.state.write();
 
-        // Add a drum track
         let drum_track = track_manager.create_track(TrackType::Midi, Some("Drums".to_string()));
         state.tracks.push(drum_track);
 
-        // Add a bass track
         let bass_track = track_manager.create_track(TrackType::Midi, Some("Bass".to_string()));
         state.tracks.push(bass_track);
 
-        // Add a vocal track
         let vocal_track = track_manager.create_track(TrackType::Audio, Some("Vocals".to_string()));
         state.tracks.push(vocal_track);
     }

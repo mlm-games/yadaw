@@ -135,90 +135,10 @@ pub struct AppStateSnapshot {
 
 impl AppState {
     pub fn new() -> Self {
+        use crate::track_manager::{create_default_audio_track, create_default_midi_track};
+
         Self {
-            tracks: vec![
-                Track {
-                    id: 0,
-                    name: "Audio 1".to_string(),
-                    volume: 0.7,
-                    pan: 0.0,
-                    muted: false,
-                    solo: false,
-                    armed: false,
-                    plugin_chain: vec![],
-                    patterns: vec![],
-                    is_midi: false,
-                    audio_clips: Vec::new(),
-                    automation_lanes: vec![],
-                },
-                Track {
-                    id: 1,
-                    name: "MIDI 1".to_string(),
-                    volume: 0.7,
-                    pan: 0.0,
-                    muted: false,
-                    solo: false,
-                    armed: false,
-                    plugin_chain: vec![],
-                    patterns: vec![Pattern {
-                        name: "Pattern 1".to_string(),
-                        length: 4.0,
-                        notes: vec![
-                            MidiNote {
-                                pitch: 60,
-                                velocity: 100,
-                                start: 0.0,
-                                duration: 0.5,
-                            },
-                            MidiNote {
-                                pitch: 62,
-                                velocity: 100,
-                                start: 0.5,
-                                duration: 0.5,
-                            },
-                            MidiNote {
-                                pitch: 64,
-                                velocity: 100,
-                                start: 1.0,
-                                duration: 0.5,
-                            },
-                            MidiNote {
-                                pitch: 65,
-                                velocity: 100,
-                                start: 1.5,
-                                duration: 0.5,
-                            },
-                            MidiNote {
-                                pitch: 67,
-                                velocity: 100,
-                                start: 2.0,
-                                duration: 0.5,
-                            },
-                            MidiNote {
-                                pitch: 69,
-                                velocity: 100,
-                                start: 2.5,
-                                duration: 0.5,
-                            },
-                            MidiNote {
-                                pitch: 71,
-                                velocity: 100,
-                                start: 3.0,
-                                duration: 0.5,
-                            },
-                            MidiNote {
-                                pitch: 72,
-                                velocity: 100,
-                                start: 3.5,
-                                duration: 0.5,
-                            },
-                        ],
-                    }],
-                    is_midi: true,
-                    audio_clips: Vec::new(),
-                    automation_lanes: vec![],
-                },
-            ],
+            tracks: vec![create_default_audio_track(0), create_default_midi_track(1)],
             master_volume: 0.8,
             playing: false,
             recording: false,

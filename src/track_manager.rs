@@ -21,58 +21,95 @@ pub struct TrackGroup {
     pub collapsed: bool,
 }
 
-pub struct TrackManager {
-    next_track_id: usize,
-    groups: Vec<TrackGroup>,
+pub struct TrackBuilder {
+    id: usize,
+    name: Option<String>,
+    track_type: TrackType,
+    volume: Option<f32>,
+    pan: Option<f32>,
+    patterns: Vec<Pattern>,
 }
 
-impl TrackManager {
-    pub fn new() -> Self {
+impl TrackBuilder {
+    pub fn new(id: usize, track_type: TrackType) -> Self {
         Self {
-            next_track_id: 0,
-            groups: Vec::new(),
+            id,
+            name: None,
+            track_type,
+            volume: None,
+            pan: None,
+            patterns: Vec::new(),
         }
     }
 
-    pub fn create_track(&mut self, track_type: TrackType, name: Option<String>) -> Track {
-        let id = self.next_track_id;
-        self.next_track_id += 1;
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name = Some(name);
+        self
+    }
 
-        let (default_name, is_midi) = match track_type {
-            TrackType::Audio => (format!("{} {}", DEFAULT_AUDIO_TRACK_PREFIX, id + 1), false),
-            TrackType::Midi => (format!("{} {}", DEFAULT_MIDI_TRACK_PREFIX, id + 1), true),
-            TrackType::Bus => (format!("Bus {}", id + 1), false),
+    pub fn with_volume(mut self, volume: f32) -> Self {
+        self.volume = Some(volume);
+        self
+    }
+
+    pub fn with_pan(mut self, pan: f32) -> Self {
+        self.pan = Some(pan);
+        self
+    }
+
+    pub fn with_default_pattern(mut self) -> Self {
+        if self.track_type == TrackType::Midi {
+            self.patterns.push(Self::create_default_pattern());
+        }
+        self
+    }
+
+    pub fn with_patterns(mut self, patterns: Vec<Pattern>) -> Self {
+        self.patterns = patterns;
+        self
+    }
+
+    pub fn build(self) -> Track {
+        let (default_name, is_midi) = match self.track_type {
+            TrackType::Audio => (
+                format!("{} {}", DEFAULT_AUDIO_TRACK_PREFIX, self.id + 1),
+                false,
+            ),
+            TrackType::Midi => (
+                format!("{} {}", DEFAULT_MIDI_TRACK_PREFIX, self.id + 1),
+                true,
+            ),
+            TrackType::Bus => (format!("Bus {}", self.id + 1), false),
             TrackType::Master => ("Master".to_string(), false),
         };
 
-        let mut track = Track {
-            id,
-            name: name.unwrap_or(default_name),
-            volume: DEFAULT_TRACK_VOLUME,
-            pan: 0.0,
+        Track {
+            id: self.id,
+            name: self.name.unwrap_or(default_name),
+            volume: self.volume.unwrap_or(DEFAULT_TRACK_VOLUME),
+            pan: self.pan.unwrap_or(0.0),
             muted: false,
             solo: false,
             armed: false,
             plugin_chain: vec![],
-            patterns: vec![],
+            patterns: self.patterns,
             is_midi,
             audio_clips: vec![],
             automation_lanes: vec![],
-        };
-
-        // Add default pattern for MIDI tracks
-        if is_midi {
-            track.patterns.push(Pattern {
-                name: "Pattern 1".to_string(),
-                length: 4.0,
-                notes: Self::create_default_notes(),
-            });
         }
-
-        track
     }
 
-    fn create_default_notes() -> Vec<MidiNote> {
+    /// Create the default C major scale pattern used for new MIDI tracks (cut to here)
+    pub fn create_default_pattern() -> Pattern {
+        Pattern {
+            name: "Pattern 1".to_string(),
+            length: 4.0,
+            notes: Self::create_default_notes(),
+        }
+    }
+
+    /// Create the default C major scale notes
+    pub fn create_default_notes() -> Vec<MidiNote> {
         vec![
             MidiNote {
                 pitch: 60,
@@ -123,6 +160,37 @@ impl TrackManager {
                 duration: 0.5,
             },
         ]
+    }
+}
+
+pub struct TrackManager {
+    next_track_id: usize,
+    groups: Vec<TrackGroup>,
+}
+
+impl TrackManager {
+    pub fn new() -> Self {
+        Self {
+            next_track_id: 0,
+            groups: Vec::new(),
+        }
+    }
+
+    pub fn create_track(&mut self, track_type: TrackType, name: Option<String>) -> Track {
+        let id = self.next_track_id;
+        self.next_track_id += 1;
+
+        let mut builder = TrackBuilder::new(id, track_type);
+
+        if let Some(name) = name {
+            builder = builder.with_name(name);
+        }
+
+        if track_type == TrackType::Midi {
+            builder = builder.with_default_pattern();
+        }
+
+        builder.build()
     }
 
     pub fn duplicate_track(&mut self, source_track: &Track) -> Track {
@@ -187,6 +255,25 @@ pub fn solo_track(tracks: &mut Vec<Track>, track_id: usize, command_tx: &Sender<
 
         let _ = command_tx.send(AudioCommand::SoloTrack(track_id, new_solo));
     }
+}
+
+pub fn create_default_audio_track(id: usize) -> Track {
+    TrackBuilder::new(id, TrackType::Audio)
+        .with_name(format!("Audio {}", id + 1))
+        .build()
+}
+
+pub fn create_default_midi_track(id: usize) -> Track {
+    TrackBuilder::new(id, TrackType::Midi)
+        .with_name(format!("MIDI {}", id + 1))
+        .with_default_pattern()
+        .build()
+}
+
+pub fn create_master_track() -> Track {
+    TrackBuilder::new(0, TrackType::Master)
+        .with_volume(0.8)
+        .build()
 }
 
 pub fn mute_track(tracks: &mut Vec<Track>, track_id: usize, command_tx: &Sender<AudioCommand>) {

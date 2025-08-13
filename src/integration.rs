@@ -5,7 +5,7 @@ use crate::mixer::MixerEngine;
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project_manager::ProjectManager;
 use crate::state::AppState;
-use crate::track_manager::TrackManager;
+use crate::track_manager::{TrackManager, TrackType};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -106,18 +106,13 @@ impl DawCore {
         state.master_volume = 0.8;
         state.bpm = 120.0;
 
-        // Create default tracks
-        let audio_track = track_manager.create_track(
-            crate::track_manager::TrackType::Audio,
-            Some(format!("{} - Audio 1", name)),
+        // Create default tracks using the factory
+        state.tracks.push(
+            track_manager.create_track(TrackType::Audio, Some(format!("{} - Audio 1", name))),
         );
-        let midi_track = track_manager.create_track(
-            crate::track_manager::TrackType::Midi,
-            Some(format!("{} - MIDI 1", name)),
-        );
-
-        state.tracks.push(audio_track);
-        state.tracks.push(midi_track);
+        state
+            .tracks
+            .push(track_manager.create_track(TrackType::Midi, Some(format!("{} - MIDI 1", name))));
 
         // Create default bus
         self.mixer.write().create_bus("Reverb Bus".to_string());
