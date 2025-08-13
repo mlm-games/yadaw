@@ -396,6 +396,7 @@ impl AudioEngine {
         channels: usize,
         current_position: f64,
     ) {
+        let start_time = std::time::Instant::now();
         let tracks = self.tracks.read().clone();
         let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
@@ -512,6 +513,17 @@ impl AudioEngine {
                     }
                 }
             }
+            // Track performance
+            let processing_time = start_time.elapsed();
+            let cpu_usage =
+                processing_time.as_secs_f32() / (num_frames as f32 / self.sample_rate as f32);
+
+            // Send metric update
+            let _ = self.updates.send(UIUpdate::PerformanceMetric {
+                cpu_usage,
+                buffer_fill: 0.9, // Calculate actual buffer health
+                xruns: 0,         // Track actual xruns
+            });
         }
 
         // Apply master volume and calculate master levels

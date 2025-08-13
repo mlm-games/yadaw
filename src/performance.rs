@@ -281,7 +281,11 @@ impl BufferCache {
         let hits = *self.hits.read() as f32;
         let misses = *self.misses.read() as f32;
         let total = hits + misses;
-        if total > 0.0 { hits / total } else { 0.0 }
+        if total > 0.0 {
+            hits / total
+        } else {
+            0.0
+        }
     }
 
     pub fn clear(&self) {

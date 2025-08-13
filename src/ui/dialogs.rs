@@ -244,6 +244,7 @@ pub struct DialogManager {
 
     // Utility
     pub progress_bar: Option<ProgressBar>,
+    track_grouping: Option<TrackGroupingDialog>,
 }
 
 impl DialogManager {
@@ -264,6 +265,7 @@ impl DialogManager {
             layout_manager: None,
             message_box: None,
             progress_bar: None,
+            track_grouping: None,
         }
     }
 
@@ -299,6 +301,12 @@ impl DialogManager {
             d.show(ctx, app);
             if !d.is_closed() {
                 self.plugin_manager = Some(d);
+            }
+        }
+        if let Some(mut d) = self.track_grouping.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.track_grouping = Some(d);
             }
         }
 
@@ -374,7 +382,8 @@ impl DialogManager {
     pub fn show_project_settings(&mut self) {
         self.project_settings = Some(ProjectSettingsDialog::new());
     }
-    pub fn show_track_grouping(&mut self) { /* TODO */
+    pub fn show_track_grouping(&mut self) {
+        self.track_grouping = Some(TrackGroupingDialog::new());
     }
     pub fn show_plugin_manager(&mut self) {
         self.plugin_manager = Some(PluginManagerDialog::new());
@@ -1382,5 +1391,110 @@ impl ProgressBar {
 impl Default for DialogManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub struct TrackGroupingDialog {
+    closed: bool,
+    new_group_name: String,
+    selected_tracks: Vec<usize>,
+    selected_group: Option<usize>,
+}
+
+impl TrackGroupingDialog {
+    pub fn new() -> Self {
+        Self {
+            closed: false,
+            new_group_name: String::from("New Group"),
+            selected_tracks: Vec::new(),
+            selected_group: None,
+        }
+    }
+
+    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
+        let mut open = true;
+
+        egui::Window::new("Track Grouping (not yet implemented fully)")
+            .open(&mut open)
+            .resizable(true)
+            .default_size(egui::vec2(400.0, 500.0))
+            .show(ctx, |ui| {
+                ui.heading("Track Groups");
+
+                // List existing groups
+                ui.group(|ui| {
+                    ui.label("Existing Groups:");
+
+                    let groups = app.track_manager.get_groups().to_vec();
+                    for (idx, group) in groups.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .selectable_label(self.selected_group == Some(idx), &group.name)
+                                .clicked()
+                            {
+                                self.selected_group = Some(idx);
+                            }
+
+                            ui.label(format!("({} tracks)", group.track_ids.len()));
+
+                            if ui.small_button("Delete").clicked() {
+                                // TODO: Remove group
+                            }
+                        });
+                    }
+                });
+
+                ui.separator();
+
+                // Create new group
+                ui.group(|ui| {
+                    ui.label("Create New Group:");
+
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.new_group_name);
+                    });
+
+                    ui.label("Select tracks to group:");
+
+                    let state = app.state.lock().unwrap();
+                    for (idx, track) in state.tracks.iter().enumerate() {
+                        let mut is_selected = self.selected_tracks.contains(&idx);
+                        if ui.checkbox(&mut is_selected, &track.name).changed() {
+                            if is_selected {
+                                self.selected_tracks.push(idx);
+                            } else {
+                                self.selected_tracks.retain(|&i| i != idx);
+                            }
+                        }
+                    }
+                    drop(state);
+
+                    if ui.button("Create Group").clicked() {
+                        if !self.selected_tracks.is_empty() {
+                            app.track_manager.create_group(
+                                self.new_group_name.clone(),
+                                self.selected_tracks.clone(),
+                            );
+                            self.selected_tracks.clear();
+                            self.new_group_name = String::from("New Group");
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                if ui.button("Close").clicked() {
+                    self.closed = true;
+                }
+            });
+
+        if !open {
+            self.closed = true;
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed
     }
 }

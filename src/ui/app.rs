@@ -2,15 +2,16 @@ use super::*;
 use crate::audio_state::AudioState;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config::Config;
+use crate::constants::MAX_BUFFER_SIZE;
 use crate::edit_actions::EditProcessor;
 use crate::error::{common, ResultExt, UserNotification};
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
-use crate::performance::PerformanceMonitor;
+use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::project_manager::ProjectManager;
 use crate::state::{
-    AppState, AppStateSnapshot, AudioClip, AudioCommand, AutomationTarget, UIUpdate,
+    AppState, AppStateSnapshot, AudioClip, AudioCommand, AutomationTarget, MidiNote, UIUpdate,
 };
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
@@ -19,6 +20,7 @@ use eframe::egui;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub struct YadawApp {
     // Core state
@@ -722,12 +724,30 @@ impl YadawApp {
                     self.undo_stack.remove(0);
                 }
             }
+            UIUpdate::PerformanceMetric {
+                cpu_usage,
+                buffer_fill,
+                xruns,
+            } => {
+                let metrics = PerformanceMetrics {
+                    cpu_usage,
+                    memory_usage: self.estimate_memory_usage(),
+                    disk_streaming_rate: 0.0,
+                    audio_buffer_health: buffer_fill,
+                    plugin_processing_time: Duration::from_millis(0),
+                    xruns,
+                    latency_ms: (MAX_BUFFER_SIZE as f32 / self.audio_state.sample_rate.load()) // TODO: add buffer size to audio_state...
+                        * 1000.0,
+                };
+                self.performance_monitor.update_metrics(metrics);
+            }
+
             _ => {}
         }
     }
 
     fn show_performance_window(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Performance Monitor")
+        egui::Window::new("Performance Monitor (TODO/WIP)")
             .open(&mut self.show_performance)
             .show(ctx, |ui| {
                 if let Some(metrics) = self.performance_monitor.get_current_metrics() {
@@ -943,6 +963,52 @@ impl YadawApp {
         }
     }
 
+    fn estimate_memory_usage(&self) -> usize {
+        let state = self.state.lock().unwrap();
+        let mut total = 0;
+
+        for track in &state.tracks {
+            for clip in &track.audio_clips {
+                total += clip.samples.len() * std::mem::size_of::<f32>();
+            }
+            for pattern in &track.patterns {
+                total += pattern.notes.len() * std::mem::size_of::<MidiNote>();
+            }
+        }
+
+        total
+    }
+
+    fn estimate_cpu_usage(&self) -> f32 {
+        // Simple estimation based on track count and playing state
+        let is_playing = self.audio_state.playing.load(Ordering::Relaxed);
+        let track_count = self.state.lock().unwrap().tracks.len();
+
+        if is_playing {
+            0.1 + (track_count as f32 * 0.05) // 5% per track + 10% base
+        } else {
+            0.05 // 5% idle
+        }
+    }
+
+    fn update_performance_metrics(&mut self) {
+        // Calculate current metrics
+        let cpu_usage = self.estimate_cpu_usage();
+        let memory_usage = self.estimate_memory_usage();
+
+        let metrics = PerformanceMetrics {
+            cpu_usage,
+            memory_usage,
+            disk_streaming_rate: 0.0, // TODO: Track actual disk I/O
+            audio_buffer_health: 1.0 - cpu_usage, // Simple approximation
+            plugin_processing_time: Duration::from_millis(0), // TODO: Track plugin time
+            xruns: 0,                 // TODO: Get from audio thread
+            latency_ms: (512.0 / self.audio_state.sample_rate.load()) * 1000.0,
+        };
+
+        self.performance_monitor.update_metrics(metrics);
+    }
+
     fn ctx(&self) -> &egui::Context {
         // This would need to be passed in or stored
         // For now, return a placeholder
@@ -978,6 +1044,8 @@ impl eframe::App for YadawApp {
 
         // Draw floating windows
         self.show_floating_windows(ctx);
+
+        self.update_performance_metrics(); //TODO: maybe reduce calls for performance (irony? or it's just overexaggerated)
 
         // Handle global shortcuts
         self.handle_global_shortcuts(ctx);

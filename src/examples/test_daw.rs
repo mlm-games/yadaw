@@ -26,9 +26,6 @@ fn main() {
 
     // Load some plugins
     {
-        let mut plugin_host = daw.plugin_host.write();
-        let plugins = plugin_host.get_available_plugins().to_vec();
-
         // Load reverb plugin
         if let Some(reverb) = plugins.iter().find(|p| p.name == "Reverb") {
             if let Ok(plugin_id) = plugin_host.load_plugin(reverb) {

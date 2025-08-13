@@ -58,7 +58,7 @@ impl DawCore {
         // MIDI processing would happen here
 
         // Process plugins
-        // TODO?
+        // TODO? or just redundant
 
         // Update performance metrics
         let processing_time = start_time.elapsed();

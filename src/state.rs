@@ -230,4 +230,9 @@ pub enum UIUpdate {
     TrackLevels(Vec<(f32, f32)>),
     MasterLevel(f32, f32),
     PushUndo(AppStateSnapshot),
+    PerformanceMetric {
+        cpu_usage: f32,
+        buffer_fill: f32,
+        xruns: usize,
+    },
 }
