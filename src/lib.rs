@@ -12,6 +12,7 @@ pub mod error;
 pub mod integration;
 pub mod level_meter;
 pub mod lv2_plugin_host;
+pub mod metering;
 pub mod midi_engine;
 pub mod mixer;
 pub mod performance;

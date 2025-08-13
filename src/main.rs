@@ -12,6 +12,7 @@ mod error;
 mod integration;
 mod level_meter;
 mod lv2_plugin_host;
+mod metering;
 mod midi_engine;
 mod mixer;
 mod performance;

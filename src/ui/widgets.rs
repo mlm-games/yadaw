@@ -1,4 +1,5 @@
 use super::*;
+use crate::metering::{draw_meter_bar, MeterData};
 
 // Custom reusable widgets
 
@@ -95,17 +96,15 @@ impl<'a> Knob<'a> {
 
 /// A VU meter widget
 pub struct VuMeter<'a> {
-    value: &'a f32,
-    peak: &'a f32,
+    data: &'a MeterData,
     vertical: bool,
     show_db: bool,
 }
 
 impl<'a> VuMeter<'a> {
-    pub fn new(value: &'a f32, peak: &'a f32) -> Self {
+    pub fn new(data: &'a MeterData) -> Self {
         Self {
-            value,
-            peak,
+            data,
             vertical: true,
             show_db: true,
         }
@@ -129,80 +128,16 @@ impl<'a> VuMeter<'a> {
         };
 
         let (response, painter) = ui.allocate_painter(size, egui::Sense::hover());
-        let rect = response.rect;
 
-        // Background
-        painter.rect_filled(rect, 2.0, egui::Color32::from_gray(20));
+        // Use the common drawing function
+        draw_meter_bar(&painter, response.rect, self.data, self.vertical);
 
-        // Convert to dB
-        let value_db = 20.0 * self.value.max(0.0001).log10();
-        let peak_db = 20.0 * self.peak.max(0.0001).log10();
-
-        // Map to position
-        let value_normalized = ((value_db + 60.0) / 60.0).clamp(0.0, 1.0);
-        let peak_normalized = ((peak_db + 60.0) / 60.0).clamp(0.0, 1.0);
-
-        // Draw meter
-        if self.vertical {
-            let value_y = rect.bottom() - value_normalized * rect.height();
-            let peak_y = rect.bottom() - peak_normalized * rect.height();
-
-            // Value bar
-            let value_rect =
-                egui::Rect::from_min_max(egui::pos2(rect.left(), value_y), rect.right_bottom());
-
-            let color = if value_db > -3.0 {
-                egui::Color32::from_rgb(255, 0, 0)
-            } else if value_db > -12.0 {
-                egui::Color32::from_rgb(255, 200, 0)
-            } else {
-                egui::Color32::from_rgb(0, 200, 0)
-            };
-
-            painter.rect_filled(value_rect, 0.0, color);
-
-            // Peak line
-            painter.line_segment(
-                [
-                    egui::pos2(rect.left(), peak_y),
-                    egui::pos2(rect.right(), peak_y),
-                ],
-                egui::Stroke::new(2.0, egui::Color32::YELLOW),
-            );
-        } else {
-            // Horizontal meter
-            let value_x = rect.left() + value_normalized * rect.width();
-            let peak_x = rect.left() + peak_normalized * rect.width();
-
-            let value_rect =
-                egui::Rect::from_min_max(rect.left_top(), egui::pos2(value_x, rect.bottom()));
-
-            let color = if value_db > -3.0 {
-                egui::Color32::from_rgb(255, 0, 0)
-            } else if value_db > -12.0 {
-                egui::Color32::from_rgb(255, 200, 0)
-            } else {
-                egui::Color32::from_rgb(0, 200, 0)
-            };
-
-            painter.rect_filled(value_rect, 0.0, color);
-
-            // Peak line
-            painter.line_segment(
-                [
-                    egui::pos2(peak_x, rect.top()),
-                    egui::pos2(peak_x, rect.bottom()),
-                ],
-                egui::Stroke::new(2.0, egui::Color32::YELLOW),
-            );
-        }
-
-        // Show dB value
+        // Show dB value on hover
         if self.show_db && response.hovered() {
             painter.text(
-                rect.center(),
+                response.rect.center(),
                 egui::Align2::CENTER_CENTER,
-                format!("{:.1} dB", value_db),
+                format!("{:.1} dB", self.data.peak_db()),
                 egui::FontId::default(),
                 egui::Color32::WHITE,
             );
