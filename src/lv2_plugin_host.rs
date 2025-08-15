@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use livi::event::LV2AtomSequence;
 use livi::{
@@ -117,8 +117,12 @@ impl LV2PluginHost {
             features: self.features.clone(),
             port_counts: *plugin.port_counts(),
             params,
-            midi_sequence: None,
+            midi_sequence: Some(LV2AtomSequence::new(&self.features, 4096)),
             control_port_indices,
+            empty_atom_in: LV2AtomSequence::new(&self.features, 1024),
+            atom_outputs: (0..plugin.port_counts().atom_sequence_outputs)
+                .map(|_| LV2AtomSequence::new(&self.features, 4096))
+                .collect(),
         })
     }
 }
@@ -130,6 +134,10 @@ pub struct LV2PluginInstance {
     params: Arc<DashMap<String, f32>>,
     midi_sequence: Option<LV2AtomSequence>,
     control_port_indices: HashMap<String, livi::PortIndex>,
+
+    // Pre-allocated for RT safety
+    empty_atom_in: LV2AtomSequence,
+    atom_outputs: Vec<LV2AtomSequence>,
 }
 
 impl LV2PluginInstance {
@@ -141,54 +149,54 @@ impl LV2PluginInstance {
         output_r: &mut [f32],
         samples: usize,
     ) -> Result<()> {
-        // Update control parameters using our mapping
+        // 1) Apply control inputs (param cache)
         for entry in self.params.iter() {
-            let symbol = entry.key();
-            let value = *entry.value();
-            if let Some(&port_index) = self.control_port_indices.get(symbol) {
-                self.instance.set_control_input(port_index, value);
+            if let Some(&port_index) = self.control_port_indices.get(entry.key()) {
+                self.instance.set_control_input(port_index, *entry.value());
             }
         }
 
-        // Prepare atom sequence inputs if needed (even if we don't have MIDI data)
-        let mut empty_atom_input = LV2AtomSequence::new(&self.features, 1024);
-
-        // Prepare atom sequence outputs if needed
-        let mut atom_outputs = Vec::new();
-        for _ in 0..self.port_counts.atom_sequence_outputs {
-            atom_outputs.push(LV2AtomSequence::new(&self.features, 4096));
+        // 2) Reset per-block atom buffers (RT-safe reuse)
+        self.empty_atom_in.clear();
+        for seq in self.atom_outputs.iter_mut() {
+            seq.clear_as_chunk();
         }
 
-        // Determine if we should use MIDI input or empty atom input
-        let has_midi_data = self.midi_sequence.is_some()
-            && !self.midi_sequence.as_ref().unwrap().iter().next().is_none();
+        let has_midi_data = self
+            .midi_sequence
+            .as_ref()
+            .map(|s| s.iter().next().is_some())
+            .unwrap_or(false);
         let needs_atom_input = self.port_counts.atom_sequence_inputs > 0;
 
-        // Build the complete port connections based on what the plugin needs
+        // 3) Build ports and run (no pre-run output mirroring)
         match (
             self.port_counts.audio_inputs,
             self.port_counts.audio_outputs,
             needs_atom_input,
             self.port_counts.atom_sequence_outputs,
         ) {
-            // No audio I/O, no atom I/O
+            // No audio/atom I/O
             (0, 0, false, 0) => {
                 let ports = EmptyPortConnections::new();
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
             }
-            // Mono in/out, no atom I/O
+
+            // Audio I/O without atom
             (1, 1, false, 0) => {
-                output_r.copy_from_slice(output_l);
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l].into_iter())
-                    .with_audio_outputs([output_l].into_iter());
+                    .with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
+                // Mirror mono to right only after successful run
+                if self.port_counts.audio_outputs == 1 {
+                    output_r[..samples].copy_from_slice(&output_l[..samples]);
+                }
             }
-            // Audio input only, no atom I/O
             (1, 0, false, 0) => {
                 let ports = EmptyPortConnections::new().with_audio_inputs([input_l].into_iter());
                 unsafe {
@@ -202,12 +210,14 @@ impl LV2PluginInstance {
                     self.instance.run(samples, ports)?;
                 }
             }
-            // Audio output only, no atom I/O
             (0, 1, false, 0) => {
-                output_r.copy_from_slice(output_l);
-                let ports = EmptyPortConnections::new().with_audio_outputs([output_l].into_iter());
+                let ports =
+                    EmptyPortConnections::new().with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
                     self.instance.run(samples, ports)?;
+                }
+                if self.port_counts.audio_outputs == 1 {
+                    output_r[..samples].copy_from_slice(&output_l[..samples]);
                 }
             }
             (0, 2, false, 0) => {
@@ -217,7 +227,6 @@ impl LV2PluginInstance {
                     self.instance.run(samples, ports)?;
                 }
             }
-            // Audio I/O, no atom I/O
             (1, 2, false, 0) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l].into_iter())
@@ -227,12 +236,14 @@ impl LV2PluginInstance {
                 }
             }
             (2, 1, false, 0) => {
-                output_r.copy_from_slice(output_l);
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l, input_r].into_iter())
-                    .with_audio_outputs([output_l].into_iter());
+                    .with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
                     self.instance.run(samples, ports)?;
+                }
+                if self.port_counts.audio_outputs == 1 {
+                    output_r[..samples].copy_from_slice(&output_l[..samples]);
                 }
             }
             (2, 2, false, 0) => {
@@ -243,12 +254,13 @@ impl LV2PluginInstance {
                     self.instance.run(samples, ports)?;
                 }
             }
-            // With atom sequence input but no atom outputs
+
+            // With atom input and no atom outputs: always pass an atom in (empty if no MIDI)
             (0, 0, true, 0) => {
                 let atom_in = if has_midi_data {
                     self.midi_sequence.as_ref().unwrap()
                 } else {
-                    &empty_atom_input
+                    &self.empty_atom_in
                 };
                 let ports =
                     EmptyPortConnections::new().with_atom_sequence_inputs(std::iter::once(atom_in));
@@ -260,7 +272,7 @@ impl LV2PluginInstance {
                 let atom_in = if has_midi_data {
                     self.midi_sequence.as_ref().unwrap()
                 } else {
-                    &empty_atom_input
+                    &self.empty_atom_in
                 };
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
@@ -270,25 +282,27 @@ impl LV2PluginInstance {
                 }
             }
             (1, 1, true, 0) => {
-                output_r.copy_from_slice(output_l);
                 let atom_in = if has_midi_data {
                     self.midi_sequence.as_ref().unwrap()
                 } else {
-                    &empty_atom_input
+                    &self.empty_atom_in
                 };
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
                     .with_audio_inputs([input_l].into_iter())
-                    .with_audio_outputs([output_l].into_iter());
+                    .with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
                     self.instance.run(samples, ports)?;
+                }
+                if self.port_counts.audio_outputs == 1 {
+                    output_r[..samples].copy_from_slice(&output_l[..samples]);
                 }
             }
             (1, 2, true, 0) => {
                 let atom_in = if has_midi_data {
                     self.midi_sequence.as_ref().unwrap()
                 } else {
-                    &empty_atom_input
+                    &self.empty_atom_in
                 };
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
@@ -299,25 +313,27 @@ impl LV2PluginInstance {
                 }
             }
             (2, 1, true, 0) => {
-                output_r.copy_from_slice(output_l);
                 let atom_in = if has_midi_data {
                     self.midi_sequence.as_ref().unwrap()
                 } else {
-                    &empty_atom_input
+                    &self.empty_atom_in
                 };
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
                     .with_audio_inputs([input_l, input_r].into_iter())
-                    .with_audio_outputs([output_l].into_iter());
+                    .with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
                     self.instance.run(samples, ports)?;
+                }
+                if self.port_counts.audio_outputs == 1 {
+                    output_r[..samples].copy_from_slice(&output_l[..samples]);
                 }
             }
             (2, 2, true, 0) => {
                 let atom_in = if has_midi_data {
                     self.midi_sequence.as_ref().unwrap()
                 } else {
-                    &empty_atom_input
+                    &self.empty_atom_in
                 };
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
@@ -327,7 +343,8 @@ impl LV2PluginInstance {
                     self.instance.run(samples, ports)?;
                 }
             }
-            // Cases with atom outputs - handle separately
+
+            // With atom outputs
             (_, _, _, atom_outs) if atom_outs > 0 => {
                 self.run_with_atom_outputs(
                     input_l,
@@ -335,15 +352,11 @@ impl LV2PluginInstance {
                     output_l,
                     output_r,
                     samples,
-                    &mut atom_outputs,
-                    if needs_atom_input {
-                        Some(&empty_atom_input)
-                    } else {
-                        None
-                    },
+                    needs_atom_input,
                     has_midi_data,
                 )?;
             }
+
             _ => {
                 return Err(anyhow!(
                     "Unsupported port configuration: {} inputs, {} outputs, {} atom outputs",
@@ -357,7 +370,6 @@ impl LV2PluginInstance {
         Ok(())
     }
 
-    // helper method to handle atom inputs
     fn run_with_atom_outputs(
         &mut self,
         input_l: &[f32],
@@ -365,43 +377,40 @@ impl LV2PluginInstance {
         output_l: &mut [f32],
         output_r: &mut [f32],
         samples: usize,
-        atom_outputs: &mut Vec<LV2AtomSequence>,
-        empty_atom_input: Option<&LV2AtomSequence>,
+        needs_atom_input: bool,
         has_midi_data: bool,
     ) -> Result<()> {
-        let needs_atom_input = self.port_counts.atom_sequence_inputs > 0;
-        let default_atom_sequence = LV2AtomSequence::new(&self.features, 0);
+        // Ensure chunk state for outputs
+        for seq in self.atom_outputs.iter_mut() {
+            seq.clear_as_chunk();
+        }
 
-        // Get the atom input to use
-        let atom_in = if needs_atom_input {
-            if has_midi_data && self.midi_sequence.is_some() {
-                self.midi_sequence.as_ref().unwrap()
+        let atom_in_opt = if needs_atom_input {
+            if has_midi_data {
+                self.midi_sequence.as_ref()
             } else {
-                empty_atom_input.ok_or_else(|| anyhow!("Need atom input but none provided"))?
+                Some(&self.empty_atom_in)
             }
         } else {
-            empty_atom_input.unwrap_or(&default_atom_sequence)
+            None
         };
 
-        // Handle all combinations by building the complete port connections
         match (
             self.port_counts.audio_inputs,
             self.port_counts.audio_outputs,
             needs_atom_input,
         ) {
-            // No audio, no MIDI, only atom outputs
             (0, 0, false) => {
-                let ports =
-                    EmptyPortConnections::new().with_atom_sequence_outputs(atom_outputs.iter_mut());
+                let ports = EmptyPortConnections::new()
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
             }
-            // Audio input only
             (1, 0, false) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
@@ -409,108 +418,111 @@ impl LV2PluginInstance {
             (2, 0, false) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l, input_r].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
             }
-            // Audio output only
             (0, 1, false) => {
-                output_r.copy_from_slice(output_l);
                 let ports = EmptyPortConnections::new()
-                    .with_audio_outputs([output_l].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_audio_outputs(std::iter::once(&mut *output_l))
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
+                }
+                if self.port_counts.audio_outputs == 1 {
+                    output_r[..samples].copy_from_slice(&output_l[..samples]);
                 }
             }
             (0, 2, false) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_outputs([output_l, output_r].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
             }
-            // Audio I/O combinations
             (1, 1, false) => {
-                output_r.copy_from_slice(output_l);
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l].into_iter())
-                    .with_audio_outputs([output_l].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_audio_outputs(std::iter::once(&mut *output_l))
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
+                }
+                if self.port_counts.audio_outputs == 1 {
+                    output_r[..samples].copy_from_slice(&output_l[..samples]);
                 }
             }
             (1, 2, false) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l].into_iter())
                     .with_audio_outputs([output_l, output_r].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
             }
             (2, 1, false) => {
-                output_r.copy_from_slice(output_l);
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l, input_r].into_iter())
-                    .with_audio_outputs([output_l].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_audio_outputs(std::iter::once(&mut *output_l))
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
+                }
+                if self.port_counts.audio_outputs == 1 {
+                    output_r[..samples].copy_from_slice(&output_l[..samples]);
                 }
             }
             (2, 2, false) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l, input_r].into_iter())
                     .with_audio_outputs([output_l, output_r].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
             }
+
             // With MIDI input
             (0, 0, true) => {
-                if let Some(midi_seq) = &self.midi_sequence {
-                    let ports = EmptyPortConnections::new()
-                        .with_atom_sequence_inputs(std::iter::once(midi_seq))
-                        .with_atom_sequence_outputs(atom_outputs.iter_mut());
-                    unsafe {
-                        self.instance.run(samples, ports)?;
-                    }
+                let atom_in = atom_in_opt.expect("atom input required");
+                let ports = EmptyPortConnections::new()
+                    .with_atom_sequence_inputs(std::iter::once(atom_in))
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
+                unsafe {
+                    self.instance.run(samples, ports)?;
                 }
             }
             (0, 2, true) => {
-                if let Some(midi_seq) = &self.midi_sequence {
-                    let ports = EmptyPortConnections::new()
-                        .with_atom_sequence_inputs(std::iter::once(midi_seq))
-                        .with_audio_outputs([output_l, output_r].into_iter())
-                        .with_atom_sequence_outputs(atom_outputs.iter_mut());
-                    unsafe {
-                        self.instance.run(samples, ports)?;
-                    }
+                let atom_in = atom_in_opt.expect("atom input required");
+                let ports = EmptyPortConnections::new()
+                    .with_atom_sequence_inputs(std::iter::once(atom_in))
+                    .with_audio_outputs([output_l, output_r].into_iter())
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
+                unsafe {
+                    self.instance.run(samples, ports)?;
                 }
             }
             (1, 2, true) => {
-                if let Some(midi_seq) = &self.midi_sequence {
-                    let ports = EmptyPortConnections::new()
-                        .with_atom_sequence_inputs(std::iter::once(midi_seq))
-                        .with_audio_inputs([input_l].into_iter())
-                        .with_audio_outputs([output_l, output_r].into_iter())
-                        .with_atom_sequence_outputs(atom_outputs.iter_mut());
-                    unsafe {
-                        self.instance.run(samples, ports)?;
-                    }
+                let atom_in = atom_in_opt.expect("atom input required");
+                let ports = EmptyPortConnections::new()
+                    .with_atom_sequence_inputs(std::iter::once(atom_in))
+                    .with_audio_inputs([input_l].into_iter())
+                    .with_audio_outputs([output_l, output_r].into_iter())
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
+                unsafe {
+                    self.instance.run(samples, ports)?;
                 }
             }
             (2, 2, true) => {
+                let atom_in = atom_in_opt.expect("atom input required");
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
                     .with_audio_inputs([input_l, input_r].into_iter())
                     .with_audio_outputs([output_l, output_r].into_iter())
-                    .with_atom_sequence_outputs(atom_outputs.iter_mut());
+                    .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
                     self.instance.run(samples, ports)?;
                 }
@@ -536,8 +548,12 @@ impl LV2PluginInstance {
     }
 
     pub fn prepare_midi_events(&mut self, notes: &[(u8, u8, i64)]) {
-        // notes: Vec of (pitch, velocity, time_in_frames)
-        let mut sequence = LV2AtomSequence::new(&self.features, 4096);
+        // Reuse pre-allocated LV2AtomSequence
+        let mut sequence = self
+            .midi_sequence
+            .take()
+            .unwrap_or_else(|| LV2AtomSequence::new(&self.features, 4096));
+        sequence.clear();
 
         for &(pitch, velocity, time) in notes {
             let midi_data = [0x90, pitch, velocity]; // Note On
