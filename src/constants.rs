@@ -69,3 +69,4 @@ pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg"];
 
 // Others
 pub const MIDI_TIMING_SAMPLE_RATE: f32 = 44100.0; // Might need to change later
+pub const DEBUG_PLUGIN_AUDIO: bool = true;

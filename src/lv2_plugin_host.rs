@@ -112,6 +112,17 @@ impl LV2PluginHost {
             }
         }
 
+        if cfg!(debug_assertions) {
+            println!(
+                "[LV2][instantiate] {} | audio_in={} audio_out={} atom_in={} atom_out={}",
+                plugin.uri(),
+                plugin.port_counts().audio_inputs,
+                plugin.port_counts().audio_outputs,
+                plugin.port_counts().atom_sequence_inputs,
+                plugin.port_counts().atom_sequence_outputs
+            );
+        }
+
         Ok(LV2PluginInstance {
             instance,
             features: self.features.clone(),
@@ -180,7 +191,10 @@ impl LV2PluginInstance {
             (0, 0, false, 0) => {
                 let ports = EmptyPortConnections::new();
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
 
@@ -190,7 +204,10 @@ impl LV2PluginInstance {
                     .with_audio_inputs([input_l].into_iter())
                     .with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
                 // Mirror mono to right only after successful run
                 if self.port_counts.audio_outputs == 1 {
@@ -200,21 +217,30 @@ impl LV2PluginInstance {
             (1, 0, false, 0) => {
                 let ports = EmptyPortConnections::new().with_audio_inputs([input_l].into_iter());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (2, 0, false, 0) => {
                 let ports =
                     EmptyPortConnections::new().with_audio_inputs([input_l, input_r].into_iter());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (0, 1, false, 0) => {
                 let ports =
                     EmptyPortConnections::new().with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
                 if self.port_counts.audio_outputs == 1 {
                     output_r[..samples].copy_from_slice(&output_l[..samples]);
@@ -222,17 +248,23 @@ impl LV2PluginInstance {
             }
             (0, 2, false, 0) => {
                 let ports = EmptyPortConnections::new()
-                    .with_audio_outputs([output_l, output_r].into_iter());
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (1, 2, false, 0) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l].into_iter())
-                    .with_audio_outputs([output_l, output_r].into_iter());
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (2, 1, false, 0) => {
@@ -240,7 +272,10 @@ impl LV2PluginInstance {
                     .with_audio_inputs([input_l, input_r].into_iter())
                     .with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
                 if self.port_counts.audio_outputs == 1 {
                     output_r[..samples].copy_from_slice(&output_l[..samples]);
@@ -249,9 +284,12 @@ impl LV2PluginInstance {
             (2, 2, false, 0) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l, input_r].into_iter())
-                    .with_audio_outputs([output_l, output_r].into_iter());
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
 
@@ -265,7 +303,10 @@ impl LV2PluginInstance {
                 let ports =
                     EmptyPortConnections::new().with_atom_sequence_inputs(std::iter::once(atom_in));
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (0, 2, true, 0) => {
@@ -276,9 +317,12 @@ impl LV2PluginInstance {
                 };
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
-                    .with_audio_outputs([output_l, output_r].into_iter());
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (1, 1, true, 0) => {
@@ -292,7 +336,10 @@ impl LV2PluginInstance {
                     .with_audio_inputs([input_l].into_iter())
                     .with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
                 if self.port_counts.audio_outputs == 1 {
                     output_r[..samples].copy_from_slice(&output_l[..samples]);
@@ -307,9 +354,12 @@ impl LV2PluginInstance {
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
                     .with_audio_inputs([input_l].into_iter())
-                    .with_audio_outputs([output_l, output_r].into_iter());
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (2, 1, true, 0) => {
@@ -323,7 +373,10 @@ impl LV2PluginInstance {
                     .with_audio_inputs([input_l, input_r].into_iter())
                     .with_audio_outputs(std::iter::once(&mut *output_l));
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
                 if self.port_counts.audio_outputs == 1 {
                     output_r[..samples].copy_from_slice(&output_l[..samples]);
@@ -338,9 +391,12 @@ impl LV2PluginInstance {
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
                     .with_audio_inputs([input_l, input_r].into_iter())
-                    .with_audio_outputs([output_l, output_r].into_iter());
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
 
@@ -404,7 +460,10 @@ impl LV2PluginInstance {
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (1, 0, false) => {
@@ -412,7 +471,10 @@ impl LV2PluginInstance {
                     .with_audio_inputs([input_l].into_iter())
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (2, 0, false) => {
@@ -420,7 +482,10 @@ impl LV2PluginInstance {
                     .with_audio_inputs([input_l, input_r].into_iter())
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (0, 1, false) => {
@@ -428,7 +493,10 @@ impl LV2PluginInstance {
                     .with_audio_outputs(std::iter::once(&mut *output_l))
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
                 if self.port_counts.audio_outputs == 1 {
                     output_r[..samples].copy_from_slice(&output_l[..samples]);
@@ -436,10 +504,13 @@ impl LV2PluginInstance {
             }
             (0, 2, false) => {
                 let ports = EmptyPortConnections::new()
-                    .with_audio_outputs([output_l, output_r].into_iter())
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter())
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (1, 1, false) => {
@@ -448,7 +519,10 @@ impl LV2PluginInstance {
                     .with_audio_outputs(std::iter::once(&mut *output_l))
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
                 if self.port_counts.audio_outputs == 1 {
                     output_r[..samples].copy_from_slice(&output_l[..samples]);
@@ -457,10 +531,13 @@ impl LV2PluginInstance {
             (1, 2, false) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l].into_iter())
-                    .with_audio_outputs([output_l, output_r].into_iter())
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter())
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (2, 1, false) => {
@@ -469,7 +546,10 @@ impl LV2PluginInstance {
                     .with_audio_outputs(std::iter::once(&mut *output_l))
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
                 if self.port_counts.audio_outputs == 1 {
                     output_r[..samples].copy_from_slice(&output_l[..samples]);
@@ -478,10 +558,13 @@ impl LV2PluginInstance {
             (2, 2, false) => {
                 let ports = EmptyPortConnections::new()
                     .with_audio_inputs([input_l, input_r].into_iter())
-                    .with_audio_outputs([output_l, output_r].into_iter())
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter())
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
 
@@ -492,17 +575,23 @@ impl LV2PluginInstance {
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (0, 2, true) => {
                 let atom_in = atom_in_opt.expect("atom input required");
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
-                    .with_audio_outputs([output_l, output_r].into_iter())
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter())
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (1, 2, true) => {
@@ -510,10 +599,13 @@ impl LV2PluginInstance {
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
                     .with_audio_inputs([input_l].into_iter())
-                    .with_audio_outputs([output_l, output_r].into_iter())
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter())
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             (2, 2, true) => {
@@ -521,10 +613,13 @@ impl LV2PluginInstance {
                 let ports = EmptyPortConnections::new()
                     .with_atom_sequence_inputs(std::iter::once(atom_in))
                     .with_audio_inputs([input_l, input_r].into_iter())
-                    .with_audio_outputs([output_l, output_r].into_iter())
+                    .with_audio_outputs([&mut *output_l, &mut *output_r].into_iter())
                     .with_atom_sequence_outputs(self.atom_outputs.iter_mut());
                 unsafe {
-                    self.instance.run(samples, ports)?;
+                    if let Err(e) = self.instance.run(samples, ports) {
+                        eprintln!("[LV2] run() error: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
             _ => {
@@ -545,6 +640,26 @@ impl LV2PluginInstance {
 
     pub fn get_parameter(&self, symbol: &str) -> Option<f32> {
         self.params.get(symbol).map(|v| *v)
+    }
+
+    pub fn prepare_midi_raw_events(&mut self, events: &[(u8, u8, u8, i64)]) {
+        // Reuse pre-allocated sequence
+        let mut sequence = self
+            .midi_sequence
+            .take()
+            .unwrap_or_else(|| LV2AtomSequence::new(&self.features, 4096));
+        sequence.clear();
+
+        for &(status, data1, data2, time_in_frames) in events {
+            let midi_data = [status, data1, data2];
+            let _ = sequence.push_midi_event::<3>(
+                time_in_frames,
+                self.features.midi_urid(),
+                &midi_data,
+            );
+        }
+
+        self.midi_sequence = Some(sequence);
     }
 
     pub fn prepare_midi_events(&mut self, notes: &[(u8, u8, i64)]) {

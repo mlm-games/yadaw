@@ -2,8 +2,8 @@ use crate::audio_state::{AudioState, RealtimeCommand, TrackSnapshot};
 use crate::audio_utils::calculate_stereo_gains;
 use crate::automation_lane::AutomationLaneWidget;
 use crate::constants::{
-    MAX_BUFFER_SIZE, PREVIEW_NOTE_AMPLITUDE, PREVIEW_NOTE_DURATION, RECORDING_BUFFER_SIZE,
-    SINE_WAVE_AMPLITUDE,
+    DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_AMPLITUDE, PREVIEW_NOTE_DURATION,
+    RECORDING_BUFFER_SIZE, SINE_WAVE_AMPLITUDE,
 };
 use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
 use crate::midi_utils::{generate_sine_for_note, MidiNoteUtils};
@@ -494,7 +494,14 @@ impl AudioEngine {
                 }
 
                 // Process plugins
-                process_track_plugins(track, processor, frames_to_process);
+                process_track_plugins(
+                    track,
+                    processor,
+                    frames_to_process,
+                    current_position,
+                    bpm,
+                    self.sample_rate,
+                );
 
                 // Calculate levels for meters
                 let left_peak = processor.input_buffer_l[..frames_to_process]
@@ -686,24 +693,63 @@ fn process_preview_note(
     }
 }
 
-fn process_track_plugins(track: &TrackSnapshot, processor: &mut TrackProcessor, num_frames: usize) {
-    // If no plugins, nothing to do
-    if processor.plugins.is_empty() {
-        return;
+fn build_block_midi_events(
+    pattern: &crate::audio_state::PatternSnapshot,
+    block_start_samples: f64,
+    frames: usize,
+    sample_rate: f64,
+    bpm: f32,
+) -> Vec<(u8, u8, u8, i64)> {
+    let block_end_samples = block_start_samples + frames as f64;
+
+    // Helper to convert beats to absolute samples at project sample rate
+    let beats_to_samples = |beats: f64| (beats * 60.0 / bpm as f64) * sample_rate;
+
+    let mut events = Vec::new();
+
+    for note in &pattern.notes {
+        let note_on_abs = beats_to_samples(note.start);
+        let note_off_abs = beats_to_samples(note.start + note.duration);
+
+        // Note On inside this block?
+        if note_on_abs >= block_start_samples && note_on_abs < block_end_samples {
+            let frame = (note_on_abs - block_start_samples) as i64;
+            events.push((0x90, note.pitch, note.velocity, frame));
+        }
+
+        // Note Off inside this block?
+        if note_off_abs >= block_start_samples && note_off_abs < block_end_samples {
+            let frame = (note_off_abs - block_start_samples) as i64;
+            // Note Off: status 0x80, velocity 0
+            events.push((0x80, note.pitch, 0, frame));
+        }
     }
 
-    // Prepare MIDI events for MIDI tracks
-    let midi_notes: Vec<(u8, u8, i64)> = if track.is_midi {
-        processor
-            .active_notes
-            .iter()
-            .map(|note| (note.pitch, note.velocity, 0i64))
-            .collect()
+    // Sort by time_in_frames just in case
+    events.sort_by_key(|e| e.3);
+    events
+}
+
+fn process_track_plugins(
+    track: &crate::audio_state::TrackSnapshot,
+    processor: &mut TrackProcessor,
+    num_frames: usize,
+    block_start_samples: f64,
+    bpm: f32,
+    sample_rate: f64,
+) {
+    // Prep. MIDI for this block (Note On/Off with proper frame offsets)
+    let midi_events: Vec<(u8, u8, u8, i64)> = if track.is_midi {
+        if let Some(pattern) = track.patterns.first() {
+            build_block_midi_events(pattern, block_start_samples, num_frames, sample_rate, bpm)
+        } else {
+            Vec::new()
+        }
     } else {
         Vec::new()
     };
 
-    // Clear output buffers at the start
+    // Clear output buffers for plugin chain
     processor.output_buffer_l[..num_frames].fill(0.0);
     processor.output_buffer_r[..num_frames].fill(0.0);
 
@@ -714,19 +760,28 @@ fn process_track_plugins(track: &TrackSnapshot, processor: &mut TrackProcessor, 
 
         if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
             if let Some(instance) = &mut plugin.instance {
-                // For the first plugin in chain, prepare MIDI if needed
-                if plugin_idx == 0 && !midi_notes.is_empty() {
-                    instance.prepare_midi_events(&midi_notes);
+                // First plugin: feed MIDI (or clear)
+                if plugin_idx == 0 && track.is_midi {
+                    if !midi_events.is_empty() {
+                        instance.prepare_midi_raw_events(&midi_events);
+                        if DEBUG_PLUGIN_AUDIO {
+                            debug_print_midi_events(&plugin_desc.uri, &midi_events);
+                        }
+                    } else {
+                        instance.clear_midi_events();
+                        if DEBUG_PLUGIN_AUDIO {
+                            println!("[LV2][{}] MIDI: cleared (no events)", plugin_desc.uri);
+                        }
+                    }
                 } else {
-                    // Clear MIDI for subsequent plugins
                     instance.clear_midi_events();
                 }
 
-                // Clear output buffers before each plugin processes
+                // Zero plugin outputs before run
                 processor.output_buffer_l[..num_frames].fill(0.0);
                 processor.output_buffer_r[..num_frames].fill(0.0);
 
-                // Process audio
+                // Run plugin
                 match instance.process(
                     &processor.input_buffer_l[..num_frames],
                     &processor.input_buffer_r[..num_frames],
@@ -735,15 +790,22 @@ fn process_track_plugins(track: &TrackSnapshot, processor: &mut TrackProcessor, 
                     num_frames,
                 ) {
                     Ok(_) => {
-                        // Success - copy output to input for next plugin
+                        if DEBUG_PLUGIN_AUDIO {
+                            debug_print_output_peak(
+                                &plugin_desc.uri,
+                                &processor.output_buffer_l[..num_frames],
+                                &processor.output_buffer_r[..num_frames],
+                            );
+                        }
+                        // Pass plugin output to next stage (copy output->input)
                         processor.input_buffer_l[..num_frames]
                             .copy_from_slice(&processor.output_buffer_l[..num_frames]);
                         processor.input_buffer_r[..num_frames]
                             .copy_from_slice(&processor.output_buffer_r[..num_frames]);
                     }
                     Err(e) => {
-                        // Error - audio remains in input buffers
-                        eprintln!("Plugin {} processing error: {}", plugin_desc.uri, e);
+                        eprintln!("[LV2][{}] run error: {}", plugin_desc.uri, e);
+                        // Keep input buffers unchanged so the chain continues
                     }
                 }
             }
@@ -772,4 +834,34 @@ fn apply_automation(track: &TrackSnapshot, processor: &mut TrackProcessor, curre
             }
         }
     }
+}
+
+fn debug_print_midi_events(uri: &str, events: &[(u8, u8, u8, i64)]) {
+    if !DEBUG_PLUGIN_AUDIO {
+        return;
+    }
+    if events.is_empty() {
+        println!("[LV2][{}] MIDI: none this block", uri);
+        return;
+    }
+    let show: Vec<_> = events.iter().take(8).copied().collect();
+    println!(
+        "[LV2][{}] MIDI: {} events (showing {}): {:?}",
+        uri,
+        events.len(),
+        show.len(),
+        show.iter()
+            .map(|(st, p, v, t)| (*st, *p, *v, *t))
+            .collect::<Vec<_>>()
+    );
+}
+
+// Compute and print output peaks per plugin run
+fn debug_print_output_peak(uri: &str, left: &[f32], right: &[f32]) {
+    if !DEBUG_PLUGIN_AUDIO {
+        return;
+    }
+    let lp = left.iter().fold(0.0_f32, |a, &s| a.max(s.abs()));
+    let rp = right.iter().fold(0.0_f32, |a, &s| a.max(s.abs()));
+    println!("[LV2][{}] OUT peak: L={:.6} R={:.6}", uri, lp, rp);
 }

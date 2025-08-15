@@ -142,3 +142,35 @@ impl PluginParameterAccess for crate::state::Track {
             .map(|param| param.value)
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PluginKind {
+    Instrument,
+    Effect,
+    MidiFx,
+    Unknown,
+}
+
+pub fn classify_plugin_uri(uri: &str) -> Option<PluginKind> {
+    let host_lock = PLUGIN_HOST.lock();
+    let host = host_lock.as_ref()?;
+    host.get_available_plugins()
+        .iter()
+        .find(|p| p.uri == uri)
+        .map(|info| {
+            // - Instruments: is_instrument OR (has_midi && audio_outputs > 0 && audio_inputs == 0)
+            // - Effects: audio_inputs > 0 && audio_outputs > 0
+            // - MIDI FX: has_midi && (audio_inputs == 0 && audio_outputs == 0)
+            if info.is_instrument
+                || (info.has_midi && info.audio_outputs > 0 && info.audio_inputs == 0)
+            {
+                PluginKind::Instrument
+            } else if info.audio_inputs > 0 && info.audio_outputs > 0 {
+                PluginKind::Effect
+            } else if info.has_midi && info.audio_inputs == 0 && info.audio_outputs == 0 {
+                PluginKind::MidiFx
+            } else {
+                PluginKind::Unknown
+            }
+        })
+}

@@ -650,19 +650,25 @@ impl PluginBrowserDialog {
                 // Footer
                 ui.horizontal(|ui| {
                     let can_add = self.selected_plugin.is_some();
-                    if ui
-                        .add_enabled(can_add, egui::Button::new("Add to Track"))
-                        .clicked()
-                    {
+                    if ui.add_enabled(can_add, egui::Button::new("Add to Track")).clicked() {
                         if let Some(idx) = self.selected_plugin {
                             if let Some(plugin) = app.available_plugins.get(idx) {
-                                let track_id = app
-                                    .selected_track_for_plugin
-                                    .take()
-                                    .unwrap_or(app.selected_track);
-                                let _ = app
-                                    .command_tx
-                                    .send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
+                                // Check track type vs plugin kind
+                                let kind = crate::plugin::classify_plugin_uri(&plugin.uri).unwrap_or(crate::plugin::PluginKind::Unknown);
+                                let track_id = app.selected_track_for_plugin.take().unwrap_or(app.selected_track);
+
+                                // Peek current track type
+                                let is_midi = {
+                                    let state = app.state.lock().unwrap();
+                                    state.tracks.get(track_id).map(|t| t.is_midi).unwrap_or(false)
+                                };
+
+                                if is_midi && matches!(kind, crate::plugin::PluginKind::Effect) {
+                                    app.dialogs.show_message("You are adding an effect plugin to a MIDI track. It will not output audio unless the track is fed with audio. Consider adding it to an audio track or a bus.");
+                                }
+
+                                // Proceed with adding anyway (can choose)
+                                let _ = app.command_tx.send(crate::state::AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
                                 self.closed = true;
                             }
                         }
