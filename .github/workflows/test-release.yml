@@ -1,0 +1,110 @@
+name: Release binaries (switch to cargo-dist later)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-bin-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BIN_NAME: velodown   # TODO: SET WHEN COPYING
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build and package
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Determine target triple
+        id: triple
+        shell: bash
+        run: |
+          echo "target=$(rustc -vV | sed -n 's/^host: //p')" >> "$GITHUB_OUTPUT"
+
+      - name: Package (tar.gz) [Linux/macOS]
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ steps.triple.outputs.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euxo pipefail
+          VER="${TAG#v}"
+          OUTDIR="dist/${BIN_NAME}-${VER}-${TARGET}"
+          mkdir -p "$OUTDIR"
+          cp "target/release/${BIN_NAME}" "$OUTDIR/"
+          for f in README* LICENSE* CHANGELOG*; do [ -e "$f" ] && cp "$f" "$OUTDIR/" || true; done
+          tar -C "dist" -czf "${OUTDIR}.tar.gz" "$(basename "$OUTDIR")"
+
+      - name: Package (zip) [Windows]
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = $env:TAG.Substring(1)  # strip leading 'v'
+          $host = & rustc -vV | Select-String '^host:' | ForEach-Object { $_.ToString().Split()[1] }
+          $out = "dist/$($env:BIN_NAME)-$ver-$host"
+          New-Item -ItemType Directory -Path $out | Out-Null
+          Copy-Item "target\release\$($env:BIN_NAME).exe" "$out\"
+          foreach ($f in @("README*", "LICENSE*", "CHANGELOG*")) {
+            Get-ChildItem $f -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName $out\ }
+          }
+          Compress-Archive -Path "$out\*" -DestinationPath "$out.zip"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: |
+            dist/**/*.tar.gz
+            dist/**/*.zip
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -print0 | xargs -0 -n1 shasum -a 256 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create/Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/**/*.tar.gz
+            dist/**/*.zip
+            dist/SHA256SUMS.txt
