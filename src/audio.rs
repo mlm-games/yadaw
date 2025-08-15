@@ -345,14 +345,15 @@ impl AudioEngine {
                     let host_lock = PLUGIN_HOST.lock();
                     if let Some(host) = host_lock.as_ref() {
                         for plugin_desc in &track.plugin_chain {
-                            let instance = host.instantiate_plugin(&plugin_desc.uri).ok();
+                            let mut instance = host.instantiate_plugin(&plugin_desc.uri).ok();
 
-                            // Set initial parameter values
-                            if let Some(inst) = &instance {
+                            if let Some(inst) = instance.as_mut() {
                                 for entry in plugin_desc.params.iter() {
                                     inst.get_params()
                                         .insert(entry.key().clone(), *entry.value());
                                 }
+                                // Bind the instance's param cache to the same Arc as the snapshot
+                                inst.set_params_arc(plugin_desc.params.clone());
                             }
 
                             let plugin_processor = PluginProcessor {
@@ -713,11 +714,6 @@ fn process_track_plugins(track: &TrackSnapshot, processor: &mut TrackProcessor, 
 
         if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
             if let Some(instance) = &mut plugin.instance {
-                // Update parameters - make sure they're actually applied
-                for entry in plugin_desc.params.iter() {
-                    instance.set_parameter(entry.key(), *entry.value());
-                }
-
                 // For the first plugin in chain, prepare MIDI if needed
                 if plugin_idx == 0 && !midi_notes.is_empty() {
                     instance.prepare_midi_events(&midi_notes);

@@ -572,4 +572,8 @@ impl LV2PluginInstance {
     pub fn get_params(&self) -> Arc<DashMap<String, f32>> {
         self.params.clone()
     }
+
+    pub fn set_params_arc(&mut self, params: Arc<DashMap<String, f32>>) {
+        self.params = params;
+    }
 }
