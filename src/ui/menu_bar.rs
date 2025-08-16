@@ -564,7 +564,7 @@ fn draw_keyboard_shortcuts_static(ui: &mut egui::Ui) {
         ui.heading("View");
         ui.label("Ctrl++ - Zoom In");
         ui.label("Ctrl+- - Zoom Out");
-        ui.label("M - Toggle Mixer");
+        ui.label("Ctrl+M - Toggle Mixer");
     });
 }
 

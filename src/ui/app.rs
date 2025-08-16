@@ -842,7 +842,7 @@ impl YadawApp {
             }
 
             // View shortcuts
-            if i.key_pressed(egui::Key::M) && !i.modifiers.ctrl {
+            if i.key_pressed(egui::Key::M) && i.modifiers.ctrl {
                 self.mixer_ui.toggle_visibility();
             }
         });
