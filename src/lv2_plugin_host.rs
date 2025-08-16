@@ -209,10 +209,7 @@ impl LV2PluginInstance {
                         return Err(e.into());
                     }
                 }
-                // Mirror mono to right only after successful run
-                if self.port_counts.audio_outputs == 1 {
-                    output_r[..samples].copy_from_slice(&output_l[..samples]);
-                }
+                output_r[..samples].copy_from_slice(&output_l[..samples]);
             }
             (1, 0, false, 0) => {
                 let ports = EmptyPortConnections::new().with_audio_inputs([input_l].into_iter());
@@ -242,9 +239,7 @@ impl LV2PluginInstance {
                         return Err(e.into());
                     }
                 }
-                if self.port_counts.audio_outputs == 1 {
-                    output_r[..samples].copy_from_slice(&output_l[..samples]);
-                }
+                output_r[..samples].copy_from_slice(&output_l[..samples]);
             }
             (0, 2, false, 0) => {
                 let ports = EmptyPortConnections::new()
@@ -277,9 +272,7 @@ impl LV2PluginInstance {
                         return Err(e.into());
                     }
                 }
-                if self.port_counts.audio_outputs == 1 {
-                    output_r[..samples].copy_from_slice(&output_l[..samples]);
-                }
+                output_r[..samples].copy_from_slice(&output_l[..samples]);
             }
             (2, 2, false, 0) => {
                 let ports = EmptyPortConnections::new()
@@ -341,9 +334,7 @@ impl LV2PluginInstance {
                         return Err(e.into());
                     }
                 }
-                if self.port_counts.audio_outputs == 1 {
-                    output_r[..samples].copy_from_slice(&output_l[..samples]);
-                }
+                output_r[..samples].copy_from_slice(&output_l[..samples]);
             }
             (1, 2, true, 0) => {
                 let atom_in = if has_midi_data {
@@ -378,9 +369,7 @@ impl LV2PluginInstance {
                         return Err(e.into());
                     }
                 }
-                if self.port_counts.audio_outputs == 1 {
-                    output_r[..samples].copy_from_slice(&output_l[..samples]);
-                }
+                output_r[..samples].copy_from_slice(&output_l[..samples]);
             }
             (2, 2, true, 0) => {
                 let atom_in = if has_midi_data {
@@ -498,9 +487,7 @@ impl LV2PluginInstance {
                         return Err(e.into());
                     }
                 }
-                if self.port_counts.audio_outputs == 1 {
-                    output_r[..samples].copy_from_slice(&output_l[..samples]);
-                }
+                output_r[..samples].copy_from_slice(&output_l[..samples]);
             }
             (0, 2, false) => {
                 let ports = EmptyPortConnections::new()
@@ -524,9 +511,7 @@ impl LV2PluginInstance {
                         return Err(e.into());
                     }
                 }
-                if self.port_counts.audio_outputs == 1 {
-                    output_r[..samples].copy_from_slice(&output_l[..samples]);
-                }
+                output_r[..samples].copy_from_slice(&output_l[..samples]);
             }
             (1, 2, false) => {
                 let ports = EmptyPortConnections::new()
@@ -551,9 +536,7 @@ impl LV2PluginInstance {
                         return Err(e.into());
                     }
                 }
-                if self.port_counts.audio_outputs == 1 {
-                    output_r[..samples].copy_from_slice(&output_l[..samples]);
-                }
+                output_r[..samples].copy_from_slice(&output_l[..samples]);
             }
             (2, 2, false) => {
                 let ports = EmptyPortConnections::new()
