@@ -256,14 +256,21 @@ impl PianoRollView {
         {
             let state = app.state.lock().unwrap();
             if state.playing {
-                let current_beat = state.position_to_beats(app.audio_state.get_position());
-                let pattern_beat = current_beat
-                    % state
-                        .tracks
-                        .get(app.selected_track)
-                        .and_then(|t| t.patterns.get(self.selected_pattern))
-                        .map(|p| p.length)
-                        .unwrap_or(4.0);
+                let position = app.audio_state.get_position();
+                let sample_rate = app.audio_state.sample_rate.load();
+                let bpm = app.audio_state.bpm.load();
+                let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
+
+                let pattern_beat = if let Some(track) = state.tracks.get(app.selected_track) {
+                    if let Some(pattern) = track.patterns.get(self.selected_pattern) {
+                        current_beat % pattern.length
+                    } else {
+                        current_beat % 4.0
+                    }
+                } else {
+                    current_beat % 4.0
+                };
+
                 ui.ctx().memory_mut(|mem| {
                     mem.data
                         .insert_temp(egui::Id::new("current_beat"), pattern_beat);

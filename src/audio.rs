@@ -48,6 +48,8 @@ struct TrackProcessor {
     automated_volume: f32,
     automated_pan: f32,
     automated_plugin_params: DashMap<(usize, String), f32>,
+    pattern_loop_count: u32,
+    notes_triggered_this_loop: Vec<u8>,
 }
 
 struct PluginProcessor {
@@ -220,6 +222,13 @@ pub fn run_audio_thread(
         // Check if playing
         if !engine.audio_state.playing.load(Ordering::Relaxed) {
             engine.midi_panic();
+
+            // Reset pattern positions when stopped
+            for processor in &mut engine.track_processors {
+                processor.last_pattern_position = 0.0;
+                processor.pattern_loop_count = 0;
+                processor.notes_triggered_this_loop.clear();
+            }
             return;
         }
 
@@ -335,6 +344,8 @@ impl AudioEngine {
                 automated_volume: f32::NAN,
                 automated_pan: f32::NAN,
                 automated_plugin_params: DashMap::new(),
+                pattern_loop_count: 0,
+                notes_triggered_this_loop: Vec::new(),
             });
         }
 
@@ -565,19 +576,61 @@ impl AudioEngine {
     }
 
     fn midi_panic(&mut self) {
-        // FIXME (Doesn't work): Send All Notes Off and All Sound Off on all channels to all plugins
-        let mut events: Vec<(u8, u8, u8, i64)> = Vec::new();
-        for ch in 0u8..16u8 {
-            events.push((0xB0 | ch, 123, 0, 0)); // All Notes Off
-            events.push((0xB0 | ch, 120, 0, 0)); // All Sound Off
-        }
+        for processor in self.track_processors.iter_mut() {
+            // Send note off for all active notes
+            if !processor.active_notes.is_empty() {
+                let mut events: Vec<(u8, u8, u8, i64)> = Vec::new();
 
-        for tp in self.track_processors.iter_mut() {
-            // Clear active notes in our tracker
-            tp.active_notes.clear();
-            for plug in tp.plugins.iter_mut() {
-                if let Some(inst) = &mut plug.instance {
-                    inst.prepare_midi_raw_events(&events);
+                for note in &processor.active_notes {
+                    events.push((0x80, note.pitch, 0, 0)); // Note off at frame 0
+                }
+
+                // Send to all plugins in the chain
+                for plugin in processor.plugins.iter_mut() {
+                    if let Some(instance) = &mut plugin.instance {
+                        instance.prepare_midi_raw_events(&events);
+                        // Process a small buffer to ensure the events are handled
+                        let mut dummy_l = vec![0.0f32; 64];
+                        let mut dummy_r = vec![0.0f32; 64];
+                        let _ = instance.process(
+                            &mut dummy_l.clone(),
+                            &mut dummy_r.clone(),
+                            &mut dummy_l,
+                            &mut dummy_r,
+                            64,
+                        );
+                    }
+                }
+            }
+
+            // Clear state
+            processor.active_notes.clear();
+            processor.last_pattern_position = 0.0;
+            processor.pattern_loop_count = 0;
+            processor.notes_triggered_this_loop.clear();
+
+            // Send All Notes Off and All Sound Off
+            let panic_events: Vec<(u8, u8, u8, i64)> = (0..16)
+                .flat_map(|ch| {
+                    vec![
+                        (0xB0 | ch, 123, 0, 0), // All Notes Off
+                        (0xB0 | ch, 120, 0, 0), // All Sound Off
+                    ]
+                })
+                .collect();
+
+            for plugin in processor.plugins.iter_mut() {
+                if let Some(instance) = &mut plugin.instance {
+                    instance.prepare_midi_raw_events(&panic_events);
+                    let mut dummy_l = vec![0.0f32; 64];
+                    let mut dummy_r = vec![0.0f32; 64];
+                    let _ = instance.process(
+                        &mut dummy_l.clone(),
+                        &mut dummy_r.clone(),
+                        &mut dummy_l,
+                        &mut dummy_r,
+                        64,
+                    );
                 }
             }
         }
@@ -595,57 +648,85 @@ fn process_midi_track(
     if let Some(pattern) = track.patterns.first() {
         let converter = TimeConverter::new(sample_rate as f32, bpm);
         let current_beat = converter.samples_to_beats(current_position);
-        let pattern_position = current_beat % pattern.length;
 
-        // Check for new notes to trigger
+        // Calculate pattern position and loop count
+        let total_beats_elapsed = current_beat;
+        let new_loop_count = (total_beats_elapsed / pattern.length) as u32;
+        let pattern_position = total_beats_elapsed % pattern.length;
+
+        // Detect pattern loop
+        let pattern_looped = new_loop_count > processor.pattern_loop_count;
+        if pattern_looped {
+            processor.pattern_loop_count = new_loop_count;
+            processor.notes_triggered_this_loop.clear();
+
+            // Stop all active notes from previous loop
+            processor.active_notes.clear();
+        }
+
+        // Process each note in the pattern
         for note in &pattern.notes {
             let note_start = note.start;
-            let note_end = note.start + note.duration;
+            let note_end = (note.start + note.duration).min(pattern.length);
 
-            // Trigger note on
-            if pattern_position >= note_start && processor.last_pattern_position < note_start {
+            // Check if we should trigger note on
+            let should_trigger = if pattern_looped && note_start == 0.0 {
+                // Special case: note starts at beat 0 and pattern just looped
+                true
+            } else if processor.last_pattern_position <= pattern_position {
+                // Normal progression within pattern
+                pattern_position >= note_start && processor.last_pattern_position < note_start
+            } else {
+                // We've wrapped around - check if note starts before current position
+                note_start <= pattern_position
+                    && !processor.notes_triggered_this_loop.contains(&note.pitch)
+            };
+
+            if should_trigger {
+                // Remove any existing instance of this note
+                processor.active_notes.retain(|n| n.pitch != note.pitch);
+
+                // Add new note
                 processor.active_notes.push(ActiveMidiNote {
                     pitch: note.pitch,
                     velocity: note.velocity,
                     start_sample: current_position,
                 });
+
+                processor.notes_triggered_this_loop.push(note.pitch);
             }
 
-            // Trigger note off
-            if pattern_position >= note_end && processor.last_pattern_position < note_end {
+            // Check if we should trigger note off
+            let should_stop = if note_end >= pattern.length {
+                // Note extends to or past pattern boundary
+                pattern_looped
+                    || (pattern_position < note_start
+                        && processor.last_pattern_position >= note_start)
+            } else if processor.last_pattern_position <= pattern_position {
+                // Normal progression
+                pattern_position >= note_end && processor.last_pattern_position < note_end
+            } else {
+                // Wrapped around
+                note_end <= pattern_position
+            };
+
+            if should_stop {
                 processor.active_notes.retain(|n| n.pitch != note.pitch);
-            }
-        }
-
-        // Handle pattern loop
-        if pattern_position < processor.last_pattern_position {
-            processor.active_notes.clear();
-            for note in &pattern.notes {
-                if note.start < 0.1 {
-                    processor.active_notes.push(ActiveMidiNote {
-                        pitch: note.pitch,
-                        velocity: note.velocity,
-                        start_sample: current_position,
-                    });
-                }
             }
         }
 
         processor.last_pattern_position = pattern_position;
     }
 
-    // Generate audio for active notes (simple sine wave if no plugins)
+    // Generate audio for active notes if no plugins
     if processor.plugins.is_empty() {
         for i in 0..num_frames {
             let mut sample = 0.0;
 
             for note in &processor.active_notes {
-                sample += generate_sine_for_note(
-                    note.pitch,
-                    note.velocity,
-                    current_position + i as f64 - note.start_sample,
-                    sample_rate,
-                );
+                let sample_offset = current_position + i as f64 - note.start_sample;
+                sample +=
+                    generate_sine_for_note(note.pitch, note.velocity, sample_offset, sample_rate);
             }
 
             processor.input_buffer_l[i] = sample;
@@ -662,28 +743,33 @@ fn process_audio_track(
     bpm: f32,
     sample_rate: f64,
 ) {
+    // Ensure buffers are zeroed
+    processor.input_buffer_l[..num_frames].fill(0.0);
+    processor.input_buffer_r[..num_frames].fill(0.0);
+
     let converter = TimeConverter::new(sample_rate as f32, bpm);
-    let buffer_start_abs = current_position;
-    let buffer_end_abs = buffer_start_abs + num_frames as f64;
 
     for clip in &track.audio_clips {
-        let clip_start_abs = converter.beats_to_samples(clip.start_beat);
-        let clip_end_abs = clip_start_abs + converter.beats_to_samples(clip.length_beats);
+        let clip_start_samples = converter.beats_to_samples(clip.start_beat);
+        let clip_duration_samples = clip.samples.len() as f64;
+        let clip_end_samples = clip_start_samples + clip_duration_samples;
 
-        let overlap_start = buffer_start_abs.max(clip_start_abs);
-        let overlap_end = buffer_end_abs.min(clip_end_abs);
+        // Calculate overlap with current buffer
+        let buffer_start = current_position;
+        let buffer_end = current_position + num_frames as f64;
 
-        if overlap_start < overlap_end {
-            let start_index = (overlap_start - buffer_start_abs) as usize;
-            let end_index = (overlap_end - buffer_start_abs) as usize;
-            let clip_start_offset = (overlap_start - clip_start_abs) as usize;
+        if clip_end_samples > buffer_start && clip_start_samples < buffer_end {
+            let start_in_buffer =
+                ((clip_start_samples - buffer_start).max(0.0) as usize).min(num_frames);
+            let end_in_buffer =
+                ((clip_end_samples - buffer_start).min(num_frames as f64) as usize).max(0);
+            let start_in_clip = ((buffer_start - clip_start_samples).max(0.0) as usize);
 
-            for i in start_index..end_index {
-                let clip_index = clip_start_offset + (i - start_index);
-                if clip_index < clip.samples.len() {
-                    let sample = clip.samples[clip_index];
-                    processor.input_buffer_l[i] += sample;
-                    processor.input_buffer_r[i] += sample;
+            for i in start_in_buffer..end_in_buffer {
+                let clip_idx = start_in_clip + (i - start_in_buffer);
+                if clip_idx < clip.samples.len() {
+                    processor.input_buffer_l[i] += clip.samples[clip_idx];
+                    processor.input_buffer_r[i] += clip.samples[clip_idx];
                 }
             }
         }
@@ -716,37 +802,92 @@ fn process_preview_note(
 
 fn build_block_midi_events(
     pattern: &crate::audio_state::PatternSnapshot,
+    processor: &TrackProcessor,
     block_start_samples: f64,
     frames: usize,
     sample_rate: f64,
     bpm: f32,
 ) -> Vec<(u8, u8, u8, i64)> {
-    let block_end_samples = block_start_samples + frames as f64;
-
-    // Helper to convert beats to absolute samples at project sample rate
-    let beats_to_samples = |beats: f64| (beats * 60.0 / bpm as f64) * sample_rate;
+    let converter = TimeConverter::new(sample_rate as f32, bpm);
+    let block_start_beat = converter.samples_to_beats(block_start_samples);
+    let block_end_beat = converter.samples_to_beats(block_start_samples + frames as f64);
 
     let mut events = Vec::new();
 
+    // Calculate pattern positions for this block
+    let pattern_start = block_start_beat % pattern.length;
+    let pattern_end = block_end_beat % pattern.length;
+
     for note in &pattern.notes {
-        let note_on_abs = beats_to_samples(note.start);
-        let note_off_abs = beats_to_samples(note.start + note.duration);
+        let note_start = note.start;
+        let note_end = (note.start + note.duration).min(pattern.length);
 
-        // Note On inside this block?
-        if note_on_abs >= block_start_samples && note_on_abs < block_end_samples {
-            let frame = (note_on_abs - block_start_samples) as i64;
-            events.push((0x90, note.pitch, note.velocity, frame));
-        }
+        // Check if note on occurs in this block
+        if pattern_end >= pattern_start {
+            // No wrap in this block
+            if note_start >= pattern_start && note_start < pattern_end {
+                let beat_offset = note_start - pattern_start;
+                let sample_offset = converter.beats_to_samples(beat_offset);
+                let frame = sample_offset.round() as i64;
+                if frame >= 0 && frame < frames as i64 {
+                    events.push((0x90, note.pitch, note.velocity, frame));
+                }
+            }
 
-        // Note Off inside this block?
-        if note_off_abs >= block_start_samples && note_off_abs < block_end_samples {
-            let frame = (note_off_abs - block_start_samples) as i64;
-            // Note Off: status 0x80, velocity 0
-            events.push((0x80, note.pitch, 0, frame));
+            if note_end > pattern_start && note_end <= pattern_end {
+                let beat_offset = note_end - pattern_start;
+                let sample_offset = converter.beats_to_samples(beat_offset);
+                let frame = sample_offset.round() as i64;
+                if frame >= 0 && frame < frames as i64 {
+                    events.push((0x80, note.pitch, 0, frame));
+                }
+            }
+        } else {
+            // Pattern wraps in this block
+            // Check events after wrap point (beginning of pattern)
+            if note_start < pattern_end {
+                let samples_until_wrap = converter.beats_to_samples(pattern.length - pattern_start);
+                let beat_offset = note_start;
+                let sample_offset = samples_until_wrap + converter.beats_to_samples(beat_offset);
+                let frame = sample_offset.round() as i64;
+                if frame >= 0 && frame < frames as i64 {
+                    events.push((0x90, note.pitch, note.velocity, frame));
+                }
+            }
+
+            // Check events before wrap point
+            if note_start >= pattern_start {
+                let beat_offset = note_start - pattern_start;
+                let sample_offset = converter.beats_to_samples(beat_offset);
+                let frame = sample_offset.round() as i64;
+                if frame >= 0 && frame < frames as i64 {
+                    events.push((0x90, note.pitch, note.velocity, frame));
+                }
+            }
+
+            // Similar logic for note offs
+            if note_end <= pattern_end {
+                let samples_until_wrap = converter.beats_to_samples(pattern.length - pattern_start);
+                let beat_offset = note_end;
+                let sample_offset = samples_until_wrap + converter.beats_to_samples(beat_offset);
+                let frame = sample_offset.round() as i64;
+                if frame >= 0 && frame < frames as i64 {
+                    events.push((0x80, note.pitch, 0, frame));
+                }
+            }
+
+            if note_end > pattern_start && note_end <= pattern.length {
+                let beat_offset = note_end - pattern_start;
+                let sample_offset = converter.beats_to_samples(beat_offset);
+                let frame = sample_offset.round() as i64;
+                if frame >= 0 && frame < frames as i64 {
+                    events.push((0x80, note.pitch, 0, frame));
+                }
+            }
         }
     }
 
-    // Sort by time_in_frames just in case
+    // Sort events by frame time
     events.sort_by_key(|e| e.3);
     events
 }
@@ -762,7 +903,14 @@ fn process_track_plugins(
     // Prep. MIDI for this block (Note On/Off with proper frame offsets)
     let midi_events: Vec<(u8, u8, u8, i64)> = if track.is_midi {
         if let Some(pattern) = track.patterns.first() {
-            build_block_midi_events(pattern, block_start_samples, num_frames, sample_rate, bpm)
+            build_block_midi_events(
+                pattern,
+                processor,
+                block_start_samples,
+                num_frames,
+                sample_rate,
+                bpm,
+            )
         } else {
             Vec::new()
         }

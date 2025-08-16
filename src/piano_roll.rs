@@ -253,7 +253,10 @@ impl PianoRoll {
                             // Update all selected notes with the same delta
                             for (idx, original_note) in initial_positions.iter() {
                                 if let Some(note) = pattern.notes.get_mut(*idx) {
-                                    note.start = (original_note.start + beat_delta).max(0.0);
+                                    // Ensure note stays within pattern bounds (to remove later)
+                                    let new_start = (original_note.start + beat_delta).max(0.0);
+                                    let max_start = pattern.length - original_note.duration;
+                                    note.start = new_start.min(max_start);
                                     note.pitch = ((original_note.pitch as i32 + pitch_delta)
                                         .clamp(0, 127))
                                         as u8;
@@ -365,14 +368,17 @@ impl PianoRoll {
                     let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
                     let pitch_float = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
                     let pitch = pitch_float.round().clamp(0.0, 127.0) as u8;
-                    let snapped_beat = ((beat / self.grid_snap).round() * self.grid_snap);
+                    let snapped_beat = ((beat / self.grid_snap).round() * self.grid_snap).max(0.0);
 
-                    if snapped_beat >= 0.0 && snapped_beat < pattern.length as f32 {
+                    // Ensure note doesn't exceed pattern length
+                    if (snapped_beat as f64) < pattern.length {
+                        let duration =
+                            (self.grid_snap as f64).min(pattern.length - snapped_beat as f64);
                         actions.push(PianoRollAction::AddNote(MidiNote {
                             pitch,
                             velocity: 100,
                             start: snapped_beat as f64,
-                            duration: self.grid_snap as f64,
+                            duration,
                         }));
                     }
                 }
