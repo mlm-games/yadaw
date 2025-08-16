@@ -8,9 +8,8 @@ edition = "2021"
 cpal = "0.16.0"
 chrono = "0.4"
 
-# GUI
-egui = "0.32.0"
-eframe = "0.32.0"
+egui = "0.32.1"
+eframe = "0.32.1"
 
 # LV2 Plugin Hosting
 livi = "0.7.5"
@@ -28,10 +27,10 @@ crossbeam-channel = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 directories = "6.0.0"
-anyhow = "1.0"
+anyhow = "1.0.99"
 
 # For plugin discovery
-glob = "0.3"
+glob = "0.3.3"
 
 shellexpand = "3.1"
 env_logger = "0.11"
@@ -48,3 +47,4 @@ midir = "0.10.2"
 lru = "0.16.0"
 rayon = "1.10.0"
 num_cpus = "1.17.0"
+# GUI

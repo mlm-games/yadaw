@@ -33,6 +33,7 @@ pub(crate) struct AudioEngine {
     updates: Sender<UIUpdate>,
     mixer: MixerEngine,
     channel_strips: Vec<ChannelStrip>,
+    // last_playing: bool,
 }
 
 struct TrackProcessor {
@@ -218,6 +219,7 @@ pub fn run_audio_thread(
 
         // Check if playing
         if !engine.audio_state.playing.load(Ordering::Relaxed) {
+            engine.midi_panic();
             return;
         }
 
@@ -561,6 +563,25 @@ impl AudioEngine {
             .updates
             .try_send(UIUpdate::MasterLevel(master_left_peak, master_right_peak));
     }
+
+    fn midi_panic(&mut self) {
+        // FIXME (Doesn't work): Send All Notes Off and All Sound Off on all channels to all plugins
+        let mut events: Vec<(u8, u8, u8, i64)> = Vec::new();
+        for ch in 0u8..16u8 {
+            events.push((0xB0 | ch, 123, 0, 0)); // All Notes Off
+            events.push((0xB0 | ch, 120, 0, 0)); // All Sound Off
+        }
+
+        for tp in self.track_processors.iter_mut() {
+            // Clear active notes in our tracker
+            tp.active_notes.clear();
+            for plug in tp.plugins.iter_mut() {
+                if let Some(inst) = &mut plug.instance {
+                    inst.prepare_midi_raw_events(&events);
+                }
+            }
+        }
+    }
 }
 
 fn process_midi_track(
@@ -774,6 +795,7 @@ fn process_track_plugins(
                         }
                     }
                 } else {
+                    // Ensure downstream plugins don’t get stale MIDI. Also doesn't fix the mid stop problem
                     instance.clear_midi_events();
                 }
 
