@@ -474,6 +474,7 @@ impl AudioEngine {
 
                 // Process track content
                 if track.is_midi {
+                    // For MIDI tracks, just update note tracking
                     process_midi_track(
                         track,
                         processor,
@@ -482,6 +483,19 @@ impl AudioEngine {
                         bpm,
                         self.sample_rate,
                     );
+
+                    // Process plugins (they will handle MIDI->Audio conversion)
+                    if !processor.plugins.is_empty() {
+                        process_track_plugins(
+                            track,
+                            processor,
+                            frames_to_process,
+                            current_position,
+                            bpm,
+                            self.sample_rate,
+                        );
+                    }
+                    // If no plugins, plays process_midi_track generated sine waves (but it doesn't play for in for some reason)
                 } else {
                     process_audio_track(
                         track,
@@ -491,9 +505,21 @@ impl AudioEngine {
                         bpm,
                         self.sample_rate,
                     );
+
+                    // Effects plugins here
+                    if !processor.plugins.is_empty() {
+                        process_track_plugins(
+                            track,
+                            processor,
+                            frames_to_process,
+                            current_position,
+                            bpm,
+                            self.sample_rate,
+                        );
+                    }
                 }
 
-                // Process preview note if on this track
+                // Process preview note if on this track (after plugins)
                 if let Some(preview) = &self.preview_note {
                     if preview.track_id == track_idx {
                         process_preview_note(
@@ -505,16 +531,6 @@ impl AudioEngine {
                         );
                     }
                 }
-
-                // Process plugins
-                process_track_plugins(
-                    track,
-                    processor,
-                    frames_to_process,
-                    current_position,
-                    bpm,
-                    self.sample_rate,
-                );
 
                 // Calculate levels for meters
                 let left_peak = processor.input_buffer_l[..frames_to_process]
@@ -718,8 +734,13 @@ fn process_midi_track(
         processor.last_pattern_position = pattern_position;
     }
 
-    // Generate audio for active notes if no plugins
-    if processor.plugins.is_empty() {
+    // IMPORTANT: Clear input buffers for MIDI tracks
+    // Plugins will generate audio from MIDI, we don't pre-generate audio
+    processor.input_buffer_l[..num_frames].fill(0.0);
+    processor.input_buffer_r[..num_frames].fill(0.0);
+
+    // Only generate audio if there are NO plugins (fallback sine wave)
+    if processor.plugins.is_empty() && !processor.active_notes.is_empty() {
         for i in 0..num_frames {
             let mut sample = 0.0;
 
