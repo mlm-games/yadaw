@@ -158,19 +158,97 @@ pub fn classify_plugin_uri(uri: &str) -> Option<PluginKind> {
         .iter()
         .find(|p| p.uri == uri)
         .map(|info| {
-            // - Instruments: is_instrument OR (has_midi && audio_outputs > 0 && audio_inputs == 0)
-            // - Effects: audio_inputs > 0 && audio_outputs > 0
-            // - MIDI FX: has_midi && (audio_inputs == 0 && audio_outputs == 0)
-            if info.is_instrument
-                || (info.has_midi && info.audio_outputs > 0 && info.audio_inputs == 0)
-            {
+            // Instruments: is_instrument flag OR (has MIDI input and generates audio)
+            if info.is_instrument {
+                PluginKind::Instrument
+            } else if info.has_midi && info.audio_outputs > 0 {
+                // Plugin accepts MIDI and produces audio - it's an instrument
                 PluginKind::Instrument
             } else if info.audio_inputs > 0 && info.audio_outputs > 0 {
+                // Has audio I/O - it's an effect
                 PluginKind::Effect
             } else if info.has_midi && info.audio_inputs == 0 && info.audio_outputs == 0 {
+                // MIDI only - MIDI effect
                 PluginKind::MidiFx
             } else {
                 PluginKind::Unknown
             }
         })
+}
+
+/// Categorizes plugin (based on name for effect subtypes)
+pub fn categorize_plugin(plugin: &crate::lv2_plugin_host::PluginInfo) -> Vec<String> {
+    let mut categories = Vec::new();
+
+    categories.push("All".to_string());
+
+    if plugin.is_instrument
+        || (plugin.has_midi && plugin.audio_outputs > 0 && plugin.audio_inputs == 0)
+    {
+        categories.push("Instruments".to_string());
+    } else if plugin.audio_inputs > 0 && plugin.audio_outputs > 0 {
+        categories.push("Effects".to_string());
+    }
+
+    let name_lower = plugin.name.to_lowercase();
+    let uri_lower = plugin.uri.to_lowercase();
+
+    if name_lower.contains("compressor")
+        || name_lower.contains("limiter")
+        || name_lower.contains("gate")
+        || name_lower.contains("expander")
+        || uri_lower.contains("compressor")
+        || uri_lower.contains("limiter")
+    {
+        categories.push("Dynamics".to_string());
+    }
+
+    if name_lower.contains("eq")
+        || name_lower.contains("equalizer")
+        || name_lower.contains("filter")
+        || uri_lower.contains("eq")
+        || uri_lower.contains("equalizer")
+    {
+        categories.push("EQ".to_string());
+    }
+
+    if name_lower.contains("reverb")
+        || name_lower.contains("room")
+        || name_lower.contains("hall")
+        || uri_lower.contains("reverb")
+    {
+        categories.push("Reverb".to_string());
+    }
+
+    if name_lower.contains("delay") || name_lower.contains("echo") || uri_lower.contains("delay") {
+        categories.push("Delay".to_string());
+    }
+
+    if name_lower.contains("chorus")
+        || name_lower.contains("flanger")
+        || name_lower.contains("phaser")
+        || name_lower.contains("tremolo")
+        || uri_lower.contains("modulation")
+    {
+        categories.push("Modulation".to_string());
+    }
+
+    if name_lower.contains("distortion")
+        || name_lower.contains("overdrive")
+        || name_lower.contains("fuzz")
+        || name_lower.contains("saturation")
+        || uri_lower.contains("distortion")
+    {
+        categories.push("Distortion".to_string());
+    }
+
+    if name_lower.contains("utility")
+        || name_lower.contains("meter")
+        || name_lower.contains("analyzer")
+        || name_lower.contains("scope")
+    {
+        categories.push("Utility".to_string());
+    }
+
+    categories
 }

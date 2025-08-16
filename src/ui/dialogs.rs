@@ -1,6 +1,7 @@
 use super::*;
 use crate::edit_actions::EditProcessor;
 use crate::error::UserNotification;
+use crate::plugin::categorize_plugin;
 use crate::state::AudioCommand;
 use crate::ui::theme;
 
@@ -491,6 +492,7 @@ pub struct PluginBrowserDialog {
     search_text: String,
     selected_category: String,
     selected_plugin: Option<usize>,
+    available_categories: Vec<String>,
 }
 
 impl PluginBrowserDialog {
@@ -500,6 +502,18 @@ impl PluginBrowserDialog {
             search_text: String::new(),
             selected_category: "All".to_string(),
             selected_plugin: None,
+            available_categories: vec![
+                "All".to_string(),
+                "Instruments".to_string(),
+                "Effects".to_string(),
+                "Dynamics".to_string(),
+                "EQ".to_string(),
+                "Reverb".to_string(),
+                "Delay".to_string(),
+                "Modulation".to_string(),
+                "Distortion".to_string(),
+                "Utility".to_string(),
+            ],
         }
     }
 
@@ -522,41 +536,13 @@ impl PluginBrowserDialog {
                     egui::ComboBox::from_id_salt("plugin_category")
                         .selected_text(&self.selected_category)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.selected_category,
-                                "All".to_string(),
-                                "All",
-                            );
-                            ui.selectable_value(
-                                &mut self.selected_category,
-                                "Instruments".to_string(),
-                                "Instruments",
-                            );
-                            ui.selectable_value(
-                                &mut self.selected_category,
-                                "Effects".to_string(),
-                                "Effects",
-                            );
-                            ui.selectable_value(
-                                &mut self.selected_category,
-                                "Dynamics".to_string(),
-                                "Dynamics",
-                            );
-                            ui.selectable_value(
-                                &mut self.selected_category,
-                                "EQ".to_string(),
-                                "EQ",
-                            );
-                            ui.selectable_value(
-                                &mut self.selected_category,
-                                "Reverb".to_string(),
-                                "Reverb",
-                            );
-                            ui.selectable_value(
-                                &mut self.selected_category,
-                                "Delay".to_string(),
-                                "Delay",
-                            );
+                            for category in &self.available_categories {
+                                ui.selectable_value(
+                                    &mut self.selected_category,
+                                    category.clone(),
+                                    category,
+                                );
+                            }
                         });
                 });
 
@@ -568,25 +554,44 @@ impl PluginBrowserDialog {
                     .max_height(220.0)
                     .show(ui, |ui| {
                         for (idx, plugin) in app.available_plugins.iter().enumerate() {
-                            // Filter by search
+                        // Filter by search
                             if !self.search_text.is_empty() {
                                 if !plugin
                                     .name
                                     .to_lowercase()
                                     .contains(&self.search_text.to_lowercase())
+                                    && !plugin
+                                        .uri
+                                        .to_lowercase()
+                                        .contains(&self.search_text.to_lowercase())
                                 {
                                     continue;
                                 }
                             }
 
-                            // Filter by category
+                            // Category
                             if self.selected_category != "All" {
-                                // TODOO: Add category filtering logic
+                                let plugin_categories = categorize_plugin(plugin);
+                                if !plugin_categories.contains(&self.selected_category) {
+                                    continue;
+                                }
                             }
 
                             let selected = self.selected_plugin == Some(idx);
-                            let resp = ui.selectable_label(selected, &plugin.name);
-
+                            
+                            let display_name = if self.selected_category == "All" {
+                                // Show category hints when viewing all
+                                let cats = categorize_plugin(plugin);
+                                let main_cat = cats.iter()
+                                    .find(|c| *c != "All")
+                                    .map(|c| c.as_str())
+                                    .unwrap_or("Unknown");
+                                format!("{} [{}]", plugin.name, main_cat)
+                            } else {
+                                plugin.name.clone()
+                            };
+        
+                            let resp = ui.selectable_label(selected, display_name);
                             if resp.double_clicked() {
                                 // Adds immediately on double-click
                                 let track_id = app
