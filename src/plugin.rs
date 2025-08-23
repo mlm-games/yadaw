@@ -34,7 +34,10 @@ impl PluginScanner {
 }
 
 /// Create a plugin descriptor from URI
-pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDescriptor> {
+pub fn create_plugin_instance(
+    uri: &str,
+    _sample_rate: f32,
+) -> anyhow::Result<crate::state::PluginDescriptor> {
     let host_lock = PLUGIN_HOST.lock();
     let host = host_lock
         .as_ref()
@@ -46,27 +49,19 @@ pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDesc
         .find(|p| p.uri == uri)
         .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", uri))?;
 
-    let mut params = HashMap::new();
-
+    let mut params = std::collections::HashMap::new();
     for port in &plugin_info.control_ports {
-        params.insert(
-            port.symbol.clone(),
-            PluginParam {
-                index: port.index,
-                name: port.name.clone(),
-                value: port.default,
-                min: port.min,
-                max: port.max,
-                default: port.default,
-            },
-        );
+        // Store only the value in the descriptor (0..1 or whatever the LV2 default range implies)
+        params.insert(port.symbol.clone(), port.default);
     }
 
-    Ok(PluginDescriptor {
+    Ok(crate::state::PluginDescriptor {
         uri: uri.to_string(),
         name: plugin_info.name.clone(),
         bypass: false,
         params,
+        preset_name: None,
+        custom_name: None,
     })
 }
 
@@ -85,17 +80,16 @@ pub struct PluginParameterUpdate {
 
 impl PluginParameterUpdate {
     pub fn apply_to_descriptor(
-        descriptor: &mut PluginDescriptor,
+        descriptor: &mut crate::state::PluginDescriptor,
         param_name: &str,
         value: f32,
-    ) -> Result<()> {
-        descriptor
-            .params
-            .get_mut(param_name)
-            .map(|param| {
-                param.value = value.clamp(param.min, param.max);
-            })
-            .ok_or_else(|| anyhow::anyhow!("Parameter {} not found", param_name))
+    ) -> anyhow::Result<()> {
+        if let Some(v) = descriptor.params.get_mut(param_name) {
+            *v = value;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Parameter {} not found", param_name))
+        }
     }
 
     pub fn create_command(&self) -> AudioCommand {
@@ -126,12 +120,17 @@ impl PluginParameterAccess for crate::state::Track {
         plugin_idx: usize,
         param_name: &str,
         value: f32,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         self.plugin_chain
             .get_mut(plugin_idx)
             .ok_or_else(|| anyhow::anyhow!("Plugin index {} out of bounds", plugin_idx))
             .and_then(|plugin| {
-                PluginParameterUpdate::apply_to_descriptor(plugin, param_name, value)
+                if let Some(v) = plugin.params.get_mut(param_name) {
+                    *v = value;
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("Parameter {} not found", param_name))
+                }
             })
     }
 
@@ -139,7 +138,7 @@ impl PluginParameterAccess for crate::state::Track {
         self.plugin_chain
             .get(plugin_idx)
             .and_then(|plugin| plugin.params.get(param_name))
-            .map(|param| param.value)
+            .copied()
     }
 }
 

@@ -1,6 +1,23 @@
 use crate::state::AudioClip;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use std::path::Path;
+
+fn new_audio_clip(
+    name: String,
+    start_beat: f64,
+    length_beats: f64,
+    samples: Vec<f32>,
+    sample_rate: f32,
+) -> crate::state::AudioClip {
+    crate::state::AudioClip {
+        name,
+        start_beat,
+        length_beats,
+        samples,
+        sample_rate,
+        ..Default::default()
+    }
+}
 
 pub fn import_audio_file(path: &Path, bpm: f32) -> Result<AudioClip> {
     let extension = path
@@ -49,17 +66,16 @@ fn import_wav(path: &Path, bpm: f32) -> Result<AudioClip> {
     let duration_seconds = trimmed_samples.len() as f64 / spec.sample_rate as f64;
     let duration_beats = duration_seconds * (bpm as f64 / 60.0);
 
-    Ok(AudioClip {
-        name: path
-            .file_stem()
+    Ok(new_audio_clip(
+        path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Imported Audio")
             .to_string(),
-        start_beat: 0.0,
-        length_beats: duration_beats,
-        samples: trimmed_samples,
-        sample_rate: spec.sample_rate as f32,
-    })
+        0.0,
+        duration_beats,
+        trimmed_samples,
+        spec.sample_rate as f32,
+    ))
 }
 
 fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
@@ -165,17 +181,16 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
     let duration_seconds = trimmed_samples.len() as f64 / sample_rate as f64;
     let duration_beats = duration_seconds * (bpm as f64 / 60.0);
 
-    Ok(AudioClip {
-        name: path
-            .file_stem()
+    Ok(new_audio_clip(
+        path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Imported Audio")
             .to_string(),
-        start_beat: 0.0,
-        length_beats: duration_beats,
-        samples: trimmed_samples,
-        sample_rate: sample_rate as f32,
-    })
+        0.0,
+        duration_beats,
+        trimmed_samples,
+        sample_rate as f32,
+    ))
 }
 
 // Helper function to trim silence from the end

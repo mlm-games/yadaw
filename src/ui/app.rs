@@ -1,5 +1,6 @@
 use super::*;
 use crate::audio_state::AudioState;
+use crate::audio_state::AutomationTarget;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config::Config;
 use crate::constants::MAX_BUFFER_SIZE;
@@ -10,9 +11,8 @@ use crate::lv2_plugin_host::PluginInfo;
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::project_manager::ProjectManager;
-use crate::state::{
-    AppState, AppStateSnapshot, AudioClip, AudioCommand, AutomationTarget, MidiNote, UIUpdate,
-};
+use crate::state::{AppState, AppStateSnapshot, AudioClip, AudioCommand, MidiNote, UIUpdate};
+
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
 use crossbeam_channel::{Receiver, Sender};
@@ -310,7 +310,7 @@ impl YadawApp {
     // Project management
     pub fn new_project(&mut self) {
         let mut state = self.state.lock().unwrap();
-        *state = AppState::new();
+        *state = AppState::default();
         drop(state);
 
         self.project_path = None;
@@ -489,9 +489,9 @@ impl YadawApp {
 
         let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
+            if let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
                 EditProcessor::quantize_notes(
-                    &mut pattern.notes,
+                    &mut clip.notes,
                     crate::constants::DEFAULT_GRID_SNAP as f64,
                     strength,
                 );
@@ -504,8 +504,8 @@ impl YadawApp {
 
         let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
-                EditProcessor::quantize_notes(&mut pattern.notes, grid as f64, strength);
+            if let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
+                EditProcessor::quantize_notes(&mut clip.notes, grid as f64, strength);
             }
         }
     }
@@ -515,8 +515,8 @@ impl YadawApp {
 
         let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
-                EditProcessor::transpose_notes(&mut pattern.notes, semitones);
+            if let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
+                EditProcessor::transpose_notes(&mut clip.notes, semitones);
             }
         }
     }
@@ -526,8 +526,8 @@ impl YadawApp {
 
         let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
-                EditProcessor::humanize_notes(&mut pattern.notes, amount);
+            if let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
+                EditProcessor::humanize_notes(&mut clip.notes, amount);
             }
         }
     }
@@ -556,7 +556,7 @@ impl YadawApp {
         }
 
         // Calculate zoom level to fit content
-        let available_width = 800.0; // Should get from UI
+        let available_width: f32 = 800.0;
         self.timeline_ui.zoom_x = (available_width / max_beat as f32).min(200.0).max(10.0);
         self.timeline_ui.scroll_x = 0.0;
     }
@@ -735,7 +735,7 @@ impl YadawApp {
                     disk_streaming_rate: 0.0,
                     audio_buffer_health: buffer_fill,
                     plugin_processing_time: Duration::from_millis(0),
-                    xruns,
+                    xruns: xruns as usize,
                     latency_ms: (MAX_BUFFER_SIZE as f32 / self.audio_state.sample_rate.load()) // TODO: add buffer size to audio_state...
                         * 1000.0,
                 };
@@ -744,6 +744,59 @@ impl YadawApp {
 
             _ => {}
         }
+    }
+
+    pub fn set_loop_to_selection(&mut self) {
+        if self.selected_clips.is_empty() {
+            // If no clips selected, use visible timeline region
+            let visible_start = self.timeline_ui.scroll_x / self.timeline_ui.zoom_x;
+            let visible_end = visible_start + (800.0 / self.timeline_ui.zoom_x); // Approximate width
+
+            self.audio_state.loop_start.store(visible_start as f64);
+            self.audio_state.loop_end.store(visible_end as f64);
+            self.audio_state.loop_enabled.store(true, Ordering::Relaxed);
+
+            let _ = self.command_tx.send(AudioCommand::SetLoopRegion(
+                visible_start as f64,
+                visible_end as f64,
+            ));
+            let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(true));
+        } else {
+            // Use selected clips range
+            let state = self.state.lock().unwrap();
+            let mut min_beat: f64 = f64::MAX;
+            let mut max_beat: f64 = 0.0;
+
+            for (track_id, clip_id) in &self.selected_clips {
+                if let Some(track) = state.tracks.get(*track_id) {
+                    if let Some(clip) = track.audio_clips.get(*clip_id) {
+                        min_beat = min_beat.min(clip.start_beat);
+                        max_beat = max_beat.max(clip.start_beat + clip.length_beats);
+                    }
+                    // Also check MIDI clips
+                    if let Some(clip) = track.midi_clips.get(*clip_id) {
+                        min_beat = min_beat.min(clip.start_beat);
+                        max_beat = max_beat.max(clip.start_beat + clip.length_beats);
+                    }
+                }
+            }
+
+            if min_beat < f64::MAX && max_beat > 0.0 {
+                self.audio_state.loop_start.store(min_beat);
+                self.audio_state.loop_end.store(max_beat);
+                self.audio_state.loop_enabled.store(true, Ordering::Relaxed);
+
+                let _ = self
+                    .command_tx
+                    .send(AudioCommand::SetLoopRegion(min_beat, max_beat));
+                let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(true));
+            }
+        }
+    }
+
+    pub fn open_midi_clip_in_piano_roll(&mut self, clip_idx: usize) {
+        self.piano_roll_view.set_editing_clip(clip_idx);
+        // The UI will automatically switch to piano roll view since track is MIDI
     }
 
     fn show_performance_window(&mut self, ctx: &egui::Context) {
@@ -832,6 +885,28 @@ impl YadawApp {
                 if let Some(transport) = &mut self.transport_ui.transport {
                     transport.set_position(0.0);
                 }
+            }
+
+            if i.key_pressed(egui::Key::L) && !i.modifiers.ctrl {
+                // Toggle loop
+                let enabled = !self.audio_state.loop_enabled.load(Ordering::Relaxed);
+                self.audio_state
+                    .loop_enabled
+                    .store(enabled, Ordering::Relaxed);
+                let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(enabled));
+            }
+
+            if i.key_pressed(egui::Key::L) && i.modifiers.ctrl {
+                // Set loop to selection
+                self.set_loop_to_selection();
+            }
+
+            if i.key_pressed(egui::Key::L) && i.modifiers.shift {
+                // Clear loop
+                self.audio_state
+                    .loop_enabled
+                    .store(false, Ordering::Relaxed);
+                let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(false));
             }
 
             // Delete
@@ -971,8 +1046,8 @@ impl YadawApp {
             for clip in &track.audio_clips {
                 total += clip.samples.len() * std::mem::size_of::<f32>();
             }
-            for pattern in &track.patterns {
-                total += pattern.notes.len() * std::mem::size_of::<MidiNote>();
+            for clip in &track.midi_clips {
+                total += clip.notes.len() * std::mem::size_of::<MidiNote>();
             }
         }
 

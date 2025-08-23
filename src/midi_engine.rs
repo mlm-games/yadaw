@@ -1,6 +1,7 @@
 use crate::constants::{DEFAULT_GRID_SNAP, MIDI_TIMING_SAMPLE_RATE};
 use crate::midi_utils::{MidiNoteUtils, MidiVelocity};
-use crate::state::{MidiNote, Pattern};
+use crate::state::MidiNote;
+use crate::state::Pattern;
 use crate::time_utils::TimeConverter;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use std::collections::HashMap;

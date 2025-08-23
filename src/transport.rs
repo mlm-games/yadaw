@@ -24,16 +24,10 @@ pub enum LoopMode {
 pub struct Transport {
     audio_state: Arc<AudioState>,
     command_tx: Sender<AudioCommand>,
-    pub state: TransportState,
-    pub loop_mode: LoopMode,
-    pub loop_start: f64,        // in beats
-    pub loop_end: f64,          // in beats
-    pub punch_in: Option<f64>,  // in beats
-    pub punch_out: Option<f64>, // in beats
     pub metronome_enabled: bool,
-    pub metronome_volume: f32,
+    pub count_in_enabled: bool,
     pub count_in_bars: u32,
-    pub pre_roll_bars: u32,
+    pub click_volume: f32,
 }
 
 impl Transport {
@@ -41,111 +35,78 @@ impl Transport {
         Self {
             audio_state,
             command_tx,
-            state: TransportState::Stopped,
-            loop_mode: LoopMode::Off,
-            loop_start: 0.0,
-            loop_end: 4.0,
-            punch_in: None,
-            punch_out: None,
             metronome_enabled: false,
-            metronome_volume: 0.7,
-            count_in_bars: 0,
-            pre_roll_bars: 0,
+            count_in_enabled: false,
+            count_in_bars: 1,
+            click_volume: 0.7,
         }
     }
 
-    pub fn play(&mut self) {
-        match self.state {
-            TransportState::Stopped | TransportState::Paused => {
-                let _ = self.command_tx.send(AudioCommand::Play);
-                self.state = TransportState::Playing;
-            }
-            _ => {}
-        }
+    pub fn play(&self) {
+        let _ = self.command_tx.send(AudioCommand::Play);
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
         let _ = self.command_tx.send(AudioCommand::Stop);
-        self.state = TransportState::Stopped;
     }
 
-    pub fn pause(&mut self) {
-        if self.state == TransportState::Playing {
-            let _ = self.command_tx.send(AudioCommand::Pause);
-            self.state = TransportState::Paused;
+    pub fn pause(&self) {
+        let _ = self.command_tx.send(AudioCommand::Pause);
+    }
+
+    pub fn record(&self) {
+        let _ = self.command_tx.send(AudioCommand::Record);
+    }
+
+    pub fn toggle_playback(&self) {
+        if self.audio_state.playing.load(Ordering::Relaxed) {
+            self.stop();
+        } else {
+            self.play();
         }
     }
 
-    pub fn toggle_playback(&mut self) {
-        match self.state {
-            TransportState::Playing => self.stop(),
-            _ => self.play(),
-        }
+    pub fn set_position(&self, position: f64) {
+        let _ = self.command_tx.send(AudioCommand::SetPosition(position));
     }
 
-    pub fn start_recording(&mut self, track_id: usize) {
-        if self.state != TransportState::Recording {
-            let _ = self.command_tx.send(AudioCommand::StartRecording(track_id));
-            self.state = TransportState::Recording;
-        }
+    pub fn set_bpm(&self, bpm: f32) {
+        let _ = self.command_tx.send(AudioCommand::SetBPM(bpm));
     }
 
-    pub fn stop_recording(&mut self) {
-        if self.state == TransportState::Recording {
-            let _ = self.command_tx.send(AudioCommand::StopRecording);
-            self.state = TransportState::Playing;
-        }
-    }
-
-    fn get_converter(&self) -> TimeConverter {
-        TimeConverter::new(
-            self.audio_state.sample_rate.load(),
-            self.audio_state.bpm.load(),
-        )
-    }
-
-    pub fn set_position(&mut self, position_beats: f64) {
-        let converter = self.get_converter();
-        let position_samples = converter.beats_to_samples(position_beats);
-        self.audio_state.set_position(position_samples);
-    }
-
-    pub fn get_position_beats(&self) -> f64 {
-        let converter = self.get_converter();
-        converter.samples_to_beats(self.audio_state.get_position())
-    }
-
-    pub fn format_time(&self, beats: f64) -> String {
-        format_bars_beats_sixteenths(beats, 4) // assuming 4/4 time
-    }
-
-    pub fn format_time_seconds(&self, position_samples: f64) -> String {
-        let converter = self.get_converter();
-        let seconds = converter.samples_to_seconds(position_samples);
-        format_minutes_seconds(seconds)
-    }
-
-    pub fn set_bpm(&mut self, bpm: f32) {
-        self.audio_state.bpm.store(bpm.clamp(20.0, 999.0));
+    pub fn get_position(&self) -> f64 {
+        self.audio_state.get_position()
     }
 
     pub fn get_bpm(&self) -> f32 {
         self.audio_state.bpm.load()
     }
 
-    pub fn set_loop_range(&mut self, start: f64, end: f64) {
-        self.loop_start = start;
-        self.loop_end = end;
+    pub fn is_playing(&self) -> bool {
+        self.audio_state.playing.load(Ordering::Relaxed)
     }
 
-    pub fn toggle_loop(&mut self) {
-        self.loop_mode = match self.loop_mode {
-            LoopMode::Off => LoopMode::Range,
-            _ => LoopMode::Off,
-        };
+    pub fn is_recording(&self) -> bool {
+        self.audio_state.recording.load(Ordering::Relaxed)
     }
 
-    pub fn toggle_metronome(&mut self) {
-        self.metronome_enabled = !self.metronome_enabled;
+    pub fn rewind(&self) {
+        self.set_position(0.0);
+    }
+
+    pub fn fast_forward(&self, beats: f64) {
+        let current = self.get_position();
+        let sample_rate = self.audio_state.sample_rate.load();
+        let bpm = self.get_bpm();
+        let samples_per_beat = (60.0 / bpm) * sample_rate;
+        self.set_position(current + beats * samples_per_beat as f64);
+    }
+
+    pub fn rewind_beats(&self, beats: f64) {
+        let current = self.get_position();
+        let sample_rate = self.audio_state.sample_rate.load();
+        let bpm = self.get_bpm();
+        let samples_per_beat = (60.0 / bpm) * sample_rate;
+        self.set_position((current - beats * samples_per_beat as f64).max(0.0));
     }
 }

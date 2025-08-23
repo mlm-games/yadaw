@@ -2,7 +2,7 @@ use std::vec;
 
 use crate::{
     constants::PIANO_KEY_WIDTH,
-    state::{MidiNote, Pattern},
+    state::{MidiClip, MidiNote},
 };
 use eframe::{egui, egui_glow::painter};
 
@@ -75,7 +75,7 @@ enum ResizeEdge {
 }
 
 impl PianoRoll {
-    pub fn ui(&mut self, ui: &mut egui::Ui, pattern: &mut Pattern) -> Vec<PianoRollAction> {
+    pub fn ui(&mut self, ui: &mut egui::Ui, pattern: &mut MidiClip) -> Vec<PianoRollAction> {
         let mut actions = Vec::new();
         let available_rect = ui.available_rect_before_wrap();
 
@@ -98,7 +98,7 @@ impl PianoRoll {
                 available_rect.height(),
             ),
         );
-        self.draw_grid(&ui.painter(), grid_rect, pattern.length);
+        self.draw_grid(&ui.painter(), grid_rect, pattern.length_beats);
 
         let response = ui.interact(
             grid_rect,
@@ -255,7 +255,7 @@ impl PianoRoll {
                                 if let Some(note) = pattern.notes.get_mut(*idx) {
                                     // Ensure note stays within pattern bounds (to remove later)
                                     let new_start = (original_note.start + beat_delta).max(0.0);
-                                    let max_start = pattern.length - original_note.duration;
+                                    let max_start = pattern.length_beats - original_note.duration;
                                     note.start = new_start.min(max_start);
                                     note.pitch = ((original_note.pitch as i32 + pitch_delta)
                                         .clamp(0, 127))
@@ -371,9 +371,9 @@ impl PianoRoll {
                     let snapped_beat = ((beat / self.grid_snap).round() * self.grid_snap).max(0.0);
 
                     // Ensure note doesn't exceed pattern length
-                    if (snapped_beat as f64) < pattern.length {
+                    if (snapped_beat as f64) < pattern.length_beats {
                         let duration =
-                            (self.grid_snap as f64).min(pattern.length - snapped_beat as f64);
+                            (self.grid_snap as f64).min(pattern.length_beats - snapped_beat as f64);
                         actions.push(PianoRollAction::AddNote(MidiNote {
                             pitch,
                             velocity: 100,

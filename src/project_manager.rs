@@ -1,6 +1,6 @@
 use crate::constants::PROJECT_EXTENSION;
 use crate::state::{AppState, Project};
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::Local;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -96,7 +96,8 @@ impl ProjectManager {
         }
 
         let auto_save_path = self.get_auto_save_path()?;
-        let project = Project::from(state);
+        let project = state.to_project();
+
         let json = serde_json::to_string_pretty(&project)?;
         fs::write(&auto_save_path, json)?;
 
@@ -156,36 +157,6 @@ impl ProjectManager {
         }
 
         Ok(())
-    }
-
-    pub fn create_from_template(&self, template_name: &str) -> Result<Project> {
-        // Create different project templates
-        let mut project = Project {
-            name: format!("New {} Project", template_name),
-            tracks: Vec::new(),
-            master_volume: 0.8,
-            bpm: 120.0,
-        };
-
-        match template_name {
-            "Band" => {
-                // Add typical band tracks
-                // Drums, Bass, Guitar, Keys, Vocals
-            }
-            "Electronic" => {
-                // Add electronic music tracks
-                // Drums, Bass, Lead, Pad, FX
-            }
-            "Podcast" => {
-                // Add podcast tracks
-                // Voice 1, Voice 2, Music, SFX
-            }
-            _ => {
-                // Empty project
-            }
-        }
-
-        Ok(project)
     }
 
     fn create_backup_path(&self, original: &Path) -> PathBuf {

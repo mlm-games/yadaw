@@ -1,6 +1,8 @@
+use std::sync::atomic::Ordering;
+
 use super::*;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
-use crate::state::{AudioClip, AudioCommand};
+use crate::state::{AudioClip, AudioCommand, MidiClip};
 
 pub struct TimelineView {
     pub zoom_x: f32,
@@ -171,9 +173,11 @@ impl TimelineView {
         // Draw grid
         self.draw_grid(&painter, rect, bpm);
 
-        let binding = app.state.clone();
+        // Draw loop region overlay
+        self.draw_loop_region(&painter, rect, app);
 
         // Draw tracks
+        let binding = app.state.clone();
         let mut state = binding.lock().unwrap();
         for track_idx in 0..num_tracks {
             let track_rect = egui::Rect::from_min_size(
@@ -269,9 +273,15 @@ impl TimelineView {
             egui::Color32::WHITE,
         );
 
-        // Draw clips
-        for (clip_idx, clip) in track.audio_clips.iter().enumerate() {
-            self.draw_audio_clip(painter, ui, rect, clip, track_idx, clip_idx, app);
+        // Draw clips based on track type
+        if track.is_midi {
+            for (clip_idx, clip) in track.midi_clips.iter().enumerate() {
+                self.draw_midi_clip(painter, ui, rect, clip, track_idx, clip_idx, app);
+            }
+        } else {
+            for (clip_idx, clip) in track.audio_clips.iter().enumerate() {
+                self.draw_audio_clip(painter, ui, rect, clip, track_idx, clip_idx, app);
+            }
         }
 
         // Draw automation lanes if visible
@@ -324,6 +334,129 @@ impl TimelineView {
         );
 
         self.handle_clip_interaction(response, track_idx, clip_idx, clip_rect, app);
+    }
+
+    fn draw_loop_region(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        app: &super::app::YadawApp,
+    ) {
+        let loop_enabled = app.audio_state.loop_enabled.load(Ordering::Relaxed);
+        if !loop_enabled {
+            return;
+        }
+
+        let loop_start = app.audio_state.loop_start.load();
+        let loop_end = app.audio_state.loop_end.load();
+
+        let start_x = rect.left() + (loop_start as f32 * self.zoom_x - self.scroll_x);
+        let end_x = rect.left() + (loop_end as f32 * self.zoom_x - self.scroll_x);
+
+        // Draw loop region overlay
+        let loop_rect = egui::Rect::from_min_max(
+            egui::pos2(start_x, rect.top()),
+            egui::pos2(end_x, rect.bottom()),
+        );
+
+        painter.rect_filled(
+            loop_rect,
+            0.0,
+            egui::Color32::from_rgba_premultiplied(100, 150, 255, 20),
+        );
+
+        // Draw loop markers
+        painter.line_segment(
+            [
+                egui::pos2(start_x, rect.top()),
+                egui::pos2(start_x, rect.bottom()),
+            ],
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)),
+        );
+
+        painter.line_segment(
+            [
+                egui::pos2(end_x, rect.top()),
+                egui::pos2(end_x, rect.bottom()),
+            ],
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)),
+        );
+    }
+
+    fn draw_midi_clip(
+        &mut self,
+        painter: &egui::Painter,
+        ui: &mut egui::Ui,
+        track_rect: egui::Rect,
+        clip: &MidiClip,
+        track_idx: usize,
+        clip_idx: usize,
+        app: &mut super::app::YadawApp,
+    ) {
+        let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
+        let clip_width = clip.length_beats as f32 * self.zoom_x;
+
+        let clip_rect = egui::Rect::from_min_size(
+            track_rect.min + egui::vec2(clip_x, 5.0),
+            egui::vec2(clip_width, self.track_height - 10.0),
+        );
+
+        // Only draw if visible
+        if clip_rect.right() < track_rect.left() || clip_rect.left() > track_rect.right() {
+            return;
+        }
+
+        // Draw clip background
+        let color = if let Some((r, g, b)) = clip.color {
+            egui::Color32::from_rgb(r, g, b)
+        } else {
+            egui::Color32::from_rgb(100, 150, 200)
+        };
+
+        painter.rect_filled(clip_rect, 4.0, color);
+
+        // Draw MIDI notes preview
+        for note in &clip.notes {
+            let note_x = clip_rect.left()
+                + (note.start as f32 * self.zoom_x / clip.length_beats as f32 * clip_width);
+            let note_y = clip_rect.bottom() - ((note.pitch as f32 / 127.0) * clip_rect.height());
+            let note_width = (note.duration as f32 * self.zoom_x / clip.length_beats as f32
+                * clip_width)
+                .max(2.0);
+
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(note_x, note_y - 2.0),
+                    egui::vec2(note_width, 2.0),
+                ),
+                0.0,
+                egui::Color32::from_rgba_premultiplied(255, 255, 255, 100),
+            );
+        }
+
+        // Draw clip name
+        painter.text(
+            clip_rect.min + egui::vec2(5.0, 5.0),
+            egui::Align2::LEFT_TOP,
+            &clip.name,
+            egui::FontId::default(),
+            egui::Color32::WHITE,
+        );
+
+        // Handle interaction
+        let response = ui.interact(
+            clip_rect,
+            ui.id().with(("midi_clip", track_idx, clip_idx)),
+            egui::Sense::click_and_drag(),
+        );
+
+        if response.double_clicked() {
+            // Open in piano roll
+            app.selected_track = track_idx;
+            app.open_midi_clip_in_piano_roll(clip_idx);
+        }
+
+        // TODO: drag/resize similar to audio clips
     }
 
     fn handle_clip_interaction(
@@ -403,11 +536,69 @@ impl TimelineView {
         ui: &mut egui::Ui,
         app: &mut super::app::YadawApp,
     ) {
-        // Handle ongoing interactions
-        // ... (similar to original implementation)
+        // Handle empty space clicks for creating new clips
+        if response.clicked() && self.timeline_interaction.is_none() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let grid_pos = pos - response.rect.min;
+                let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
+                let track_idx = (grid_pos.y / self.track_height) as usize;
+
+                let state = app.state.lock().unwrap();
+                if let Some(track) = state.tracks.get(track_idx) {
+                    if track.is_midi && ui.input(|i| i.modifiers.ctrl) {
+                        // Ctrl+click on MIDI track creates new MIDI clip
+                        let snapped_beat =
+                            ((beat / self.grid_snap).round() * self.grid_snap) as f64;
+                        let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
+                            track_idx,
+                            snapped_beat,
+                            4.0, // Default 1 bar length
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Handle drag operations
+        if response.dragged() {
+            if let Some(current_pos) = response.hover_pos() {
+                match &mut self.timeline_interaction {
+                    Some(TimelineInteraction::DragClip {
+                        clips_and_starts,
+                        start_drag_beat,
+                    }) => {
+                        let grid_pos = current_pos - response.rect.min;
+                        let current_beat = ((grid_pos.x + self.scroll_x) / self.zoom_x) as f64;
+                        let beat_delta = current_beat - *start_drag_beat;
+                        let snapped_delta =
+                            ((beat_delta / self.grid_snap as f64).round() * self.grid_snap as f64);
+
+                        // Update clip positions
+                        for (track_id, clip_id, original_start) in clips_and_starts {
+                            let new_start = (*original_start + snapped_delta).max(0.0);
+
+                            // Check if it's a MIDI or audio clip
+                            let state = app.state.lock().unwrap();
+                            if let Some(track) = state.tracks.get(*track_id) {
+                                if track.is_midi {
+                                    let _ = app.command_tx.send(AudioCommand::MoveMidiClip(
+                                        *track_id, *clip_id, new_start,
+                                    ));
+                                } else {
+                                    let _ = app.command_tx.send(AudioCommand::MoveAudioClip(
+                                        *track_id, *clip_id, new_start,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         // End interaction
-        if ui.input(|i| i.pointer.primary_released()) {
+        if response.drag_stopped() {
             self.timeline_interaction = None;
         }
     }

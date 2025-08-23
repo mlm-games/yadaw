@@ -338,7 +338,7 @@ impl MixerWindow {
                         .on_hover_text("Mute")
                         .clicked()
                     {
-                        let _ = app.command_tx.send(AudioCommand::MuteTrack(idx, !muted));
+                        let _ = app.command_tx.send(AudioCommand::SetTrackMute(idx, !muted));
                     }
 
                     // Solo
@@ -348,7 +348,7 @@ impl MixerWindow {
                         .on_hover_text("Solo")
                         .clicked()
                     {
-                        let _ = app.command_tx.send(AudioCommand::SoloTrack(idx, !solo));
+                        let _ = app.command_tx.send(AudioCommand::SetTrackSolo(idx, !solo));
                     }
 
                     // Record arm

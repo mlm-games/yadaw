@@ -1,4 +1,6 @@
-use crate::audio_state::{AudioState, RealtimeCommand, TrackSnapshot};
+use crate::audio_state::AutomationTarget;
+use crate::audio_state::{AudioState, MidiClipSnapshot, RealtimeCommand, TrackSnapshot};
+use crate::audio_state::{AutomationLaneSnapshot, CurveType};
 use crate::audio_utils::calculate_stereo_gains;
 use crate::automation_lane::AutomationLaneWidget;
 use crate::constants::{
@@ -8,7 +10,7 @@ use crate::constants::{
 use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
 use crate::midi_utils::{generate_sine_for_note, MidiNoteUtils};
 use crate::mixer::{ChannelStrip, MixerEngine};
-use crate::state::{AudioClip, AutomationTarget, UIUpdate};
+use crate::state::{AudioClip, UIUpdate};
 use crate::time_utils::TimeConverter;
 use core::f32;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -206,6 +208,7 @@ pub fn run_audio_thread(
                         length_beats: end_beat - start_beat,
                         samples: engine.recording_state.accumulated_samples.clone(),
                         sample_rate: sample_rate as f32,
+                        ..Default::default()
                     };
 
                     let _ = engine
@@ -272,31 +275,26 @@ impl AudioEngine {
                 *self.tracks.write() = new_tracks.clone();
                 self.update_track_processors(&new_tracks);
             }
-
             RealtimeCommand::UpdateTrackVolume(id, vol) => {
                 if let Some(track) = self.tracks.write().get_mut(id) {
                     track.volume = vol;
                 }
             }
-
             RealtimeCommand::UpdateTrackPan(id, pan) => {
                 if let Some(track) = self.tracks.write().get_mut(id) {
                     track.pan = pan;
                 }
             }
-
             RealtimeCommand::UpdateTrackMute(id, mute) => {
                 if let Some(track) = self.tracks.write().get_mut(id) {
                     track.muted = mute;
                 }
             }
-
             RealtimeCommand::UpdateTrackSolo(id, solo) => {
                 if let Some(track) = self.tracks.write().get_mut(id) {
                     track.solo = solo;
                 }
             }
-
             RealtimeCommand::UpdatePluginBypass(track_id, plugin_idx, bypass) => {
                 if let Some(processor) = self.track_processors.get_mut(track_id) {
                     if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
@@ -304,7 +302,6 @@ impl AudioEngine {
                     }
                 }
             }
-
             RealtimeCommand::UpdatePluginParam(track_id, plugin_idx, param_name, value) => {
                 if let Some(processor) = self.track_processors.get_mut(track_id) {
                     if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
@@ -314,7 +311,6 @@ impl AudioEngine {
                     }
                 }
             }
-
             RealtimeCommand::PreviewNote(track_id, pitch, start_position) => {
                 self.preview_note = Some(PreviewNote {
                     track_id,
@@ -322,9 +318,17 @@ impl AudioEngine {
                     start_position,
                 });
             }
-
             RealtimeCommand::StopPreviewNote => {
                 self.preview_note = None;
+            }
+            RealtimeCommand::SetLoopEnabled(enabled) => {
+                self.audio_state
+                    .loop_enabled
+                    .store(enabled, Ordering::Relaxed);
+            }
+            RealtimeCommand::SetLoopRegion(start, end) => {
+                self.audio_state.loop_start.store(start);
+                self.audio_state.loop_end.store(end);
             }
         }
     }
@@ -335,10 +339,10 @@ impl AudioEngine {
             self.track_processors.push(TrackProcessor {
                 id: self.track_processors.len(),
                 plugins: Vec::new(),
-                input_buffer_l: Vec::with_capacity(MAX_BUFFER_SIZE),
-                input_buffer_r: Vec::with_capacity(MAX_BUFFER_SIZE),
-                output_buffer_l: Vec::with_capacity(MAX_BUFFER_SIZE),
-                output_buffer_r: Vec::with_capacity(MAX_BUFFER_SIZE),
+                input_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
+                input_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
+                output_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
+                output_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
                 active_notes: Vec::new(),
                 last_pattern_position: 0.0,
                 automated_volume: f32::NAN,
@@ -408,85 +412,64 @@ impl AudioEngine {
         output: &mut [f32],
         num_frames: usize,
         channels: usize,
-        current_position: f64,
+        mut current_position: f64,
     ) {
-        let start_time = std::time::Instant::now();
         let tracks = self.tracks.read().clone();
         let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
+        let loop_enabled = self.audio_state.loop_enabled.load(Ordering::Relaxed);
+        let loop_start = self.audio_state.loop_start.load();
+        let loop_end = self.audio_state.loop_end.load();
 
-        let frames_to_process = num_frames.min(MAX_BUFFER_SIZE);
-
-        // Use converter for time calculations
         let converter = TimeConverter::new(self.sample_rate as f32, bpm);
-        let current_beat = converter.samples_to_beats(current_position);
 
-        // Check for soloed tracks
-        let any_track_soloed = tracks.iter().any(|t| t.solo);
+        // Handle looping at block level
+        let mut frames_processed = 0;
+        while frames_processed < num_frames {
+            let current_beat = converter.samples_to_beats(current_position);
 
-        // Collect track levels for meters
-        let mut track_levels = Vec::new();
-
-        // Set recording track if recording
-        if self.recording_state.is_recording {
-            self.recording_state.recording_track =
-                tracks.iter().position(|t| t.armed && !t.is_midi);
-        }
-
-        // Process each track
-        for (track_idx, track) in tracks.iter().enumerate() {
-            if track.muted || (any_track_soloed && !track.solo) {
-                track_levels.push((0.0, 0.0));
-                continue;
-            }
-
-            if let Some(processor) = self.track_processors.get_mut(track_idx) {
-                // Ensure buffers are large enough
-                if processor.input_buffer_l.len() < frames_to_process {
-                    processor.input_buffer_l.resize(frames_to_process, 0.0);
-                    processor.input_buffer_r.resize(frames_to_process, 0.0);
-                    processor.output_buffer_l.resize(frames_to_process, 0.0);
-                    processor.output_buffer_r.resize(frames_to_process, 0.0);
-                }
-
-                // Clear input buffers
-                processor.input_buffer_l[..frames_to_process].fill(0.0);
-                processor.input_buffer_r[..frames_to_process].fill(0.0);
-
-                apply_automation(track, processor, current_beat);
-
-                // Use automated values with fallback
-                let final_volume =
-                    if !processor.automated_volume.is_nan() && processor.automated_volume > 0.0 {
-                        processor.automated_volume
-                    } else {
-                        track.volume
-                    };
-
-                let final_pan = if !processor.automated_pan.is_nan() {
-                    processor.automated_pan
+            // Calculate how many frames until loop end (if looping)
+            let frames_to_process =
+                if loop_enabled && loop_end > loop_start && current_beat < loop_end {
+                    let samples_to_loop_end = converter.beats_to_samples(loop_end - current_beat);
+                    ((samples_to_loop_end as usize).min(num_frames - frames_processed))
+                        .min(MAX_BUFFER_SIZE)
                 } else {
-                    track.pan
+                    (num_frames - frames_processed).min(MAX_BUFFER_SIZE)
                 };
 
-                // Use final_volume and final_pan for mixing
-                let (left_gain, right_gain) = calculate_stereo_gains(final_volume, final_pan);
+            // Clear this block in output
+            for i in frames_processed..(frames_processed + frames_to_process) {
+                output[i * channels] = 0.0;
+                if channels > 1 {
+                    output[i * channels + 1] = 0.0;
+                }
+            }
 
-                // Process track content
-                if track.is_midi {
-                    // For MIDI tracks, just update note tracking
-                    process_midi_track(
-                        track,
-                        processor,
-                        frames_to_process,
-                        current_position,
-                        bpm,
-                        self.sample_rate,
-                    );
+            let any_track_soloed = tracks.iter().any(|t| t.solo);
 
-                    // Process plugins (they will handle MIDI->Audio conversion)
-                    if !processor.plugins.is_empty() {
-                        process_track_plugins(
+            // Process tracks for this block
+            for (track_idx, track) in tracks.iter().enumerate() {
+                if track.muted || (any_track_soloed && !track.solo) {
+                    continue;
+                }
+
+                if let Some(processor) = self.track_processors.get_mut(track_idx) {
+                    // Process based on track type
+                    if track.is_midi {
+                        process_midi_track(
+                            track,
+                            processor,
+                            frames_to_process,
+                            current_position,
+                            bpm,
+                            self.sample_rate,
+                            loop_enabled,
+                            loop_start,
+                            loop_end,
+                        );
+                    } else {
+                        process_audio_track(
                             track,
                             processor,
                             frames_to_process,
@@ -495,18 +478,8 @@ impl AudioEngine {
                             self.sample_rate,
                         );
                     }
-                    // If no plugins, plays process_midi_track generated sine waves (but it doesn't play for in for some reason)
-                } else {
-                    process_audio_track(
-                        track,
-                        processor,
-                        frames_to_process,
-                        current_position,
-                        bpm,
-                        self.sample_rate,
-                    );
 
-                    // Effects plugins here
+                    // Process plugins if any
                     if !processor.plugins.is_empty() {
                         process_track_plugins(
                             track,
@@ -515,80 +488,47 @@ impl AudioEngine {
                             current_position,
                             bpm,
                             self.sample_rate,
+                            loop_enabled,
+                            loop_start,
+                            loop_end,
                         );
                     }
-                }
 
-                // Process preview note if on this track (after plugins)
-                if let Some(preview) = &self.preview_note {
-                    if preview.track_id == track_idx {
-                        process_preview_note(
-                            processor,
-                            preview,
-                            frames_to_process,
-                            current_position,
-                            self.sample_rate,
-                        );
-                    }
-                }
-
-                // Calculate levels for meters
-                let left_peak = processor.input_buffer_l[..frames_to_process]
-                    .iter()
-                    .map(|s| s.abs())
-                    .fold(0.0f32, f32::max);
-                let right_peak = processor.input_buffer_r[..frames_to_process]
-                    .iter()
-                    .map(|s| s.abs())
-                    .fold(0.0f32, f32::max);
-                track_levels.push((left_peak, right_peak));
-
-                for i in 0..frames_to_process {
-                    output[i * channels] += processor.input_buffer_l[i] * left_gain;
-                    if channels > 1 {
-                        output[i * channels + 1] += processor.input_buffer_r[i] * right_gain;
+                    // Mix to output
+                    let (left_gain, right_gain) = calculate_stereo_gains(track.volume, track.pan);
+                    for i in 0..frames_to_process {
+                        let out_idx = (frames_processed + i) * channels;
+                        output[out_idx] += processor.input_buffer_l[i] * left_gain * master_volume;
+                        if channels > 1 {
+                            output[out_idx + 1] +=
+                                processor.input_buffer_r[i] * right_gain * master_volume;
+                        }
                     }
                 }
             }
-            // Track performance
-            let processing_time = start_time.elapsed();
-            let cpu_usage =
-                processing_time.as_secs_f32() / (num_frames as f32 / self.sample_rate as f32);
 
-            // Send metric update
-            let _ = self.updates.send(UIUpdate::PerformanceMetric {
-                cpu_usage,
-                buffer_fill: 0.9, // Calculate actual buffer health
-                xruns: 0,         // Track actual xruns
-            });
-        }
+            // Update position
+            current_position += frames_to_process as f64;
+            frames_processed += frames_to_process;
 
-        // Apply master volume and calculate master levels
-        let mut master_left_peak = 0.0f32;
-        let mut master_right_peak = 0.0f32;
+            // Loop jump
+            let new_beat = converter.samples_to_beats(current_position);
+            if loop_enabled && loop_end > loop_start && new_beat >= loop_end {
+                // Jump back to loop start
+                current_position = converter.beats_to_samples(loop_start);
 
-        for i in 0..num_frames {
-            let left = output[i * channels] * master_volume;
-            let right = if channels > 1 {
-                output[i * channels + 1] * master_volume
-            } else {
-                left
-            };
-
-            output[i * channels] = left.clamp(-1.0, 1.0);
-            if channels > 1 {
-                output[i * channels + 1] = right.clamp(-1.0, 1.0);
+                // Clear all active notes when looping
+                for processor in &mut self.track_processors {
+                    processor.active_notes.clear();
+                }
             }
-
-            master_left_peak = master_left_peak.max(left.abs());
-            master_right_peak = master_right_peak.max(right.abs());
         }
 
-        // Send level updates
-        let _ = self.updates.try_send(UIUpdate::TrackLevels(track_levels));
-        let _ = self
-            .updates
-            .try_send(UIUpdate::MasterLevel(master_left_peak, master_right_peak));
+        // Update global position
+        self.audio_state.set_position(current_position);
+
+        // Send position update
+        let _ = self.updates.try_send(UIUpdate::Position(current_position));
     }
 
     fn midi_panic(&mut self) {
@@ -660,86 +600,70 @@ fn process_midi_track(
     current_position: f64,
     bpm: f32,
     sample_rate: f64,
+    loop_enabled: bool,
+    loop_start: f64,
+    loop_end: f64,
 ) {
-    if let Some(pattern) = track.patterns.first() {
-        let converter = TimeConverter::new(sample_rate as f32, bpm);
-        let current_beat = converter.samples_to_beats(current_position);
+    let converter = TimeConverter::new(sample_rate as f32, bpm);
+    let current_beat = converter.samples_to_beats(current_position);
 
-        // Calculate pattern position and loop count
-        let total_beats_elapsed = current_beat;
-        let new_loop_count = (total_beats_elapsed / pattern.length) as u32;
-        let pattern_position = total_beats_elapsed % pattern.length;
-
-        // Detect pattern loop
-        let pattern_looped = new_loop_count > processor.pattern_loop_count;
-        if pattern_looped {
-            processor.pattern_loop_count = new_loop_count;
-            processor.notes_triggered_this_loop.clear();
-
-            // Stop all active notes from previous loop
-            processor.active_notes.clear();
+    // Handle looping
+    let effective_beat = if loop_enabled && loop_end > loop_start {
+        let loop_length = loop_end - loop_start;
+        if current_beat >= loop_end {
+            loop_start + ((current_beat - loop_start) % loop_length)
+        } else if current_beat < loop_start {
+            current_beat
+        } else {
+            current_beat
         }
+    } else {
+        current_beat
+    };
 
-        // Process each note in the pattern
-        for note in &pattern.notes {
-            let note_start = note.start;
-            let note_end = (note.start + note.duration).min(pattern.length);
+    // Process MIDI clips at the effective beat position
+    for clip in &track.midi_clips {
+        let clip_end = clip.start_beat + clip.length_beats;
 
-            // Check if we should trigger note on
-            let should_trigger = if pattern_looped && note_start == 0.0 {
-                // Special case: note starts at beat 0 and pattern just looped
-                true
-            } else if processor.last_pattern_position <= pattern_position {
-                // Normal progression within pattern
-                pattern_position >= note_start && processor.last_pattern_position < note_start
-            } else {
-                // We've wrapped around - check if note starts before current position
-                note_start <= pattern_position
-                    && !processor.notes_triggered_this_loop.contains(&note.pitch)
-            };
+        // Check if we're within this clip
+        if effective_beat >= clip.start_beat && effective_beat < clip_end {
+            let clip_position = effective_beat - clip.start_beat;
 
-            if should_trigger {
-                // Remove any existing instance of this note
-                processor.active_notes.retain(|n| n.pitch != note.pitch);
+            // Process notes in the clip
+            for note in &clip.notes {
+                let note_start_abs = clip.start_beat + note.start;
+                let note_end_abs = clip.start_beat + note.start + note.duration;
 
-                // Add new note
-                processor.active_notes.push(ActiveMidiNote {
-                    pitch: note.pitch,
-                    velocity: note.velocity,
-                    start_sample: current_position,
-                });
+                // Check if note should be playing
+                if effective_beat >= note_start_abs && effective_beat < note_end_abs {
+                    // Check if this note needs to be triggered
+                    let should_trigger =
+                        !processor.active_notes.iter().any(|n| n.pitch == note.pitch);
 
-                processor.notes_triggered_this_loop.push(note.pitch);
-            }
+                    if should_trigger {
+                        processor.active_notes.push(ActiveMidiNote {
+                            pitch: note.pitch,
+                            velocity: note.velocity,
+                            start_sample: current_position,
+                        });
+                    }
+                }
 
-            // Check if we should trigger note off
-            let should_stop = if note_end >= pattern.length {
-                // Note extends to or past pattern boundary
-                pattern_looped
-                    || (pattern_position < note_start
-                        && processor.last_pattern_position >= note_start)
-            } else if processor.last_pattern_position <= pattern_position {
-                // Normal progression
-                pattern_position >= note_end && processor.last_pattern_position < note_end
-            } else {
-                // Wrapped around
-                note_end <= pattern_position
-            };
-
-            if should_stop {
-                processor.active_notes.retain(|n| n.pitch != note.pitch);
+                // Check if note should stop
+                if processor.active_notes.iter().any(|n| n.pitch == note.pitch) {
+                    if effective_beat >= note_end_abs || effective_beat < note_start_abs {
+                        processor.active_notes.retain(|n| n.pitch != note.pitch);
+                    }
+                }
             }
         }
-
-        processor.last_pattern_position = pattern_position;
     }
 
-    // IMPORTANT: Clear input buffers for MIDI tracks
-    // Plugins will generate audio from MIDI, we don't pre-generate audio
+    // Clear input buffers
     processor.input_buffer_l[..num_frames].fill(0.0);
     processor.input_buffer_r[..num_frames].fill(0.0);
 
-    // Only generate audio if there are NO plugins (fallback sine wave)
+    // Generate audio if no plugins
     if processor.plugins.is_empty() && !processor.active_notes.is_empty() {
         for i in 0..num_frames {
             let mut sample = 0.0;
@@ -822,12 +746,14 @@ fn process_preview_note(
 }
 
 fn build_block_midi_events(
-    pattern: &crate::audio_state::PatternSnapshot,
-    processor: &TrackProcessor,
+    clip: &MidiClipSnapshot,
     block_start_samples: f64,
     frames: usize,
     sample_rate: f64,
     bpm: f32,
+    loop_enabled: bool,
+    loop_start: f64,
+    loop_end: f64,
 ) -> Vec<(u8, u8, u8, i64)> {
     let converter = TimeConverter::new(sample_rate as f32, bpm);
     let block_start_beat = converter.samples_to_beats(block_start_samples);
@@ -835,50 +761,34 @@ fn build_block_midi_events(
 
     let mut events = Vec::new();
 
-    // Calculate pattern positions for this block
-    let pattern_start = block_start_beat % pattern.length;
-    let pattern_end = block_end_beat % pattern.length;
-
-    for note in &pattern.notes {
-        let note_start = note.start;
-        let note_end = (note.start + note.duration).min(pattern.length);
-
-        // Check if note on occurs in this block
-        if pattern_end >= pattern_start {
-            // No wrap in this block
-            if note_start >= pattern_start && note_start < pattern_end {
-                let beat_offset = note_start - pattern_start;
-                let sample_offset = converter.beats_to_samples(beat_offset);
-                let frame = sample_offset.round() as i64;
-                if frame >= 0 && frame < frames as i64 {
-                    events.push((0x90, note.pitch, note.velocity, frame));
-                }
-            }
-
-            if note_end > pattern_start && note_end <= pattern_end {
-                let beat_offset = note_end - pattern_start;
-                let sample_offset = converter.beats_to_samples(beat_offset);
-                let frame = sample_offset.round() as i64;
-                if frame >= 0 && frame < frames as i64 {
-                    events.push((0x80, note.pitch, 0, frame));
-                }
-            }
+    // Adjust for loop if enabled
+    let effective_start_beat =
+        if loop_enabled && loop_end > loop_start && block_start_beat >= loop_end {
+            let loop_length = loop_end - loop_start;
+            loop_start + ((block_start_beat - loop_start) % loop_length)
         } else {
-            // Pattern wraps in this block
-            // Check events after wrap point (beginning of pattern)
-            if note_start < pattern_end {
-                let samples_until_wrap = converter.beats_to_samples(pattern.length - pattern_start);
-                let beat_offset = note_start;
-                let sample_offset = samples_until_wrap + converter.beats_to_samples(beat_offset);
-                let frame = sample_offset.round() as i64;
-                if frame >= 0 && frame < frames as i64 {
-                    events.push((0x90, note.pitch, note.velocity, frame));
-                }
-            }
+            block_start_beat
+        };
 
-            // Check events before wrap point
-            if note_start >= pattern_start {
-                let beat_offset = note_start - pattern_start;
+    let effective_end_beat = if loop_enabled && loop_end > loop_start && block_end_beat >= loop_end
+    {
+        let loop_length = loop_end - loop_start;
+        loop_start + ((block_end_beat - loop_start) % loop_length)
+    } else {
+        block_end_beat
+    };
+
+    // Check if this clip is active during this block
+    let clip_end = clip.start_beat + clip.length_beats;
+
+    if effective_start_beat < clip_end && effective_end_beat > clip.start_beat {
+        for note in &clip.notes {
+            let note_start_abs = clip.start_beat + note.start;
+            let note_end_abs = clip.start_beat + note.start + note.duration;
+
+            // Check if note on occurs in this block
+            if note_start_abs >= effective_start_beat && note_start_abs < effective_end_beat {
+                let beat_offset = note_start_abs - block_start_beat;
                 let sample_offset = converter.beats_to_samples(beat_offset);
                 let frame = sample_offset.round() as i64;
                 if frame >= 0 && frame < frames as i64 {
@@ -886,19 +796,9 @@ fn build_block_midi_events(
                 }
             }
 
-            // Similar logic for note offs
-            if note_end <= pattern_end {
-                let samples_until_wrap = converter.beats_to_samples(pattern.length - pattern_start);
-                let beat_offset = note_end;
-                let sample_offset = samples_until_wrap + converter.beats_to_samples(beat_offset);
-                let frame = sample_offset.round() as i64;
-                if frame >= 0 && frame < frames as i64 {
-                    events.push((0x80, note.pitch, 0, frame));
-                }
-            }
-
-            if note_end > pattern_start && note_end <= pattern.length {
-                let beat_offset = note_end - pattern_start;
+            // Check if note off occurs in this block
+            if note_end_abs > effective_start_beat && note_end_abs <= effective_end_beat {
+                let beat_offset = note_end_abs - block_start_beat;
                 let sample_offset = converter.beats_to_samples(beat_offset);
                 let frame = sample_offset.round() as i64;
                 if frame >= 0 && frame < frames as i64 {
@@ -914,34 +814,47 @@ fn build_block_midi_events(
 }
 
 fn process_track_plugins(
-    track: &crate::audio_state::TrackSnapshot,
+    track: &TrackSnapshot,
     processor: &mut TrackProcessor,
     num_frames: usize,
     block_start_samples: f64,
     bpm: f32,
     sample_rate: f64,
+    loop_enabled: bool,
+    loop_start: f64,
+    loop_end: f64,
 ) {
-    // Prep. MIDI for this block (Note On/Off with proper frame offsets)
-    let midi_events: Vec<(u8, u8, u8, i64)> = if track.is_midi {
-        if let Some(pattern) = track.patterns.first() {
-            build_block_midi_events(
-                pattern,
-                processor,
+    // Build MIDI events for this block if it's a MIDI track
+    let mut all_midi_events = Vec::new();
+
+    if track.is_midi {
+        for clip in &track.midi_clips {
+            let clip_events = build_block_midi_events(
+                clip,
                 block_start_samples,
                 num_frames,
                 sample_rate,
                 bpm,
-            )
-        } else {
-            Vec::new()
+                loop_enabled,
+                loop_start,
+                loop_end,
+            );
+            all_midi_events.extend(clip_events);
         }
-    } else {
-        Vec::new()
-    };
+        all_midi_events.sort_by_key(|e| e.3);
+    }
 
-    // Clear output buffers for plugin chain
+    // Clear plugin outputs
     processor.output_buffer_l[..num_frames].fill(0.0);
     processor.output_buffer_r[..num_frames].fill(0.0);
+
+    // If no plugins, nothing to do
+    if processor.plugins.is_empty() {
+        return;
+    }
+
+    // Process chain
+    let mut first_active_plugin = true;
 
     for (plugin_idx, plugin_desc) in track.plugin_chain.iter().enumerate() {
         if plugin_desc.bypass {
@@ -950,70 +863,89 @@ fn process_track_plugins(
 
         if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
             if let Some(instance) = &mut plugin.instance {
-                // First plugin: feed MIDI (or clear)
-                if plugin_idx == 0 && track.is_midi {
-                    if !midi_events.is_empty() {
-                        instance.prepare_midi_raw_events(&midi_events);
-                        if DEBUG_PLUGIN_AUDIO {
-                            debug_print_midi_events(&plugin_desc.uri, &midi_events);
-                        }
+                // Apply automated plugin param values (if any)
+                for kv in processor.automated_plugin_params.iter() {
+                    let ((p_idx, param_name), value) = (kv.key().clone(), *kv.value());
+                    if p_idx == plugin_idx {
+                        instance.set_parameter(&param_name, value);
+                    }
+                }
+
+                // Feed MIDI to the first active plugin on MIDI tracks
+                if track.is_midi {
+                    if first_active_plugin && !all_midi_events.is_empty() {
+                        instance.prepare_midi_raw_events(&all_midi_events);
                     } else {
                         instance.clear_midi_events();
-                        if DEBUG_PLUGIN_AUDIO {
-                            println!("[LV2][{}] MIDI: cleared (no events)", plugin_desc.uri);
-                        }
                     }
+                    first_active_plugin = false;
                 } else {
-                    // Ensure downstream plugins don’t get stale MIDI. Also doesn't fix the mid stop problem
                     instance.clear_midi_events();
                 }
 
-                // Zero plugin outputs before run
-                processor.output_buffer_l[..num_frames].fill(0.0);
-                processor.output_buffer_r[..num_frames].fill(0.0);
-
                 // Run plugin
-                match instance.process(
+                if let Err(e) = instance.process(
                     &processor.input_buffer_l[..num_frames],
                     &processor.input_buffer_r[..num_frames],
                     &mut processor.output_buffer_l[..num_frames],
                     &mut processor.output_buffer_r[..num_frames],
                     num_frames,
                 ) {
-                    Ok(_) => {
-                        if DEBUG_PLUGIN_AUDIO {
-                            debug_print_output_peak(
-                                &plugin_desc.uri,
-                                &processor.output_buffer_l[..num_frames],
-                                &processor.output_buffer_r[..num_frames],
-                            );
-                        }
-                        // Pass plugin output to next stage (copy output->input)
-                        processor.input_buffer_l[..num_frames]
-                            .copy_from_slice(&processor.output_buffer_l[..num_frames]);
-                        processor.input_buffer_r[..num_frames]
-                            .copy_from_slice(&processor.output_buffer_r[..num_frames]);
-                    }
-                    Err(e) => {
-                        eprintln!("[LV2][{}] run error: {}", plugin_desc.uri, e);
-                        // Keep input buffers unchanged so the chain continues
-                    }
+                    eprintln!("Plugin processing error: {}", e);
+                } else {
+                    // Copy output to input for next plugin
+                    processor.input_buffer_l[..num_frames]
+                        .copy_from_slice(&processor.output_buffer_l[..num_frames]);
+                    processor.input_buffer_r[..num_frames]
+                        .copy_from_slice(&processor.output_buffer_r[..num_frames]);
                 }
             }
         }
     }
 }
 
-fn apply_automation(track: &TrackSnapshot, processor: &mut TrackProcessor, current_beat: f64) {
-    for lane in &track.automation_lanes {
-        let value = AutomationLaneWidget::get_value_at_beat(lane, current_beat);
+fn value_at_beat_snapshot(lane: &AutomationLaneSnapshot, beat: f64) -> f32 {
+    if lane.points.is_empty() {
+        return 0.0;
+    }
+    // Find neighbors
+    let mut prev = &lane.points[0];
+    let mut next = &lane.points[lane.points.len() - 1];
+    for p in &lane.points {
+        if p.beat <= beat {
+            prev = p;
+        } else {
+            next = p;
+            break;
+        }
+    }
+    if (next.beat - prev.beat).abs() < f64::EPSILON {
+        return next.value;
+    }
+    let t = ((beat - prev.beat) / (next.beat - prev.beat)).clamp(0.0, 1.0);
+    match next.curve_type {
+        CurveType::Step => prev.value,
+        CurveType::Linear => prev.value + ((next.value - prev.value) * t as f32),
+        CurveType::Exponential => {
+            let t2 = (t as f32).powf(2.0);
+            prev.value + (next.value - prev.value) * t2
+        }
+    }
+}
 
+fn apply_automation(
+    track: &crate::audio_state::TrackSnapshot,
+    processor: &mut TrackProcessor,
+    current_beat: f64,
+) {
+    for lane in &track.automation_lanes {
+        let value = value_at_beat_snapshot(lane, current_beat);
         match &lane.parameter {
             AutomationTarget::TrackVolume => {
                 processor.automated_volume = value;
             }
             AutomationTarget::TrackPan => {
-                processor.automated_pan = value * 2.0 - 1.0; // Convert 0-1 to -1 to 1
+                processor.automated_pan = value * 2.0 - 1.0;
             }
             AutomationTarget::PluginParam {
                 plugin_idx,
@@ -1023,6 +955,7 @@ fn apply_automation(track: &TrackSnapshot, processor: &mut TrackProcessor, curre
                     .automated_plugin_params
                     .insert((*plugin_idx, param_name.clone()), value);
             }
+            AutomationTarget::TrackSend(_) => todo!(),
         }
     }
 }

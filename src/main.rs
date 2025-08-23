@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load().unwrap_or_default();
 
     // Initialize state
-    let app_state = Arc::new(Mutex::new(AppState::new()));
+    let app_state = Arc::new(Mutex::new(AppState::default()));
     let audio_state = Arc::new(AudioState::new());
 
     // Create channels for communication

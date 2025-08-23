@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio_state::{self, AutomationTarget};
 use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
 use crate::plugin::PluginParameterUpdate;
@@ -298,12 +299,12 @@ impl TracksPanel {
 
             ui.menu_button("➕", |ui| {
                 if ui.button("Volume").clicked() {
-                    app.add_automation_lane(idx, crate::state::AutomationTarget::TrackVolume);
+                    app.add_automation_lane(idx, AutomationTarget::TrackVolume);
                     ui.close();
                 }
 
                 if ui.button("Pan").clicked() {
-                    app.add_automation_lane(idx, crate::state::AutomationTarget::TrackPan);
+                    app.add_automation_lane(idx, AutomationTarget::TrackPan);
                     ui.close();
                 }
 
@@ -312,11 +313,11 @@ impl TracksPanel {
                 // Plugin parameters
                 for (plugin_idx, plugin) in track.plugin_chain.iter().enumerate() {
                     ui.menu_button(&plugin.name, |ui| {
-                        for (param_name, param) in &plugin.params {
-                            if ui.button(&param.name).clicked() {
+                        for (param_name, _val) in &plugin.params {
+                            if ui.button(param_name).clicked() {
                                 app.add_automation_lane(
                                     idx,
-                                    crate::state::AutomationTarget::PluginParam {
+                                    AutomationTarget::PluginParam {
                                         plugin_idx,
                                         param_name: param_name.clone(),
                                     },
@@ -372,42 +373,37 @@ impl TracksPanel {
                 });
 
                 // Plugin parameters
-                for (param_name, param) in &mut plugin.params {
+                for (pname, val) in plugin.params.iter_mut() {
                     ui.horizontal(|ui| {
-                        ui.label(&param.name);
+                        ui.label(pname);
 
-                        let mut value = param.value;
+                        let mut v = *val;
                         if ui
-                            .add(
-                                egui::Slider::new(&mut value, param.min..=param.max)
-                                    .show_value(true),
-                            )
+                            .add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(true))
                             .changed()
                         {
-                            let update = PluginParameterUpdate {
-                                track_id: idx,
-                                plugin_idx,
-                                param_name: param_name.clone(),
-                                value,
-                            };
-
-                            param.value = value;
-                            let _ = app.command_tx.send(update.create_command());
+                            *val = v;
+                            let _ =
+                                app.command_tx
+                                    .send(crate::state::AudioCommand::SetPluginParam(
+                                        idx,        // current track index
+                                        plugin_idx, // current plugin index
+                                        pname.clone(),
+                                        v,
+                                    ));
                         }
 
-                        // Reset button
-                        if ui
-                            .small_button("↺")
-                            .on_hover_text("Reset to default")
-                            .clicked()
-                        {
-                            param.value = param.default;
-                            let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                                idx,
-                                plugin_idx,
-                                param_name.clone(),
-                                param.default,
-                            ));
+                        // Reset button (no per-param default stored; use 0.0)
+                        if ui.small_button("↺").on_hover_text("Reset to 0.0").clicked() {
+                            *val = 0.0;
+                            let _ =
+                                app.command_tx
+                                    .send(crate::state::AudioCommand::SetPluginParam(
+                                        idx,
+                                        plugin_idx,
+                                        pname.clone(),
+                                        *val,
+                                    ));
                         }
                     });
                 }

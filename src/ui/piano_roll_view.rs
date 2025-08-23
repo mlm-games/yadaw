@@ -1,13 +1,16 @@
 use std::fs::read_to_string;
 
+use rayon::vec;
+
 use super::*;
 use crate::constants::PIANO_KEY_WIDTH;
 use crate::piano_roll::{PianoRoll, PianoRollAction};
-use crate::state::{AudioCommand, MidiNote};
+use crate::state::{AudioCommand, MidiClip, MidiNote};
 
 pub struct PianoRollView {
     piano_roll: PianoRoll,
-    selected_pattern: usize,
+    selected_clip: Option<usize>,
+    editing_notes: Vec<MidiNote>,
 
     // View settings
     show_velocity_lane: bool,
@@ -36,8 +39,6 @@ impl PianoRollView {
     pub fn new() -> Self {
         Self {
             piano_roll: PianoRoll::default(),
-            selected_pattern: 0,
-
             show_velocity_lane: true,
             show_controller_lanes: false,
             velocity_lane_height: 100.0,
@@ -46,6 +47,8 @@ impl PianoRollView {
 
             midi_input_enabled: false,
             midi_octave_offset: 0,
+            selected_clip: None,
+            editing_notes: vec![],
         }
     }
 
@@ -95,43 +98,90 @@ impl PianoRollView {
         });
     }
 
+    pub fn set_editing_clip(&mut self, clip_idx: usize) {
+        self.selected_clip = Some(clip_idx);
+    }
+
     fn draw_header(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         ui.horizontal(|ui| {
             ui.heading("Piano Roll");
 
             ui.separator();
 
-            // Pattern selector
-            ui.label("Pattern:");
+            // Clip selector
+            ui.label("MIDI Clip:");
             let state = app.state.lock().unwrap();
             if let Some(track) = state.tracks.get(app.selected_track) {
-                egui::ComboBox::from_id_salt("pattern_selector")
-                    .selected_text(
-                        track
-                            .patterns
-                            .get(self.selected_pattern)
-                            .map(|p| p.name.as_str())
-                            .unwrap_or("No Pattern"),
-                    )
+                let selected_text = if let Some(clip_idx) = self.selected_clip {
+                    track
+                        .midi_clips
+                        .get(clip_idx)
+                        .map(|c| c.name.as_str())
+                        .unwrap_or("No Clip")
+                } else {
+                    "No Clip Selected"
+                };
+
+                egui::ComboBox::from_id_salt("clip_selector")
+                    .selected_text(selected_text)
                     .show_ui(ui, |ui| {
-                        for (i, pattern) in track.patterns.iter().enumerate() {
+                        for (i, clip) in track.midi_clips.iter().enumerate() {
                             if ui
-                                .selectable_value(&mut self.selected_pattern, i, &pattern.name)
+                                .selectable_value(&mut self.selected_clip, Some(i), &clip.name)
                                 .clicked()
                             {
-                                // Pattern changed
+                                // Load clip notes for editing
+                                self.editing_notes = clip.notes.clone();
                             }
                         }
                     });
 
-                // Add pattern button
-                if ui.button("➕").on_hover_text("Add Pattern").clicked() {
-                    // Add new pattern
+                // Create new clip button
+                if ui
+                    .button("➕")
+                    .on_hover_text("Create New MIDI Clip")
+                    .clicked()
+                {
+                    let current_beat = state.position_to_beats(app.audio_state.get_position());
+                    let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
+                        app.selected_track,
+                        current_beat,
+                        4.0, // Default 1 bar length
+                    ));
                 }
 
-                // Duplicate pattern button
-                if ui.button("⎘").on_hover_text("Duplicate Pattern").clicked() {
-                    // Duplicate current pattern
+                // Duplicate clip button
+                if ui.button("⎘").on_hover_text("Duplicate Clip").clicked() {
+                    if let Some(clip_idx) = self.selected_clip {
+                        if let Some(clip) = track.midi_clips.get(clip_idx) {
+                            let new_clip = MidiClip {
+                                name: format!("{} (copy)", clip.name),
+                                start_beat: clip.start_beat + clip.length_beats,
+                                length_beats: clip.length_beats,
+                                notes: clip.notes.clone(),
+                                color: clip.color,
+                                ..Default::default()
+                            };
+                            // Add the duplicated clip
+                            let _ = app.command_tx.send(AudioCommand::CreateMidiClipWithData(
+                                app.selected_track,
+                                new_clip,
+                            ));
+                        }
+                    }
+                }
+
+                // Delete clip button
+                if self.selected_clip.is_some() {
+                    if ui.button("🗑").on_hover_text("Delete Clip").clicked() {
+                        if let Some(clip_idx) = self.selected_clip {
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::DeleteMidiClip(app.selected_track, clip_idx));
+                            self.selected_clip = None;
+                            self.editing_notes.clear();
+                        }
+                    }
                 }
             }
             drop(state);
@@ -250,90 +300,80 @@ impl PianoRollView {
     }
 
     fn draw_piano_roll(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        let mut pattern_actions = Vec::new();
+        if self.selected_clip.is_none() {
+            ui.centered_and_justified(|ui| {
+                ui.label("Select or create a MIDI clip to edit");
+            });
+            return;
+        }
 
-        // Update current beat position for playhead
+        let mut clip_data = None;
         {
             let state = app.state.lock().unwrap();
-            if state.playing {
-                let position = app.audio_state.get_position();
-                let sample_rate = app.audio_state.sample_rate.load();
-                let bpm = app.audio_state.bpm.load();
-                let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
-
-                let pattern_beat = if let Some(track) = state.tracks.get(app.selected_track) {
-                    if let Some(pattern) = track.patterns.get(self.selected_pattern) {
-                        current_beat % pattern.length
-                    } else {
-                        current_beat % 4.0
+            if let Some(track) = state.tracks.get(app.selected_track) {
+                if let Some(clip_idx) = self.selected_clip {
+                    if let Some(clip) = track.midi_clips.get(clip_idx) {
+                        clip_data = Some((clip.length_beats, clip.start_beat));
                     }
-                } else {
-                    current_beat % 4.0
-                };
-
-                ui.ctx().memory_mut(|mem| {
-                    mem.data
-                        .insert_temp(egui::Id::new("current_beat"), pattern_beat);
-                });
-            }
-        }
-
-        // Draw the piano roll
-        {
-            let mut state = app.state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(app.selected_track) {
-                if let Some(pattern) = track.patterns.get_mut(self.selected_pattern) {
-                    // Apply tool mode to piano roll
-                    match self.tool_mode {
-                        ToolMode::Select => {
-                            // Default behavior
-                        }
-                        ToolMode::Draw => {
-                            // Enable drawing mode
-                        }
-                        ToolMode::Erase => {
-                            // Enable erase mode
-                        }
-                        _ => {}
-                    }
-
-                    pattern_actions = self.piano_roll.ui(ui, pattern);
                 }
             }
         }
 
-        // Process piano roll actions
-        for action in pattern_actions {
-            match action {
-                PianoRollAction::AddNote(note) => {
-                    let _ = app.command_tx.send(AudioCommand::AddNote(
+        if let Some((clip_length, _clip_start)) = clip_data {
+            let mut temp_pattern = MidiClip {
+                name: "temp".to_string(),
+                length_beats: clip_length,
+                notes: self.editing_notes.clone(),
+                start_beat: 0.0,
+                color: Some((1, 1, 1)),
+                ..Default::default()
+            };
+
+            // Get piano roll actions
+            let actions = self.piano_roll.ui(ui, &mut temp_pattern);
+
+            // Update editing notes
+            self.editing_notes = temp_pattern.notes;
+
+            // Process actions and send updates
+            let mut notes_changed = false;
+            for action in actions {
+                match action {
+                    PianoRollAction::AddNote(note) => {
+                        self.editing_notes.push(note);
+                        notes_changed = true;
+                    }
+                    PianoRollAction::RemoveNote(index) => {
+                        if index < self.editing_notes.len() {
+                            self.editing_notes.remove(index);
+                            notes_changed = true;
+                        }
+                    }
+                    PianoRollAction::UpdateNote(index, note) => {
+                        if let Some(n) = self.editing_notes.get_mut(index) {
+                            *n = note;
+                            notes_changed = true;
+                        }
+                    }
+                    PianoRollAction::PreviewNote(pitch) => {
+                        let _ = app
+                            .command_tx
+                            .send(AudioCommand::PreviewNote(app.selected_track, pitch));
+                    }
+                    PianoRollAction::StopPreview => {
+                        let _ = app.command_tx.send(AudioCommand::StopPreviewNote);
+                    }
+                }
+            }
+
+            // Send update if notes changed
+            if notes_changed {
+                if let Some(clip_idx) = self.selected_clip {
+                    let _ = app.command_tx.send(AudioCommand::UpdateMidiClip(
                         app.selected_track,
-                        self.selected_pattern,
-                        note,
+                        clip_idx,
+                        self.editing_notes.clone(),
                     ));
-                }
-                PianoRollAction::RemoveNote(index) => {
-                    let _ = app.command_tx.send(AudioCommand::RemoveNote(
-                        app.selected_track,
-                        self.selected_pattern,
-                        index,
-                    ));
-                }
-                PianoRollAction::UpdateNote(index, note) => {
-                    let _ = app.command_tx.send(AudioCommand::UpdateNote(
-                        app.selected_track,
-                        self.selected_pattern,
-                        index,
-                        note,
-                    ));
-                }
-                PianoRollAction::PreviewNote(pitch) => {
-                    let _ = app
-                        .command_tx
-                        .send(AudioCommand::PreviewNote(app.selected_track, pitch));
-                }
-                PianoRollAction::StopPreview => {
-                    let _ = app.command_tx.send(AudioCommand::StopPreviewNote);
                 }
             }
         }
@@ -343,109 +383,103 @@ impl PianoRollView {
         let state = app.state.lock().unwrap();
 
         if let Some(track) = state.tracks.get(app.selected_track) {
-            if let Some(pattern) = track.patterns.get(self.selected_pattern) {
-                let rect = ui.max_rect(); // this is the lane rect
-                let painter = ui.painter();
+            if let Some(clip_idx) = self.selected_clip {
+                if let Some(pattern) = track.midi_clips.get(clip_idx) {
+                    let rect = ui.max_rect(); // this is the lane rect
+                    let painter = ui.painter();
 
-                // Backgrounds
-                painter.rect_filled(rect, 0.0, egui::Color32::from_gray(15));
+                    // Backgrounds
+                    painter.rect_filled(rect, 0.0, egui::Color32::from_gray(15));
 
-                // Keyboard gutter at left
-                let grid_left = rect.left() + PIANO_KEY_WIDTH;
-                let gutter_rect =
-                    egui::Rect::from_min_max(rect.min, egui::pos2(grid_left, rect.bottom()));
-                painter.rect_filled(gutter_rect, 0.0, egui::Color32::from_gray(10));
+                    // Keyboard gutter at left
+                    let grid_left = rect.left() + PIANO_KEY_WIDTH;
+                    let gutter_rect =
+                        egui::Rect::from_min_max(rect.min, egui::pos2(grid_left, rect.bottom()));
+                    painter.rect_filled(gutter_rect, 0.0, egui::Color32::from_gray(10));
 
-                // Horizontal guides
-                for i in 0..=4 {
-                    let y = rect.top() + (i as f32 / 4.0) * rect.height();
-                    painter.line_segment(
-                        [egui::pos2(grid_left, y), egui::pos2(rect.right(), y)],
-                        egui::Stroke::new(1.0, egui::Color32::from_gray(30)),
-                    );
-                }
-
-                // Bars
-                for (i, note) in pattern.notes.iter().enumerate() {
-                    let x = grid_left
-                        + (note.start as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
-                    let width = (note.duration as f32 * self.piano_roll.zoom_x).max(2.0);
-                    let height = (note.velocity as f32 / 127.0) * rect.height();
-
-                    let left = x.max(grid_left);
-                    let right = (x + width).min(rect.right());
-                    if right <= left {
-                        continue;
+                    // Horizontal guides
+                    for i in 0..=4 {
+                        let y = rect.top() + (i as f32 / 4.0) * rect.height();
+                        painter.line_segment(
+                            [egui::pos2(grid_left, y), egui::pos2(rect.right(), y)],
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(30)),
+                        );
                     }
 
-                    let bar_rect = egui::Rect::from_min_size(
-                        egui::pos2(left, rect.bottom() - height),
-                        egui::vec2(right - left, height),
-                    );
+                    // Bars
+                    for (i, note) in pattern.notes.iter().enumerate() {
+                        let x = grid_left
+                            + (note.start as f32 * self.piano_roll.zoom_x
+                                - self.piano_roll.scroll_x);
+                        let width = (note.duration as f32 * self.piano_roll.zoom_x).max(2.0);
+                        let height = (note.velocity as f32 / 127.0) * rect.height();
 
-                    let is_selected = self.piano_roll.selected_notes.contains(&i);
-                    let color = if is_selected {
-                        egui::Color32::from_rgb(100, 150, 255)
-                    } else {
-                        egui::Color32::from_rgb(60, 90, 150)
-                    };
+                        let left = x.max(grid_left);
+                        let right = (x + width).min(rect.right());
+                        if right <= left {
+                            continue;
+                        }
 
-                    painter.rect_filled(bar_rect, 0.0, color);
+                        let bar_rect = egui::Rect::from_min_size(
+                            egui::pos2(left, rect.bottom() - height),
+                            egui::vec2(right - left, height),
+                        );
 
-                    // Drag to change velocity
-                    let resp = ui.interact(
-                        bar_rect,
-                        ui.id().with(("velocity", i)),
-                        egui::Sense::click_and_drag(),
-                    );
-                    if resp.dragged() {
-                        if let Some(pos) = resp.interact_pointer_pos() {
-                            let new_velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
-                                .round()
-                                .clamp(0.0, 127.0)
-                                as u8;
+                        let is_selected = self.piano_roll.selected_notes.contains(&i);
+                        let color = if is_selected {
+                            egui::Color32::from_rgb(100, 150, 255)
+                        } else {
+                            egui::Color32::from_rgb(60, 90, 150)
+                        };
 
-                            if new_velocity != note.velocity {
-                                let mut new_note = *note;
-                                new_note.velocity = new_velocity;
+                        painter.rect_filled(bar_rect, 0.0, color);
 
-                                let _ =
-                                    app.command_tx.send(crate::state::AudioCommand::UpdateNote(
+                        // Drag to change velocity
+                        let resp = ui.interact(
+                            bar_rect,
+                            ui.id().with(("velocity", i)),
+                            egui::Sense::click_and_drag(),
+                        );
+                        if resp.dragged() {
+                            if let Some(pos) = resp.interact_pointer_pos() {
+                                let new_velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
+                                    .round()
+                                    .clamp(0.0, 127.0)
+                                    as u8;
+
+                                if new_velocity != note.velocity {
+                                    let mut new_note = *note;
+                                    new_note.velocity = new_velocity;
+
+                                    let _ = app.command_tx.send(AudioCommand::UpdateNote(
                                         app.selected_track,
-                                        self.selected_pattern,
+                                        clip_idx,
                                         i,
                                         new_note,
                                     ));
+                                }
                             }
                         }
                     }
+
+                    // Hover readout
+                    if let Some(pos) = ui
+                        .interact(rect, ui.id().with("velocity_lane"), egui::Sense::hover())
+                        .hover_pos()
+                    {
+                        let velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
+                            .round()
+                            .clamp(0.0, 127.0) as u8;
+
+                        painter.text(
+                            pos + egui::vec2(10.0, -10.0),
+                            egui::Align2::LEFT_BOTTOM,
+                            format!("Vel: {}", velocity),
+                            egui::FontId::default(),
+                            egui::Color32::WHITE,
+                        );
+                    }
                 }
-
-                // Hover readout
-                if let Some(pos) = ui
-                    .interact(rect, ui.id().with("velocity_lane"), egui::Sense::hover())
-                    .hover_pos()
-                {
-                    let velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
-                        .round()
-                        .clamp(0.0, 127.0) as u8;
-
-                    painter.text(
-                        pos + egui::vec2(10.0, -10.0),
-                        egui::Align2::LEFT_BOTTOM,
-                        format!("Vel: {}", velocity),
-                        egui::FontId::default(),
-                        egui::Color32::WHITE,
-                    );
-                }
-
-                // debug -> outline the lane rect to see where "bottom" is
-                // painter.rect_stroke(
-                //     rect,
-                //     0.0,
-                //     egui::Stroke::new(1.0, egui::Color32::RED),
-                //     egui::StrokeKind::Outside,
-                // );
             }
         }
     }

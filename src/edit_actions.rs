@@ -1,5 +1,5 @@
 use crate::constants::{DEFAULT_GRID_SNAP, NORMALIZE_TARGET_LINEAR};
-use crate::state::{AudioClip, MidiNote, Pattern, Track};
+use crate::state::{AudioClip, MidiNote, Track};
 
 #[derive(Debug, Clone)]
 pub enum EditAction {
@@ -190,6 +190,7 @@ impl EditProcessor {
             length_beats: total_beats,
             samples: combined_samples,
             sample_rate,
+            ..Default::default()
         })
     }
 
@@ -254,38 +255,6 @@ impl EditProcessor {
         }
     }
 
-    pub fn duplicate_pattern(pattern: &Pattern) -> Pattern {
-        let mut new_pattern = pattern.clone();
-        new_pattern.name = format!("{} (copy)", pattern.name);
-        new_pattern
-    }
-
-    pub fn merge_patterns(patterns: Vec<&Pattern>) -> Pattern {
-        let mut merged = Pattern {
-            name: "Merged Pattern".to_string(),
-            length: patterns.iter().map(|p| p.length).fold(0.0, f64::max),
-            notes: Vec::new(),
-        };
-
-        for pattern in patterns {
-            merged.notes.extend_from_slice(&pattern.notes);
-        }
-
-        // Sort and remove duplicate notes
-        merged.notes.sort_by(|a, b| {
-            a.start
-                .partial_cmp(&b.start)
-                .unwrap()
-                .then(a.pitch.cmp(&b.pitch))
-        });
-
-        merged
-            .notes
-            .dedup_by(|a, b| a.start == b.start && a.pitch == b.pitch);
-
-        merged
-    }
-
     pub fn slice_to_grid(clip: &AudioClip, grid_size: f64, bpm: f32) -> Vec<AudioClip> {
         let mut slices = Vec::new();
         let num_slices = (clip.length_beats / grid_size).ceil() as usize;
@@ -303,6 +272,7 @@ impl EditProcessor {
                     length_beats: grid_size,
                     samples: clip.samples[start_sample..end_sample].to_vec(),
                     sample_rate: clip.sample_rate,
+                    ..Default::default()
                 };
                 slices.push(slice);
             }
@@ -338,6 +308,7 @@ impl EditProcessor {
             length_beats: clip.length_beats * factor as f64,
             samples: stretched,
             sample_rate: clip.sample_rate,
+            ..Default::default()
         }
     }
 }

@@ -89,7 +89,7 @@ impl DawCore {
             }
 
             // Estimate pattern memory
-            for pattern in &track.patterns {
+            for pattern in &track.midi_clips {
                 total += pattern.notes.len() * std::mem::size_of::<crate::state::MidiNote>();
             }
         }

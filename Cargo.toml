@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 # Audio Backend
 cpal = "0.16.0"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
 egui = "0.32.1"
 eframe = "0.32.1"
@@ -47,4 +47,3 @@ midir = "0.10.2"
 lru = "0.16.0"
 rayon = "1.10.0"
 num_cpus = "1.17.0"
-# GUI

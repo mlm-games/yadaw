@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use super::*;
 use crate::state::AudioCommand;
 
@@ -335,6 +337,30 @@ impl MenuBar {
 
             if ui.button("Tap Tempo").clicked() {
                 app.tap_tempo();
+                ui.close();
+            }
+
+            ui.separator();
+
+            let mut loop_enabled = app.audio_state.loop_enabled.load(Ordering::Relaxed);
+            if ui.checkbox(&mut loop_enabled, "Loop Enabled").clicked() {
+                app.audio_state
+                    .loop_enabled
+                    .store(loop_enabled, Ordering::Relaxed);
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetLoopEnabled(loop_enabled));
+                ui.close();
+            }
+
+            if ui.button("Set Loop to Selection").clicked() {
+                app.set_loop_to_selection();
+                ui.close();
+            }
+
+            if ui.button("Clear Loop").clicked() {
+                app.audio_state.loop_enabled.store(false, Ordering::Relaxed);
+                let _ = app.command_tx.send(AudioCommand::SetLoopEnabled(false));
                 ui.close();
             }
         });

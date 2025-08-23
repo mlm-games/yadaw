@@ -1,7 +1,7 @@
 use crate::constants::{
     DEFAULT_AUDIO_TRACK_PREFIX, DEFAULT_MIDI_TRACK_PREFIX, DEFAULT_TRACK_VOLUME,
 };
-use crate::state::{AudioCommand, MidiNote, Pattern, Track};
+use crate::state::{AudioCommand, MidiClip, MidiNote, Track};
 use crossbeam_channel::Sender;
 use std::sync::{Arc, Mutex};
 
@@ -20,25 +20,25 @@ pub struct TrackGroup {
     pub color: egui::Color32,
     pub collapsed: bool,
 }
-
+#[derive(Debug, Clone)]
 pub struct TrackBuilder {
-    id: usize,
+    id_hint: usize,
     name: Option<String>,
     track_type: TrackType,
     volume: Option<f32>,
     pan: Option<f32>,
-    patterns: Vec<Pattern>,
+    midi_clips: Vec<MidiClip>,
 }
 
 impl TrackBuilder {
-    pub fn new(id: usize, track_type: TrackType) -> Self {
+    pub fn new(id_hint: usize, track_type: TrackType) -> Self {
         Self {
-            id,
+            id_hint,
             name: None,
             track_type,
             volume: None,
             pan: None,
-            patterns: Vec::new(),
+            midi_clips: Vec::new(),
         }
     }
 
@@ -59,52 +59,67 @@ impl TrackBuilder {
 
     pub fn with_default_pattern(mut self) -> Self {
         if self.track_type == TrackType::Midi {
-            self.patterns.push(Self::create_default_pattern());
+            self.midi_clips.push(Self::create_default_pattern());
         }
         self
     }
 
-    pub fn with_patterns(mut self, patterns: Vec<Pattern>) -> Self {
-        self.patterns = patterns;
+    pub fn with_midi_clips(mut self, midi_clips: Vec<MidiClip>) -> Self {
+        self.midi_clips = midi_clips;
         self
     }
 
     pub fn build(self) -> Track {
         let (default_name, is_midi) = match self.track_type {
             TrackType::Audio => (
-                format!("{} {}", DEFAULT_AUDIO_TRACK_PREFIX, self.id + 1),
+                format!("{} {}", DEFAULT_AUDIO_TRACK_PREFIX, self.id_hint + 1),
                 false,
             ),
             TrackType::Midi => (
-                format!("{} {}", DEFAULT_MIDI_TRACK_PREFIX, self.id + 1),
+                format!("{} {}", DEFAULT_MIDI_TRACK_PREFIX, self.id_hint + 1),
                 true,
             ),
-            TrackType::Bus => (format!("Bus {}", self.id + 1), false),
+            TrackType::Bus => (format!("Bus {}", self.id_hint + 1), false),
             TrackType::Master => ("Master".to_string(), false),
         };
 
         Track {
-            id: self.id,
             name: self.name.unwrap_or(default_name),
             volume: self.volume.unwrap_or(DEFAULT_TRACK_VOLUME),
             pan: self.pan.unwrap_or(0.0),
             muted: false,
             solo: false,
             armed: false,
-            plugin_chain: vec![],
-            patterns: self.patterns,
             is_midi,
+            input_device: None,
+            output_device: None,
+            midi_clips: self.midi_clips,
             audio_clips: vec![],
+            plugin_chain: vec![],
             automation_lanes: vec![],
+            sends: vec![],
+            group_id: None,
+            color: None,
+            height: 80.0,
+            minimized: false,
+            record_enabled: false,
+            monitor_enabled: false,
+            input_gain: 1.0,
+            phase_inverted: false,
+            frozen: false,
+            frozen_buffer: None,
         }
     }
 
-    /// Create the default C major scale pattern used for new MIDI tracks (cut to here)
-    pub fn create_default_pattern() -> Pattern {
-        Pattern {
+    /// Create the default C major scale pattern used for new MIDI tracks
+    pub fn create_default_pattern() -> MidiClip {
+        MidiClip {
             name: "Pattern 1".to_string(),
-            length: 4.0,
             notes: Self::create_default_notes(),
+            start_beat: 0.0,
+            length_beats: 4.0,
+            color: Some((1, 1, 1)),
+            ..Default::default()
         }
     }
 
@@ -195,8 +210,6 @@ impl TrackManager {
 
     pub fn duplicate_track(&mut self, source_track: &Track) -> Track {
         let mut new_track = source_track.clone();
-        new_track.id = self.next_track_id;
-        self.next_track_id += 1;
         new_track.name = format!("{} (Copy)", source_track.name);
         new_track
     }
@@ -248,12 +261,12 @@ pub fn solo_track(tracks: &mut Vec<Track>, track_id: usize, command_tx: &Sender<
             for (i, t) in tracks.iter_mut().enumerate() {
                 if i != track_id && t.solo {
                     t.solo = false;
-                    let _ = command_tx.send(AudioCommand::SoloTrack(i, false));
+                    let _ = command_tx.send(AudioCommand::SetTrackSolo(i, false));
                 }
             }
         }
 
-        let _ = command_tx.send(AudioCommand::SoloTrack(track_id, new_solo));
+        let _ = command_tx.send(AudioCommand::SetTrackSolo(track_id, new_solo));
     }
 }
 
@@ -279,7 +292,7 @@ pub fn create_master_track() -> Track {
 pub fn mute_track(tracks: &mut Vec<Track>, track_id: usize, command_tx: &Sender<AudioCommand>) {
     if let Some(track) = tracks.get_mut(track_id) {
         track.muted = !track.muted;
-        let _ = command_tx.send(AudioCommand::MuteTrack(track_id, track.muted));
+        let _ = command_tx.send(AudioCommand::SetTrackMute(track_id, track.muted));
     }
 }
 
