@@ -1,6 +1,5 @@
 use super::*;
 use crate::audio_state::AudioState;
-use crate::audio_state::AutomationTarget;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config::Config;
 use crate::constants::MAX_BUFFER_SIZE;
@@ -8,10 +7,12 @@ use crate::edit_actions::EditProcessor;
 use crate::error::{common, ResultExt, UserNotification};
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
+use crate::model::automation::AutomationTarget;
+use crate::model::{AudioClip, MidiNote};
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::piano_roll::{PianoRoll, PianoRollAction};
+use crate::project::{AppState, AppStateSnapshot};
 use crate::project_manager::ProjectManager;
-use crate::state::{AppState, AppStateSnapshot, AudioClip, AudioCommand, MidiNote, UIUpdate};
 
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;

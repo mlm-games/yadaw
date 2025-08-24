@@ -1,7 +1,8 @@
 use super::*;
 use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
-use crate::state::AudioCommand;
+use crate::messages::AudioCommand;
+use crate::model::Track;
 
 pub struct MixerWindow {
     pub visible: bool,
@@ -176,7 +177,7 @@ impl MixerWindow {
     fn draw_channel_strip(
         &mut self,
         ui: &mut egui::Ui,
-        track: &crate::state::Track,
+        track: &Track,
         idx: usize,
         app: &mut super::app::YadawApp,
     ) {

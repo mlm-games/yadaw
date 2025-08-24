@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use super::*;
-use crate::state::AudioCommand;
+use crate::messages::AudioCommand;
 
 pub struct MenuBar {
     show_about: bool,

@@ -2,7 +2,8 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
-use crate::state::{AudioClip, AudioCommand, MidiClip};
+use crate::messages::AudioCommand;
+use crate::model::{AudioClip, MidiClip, Track};
 
 pub struct TimelineView {
     pub zoom_x: f32,
@@ -95,7 +96,7 @@ impl TimelineView {
             && app
                 .audio_state
                 .playing
-                .load(std::sync::atomic::Ordering::Relaxed)
+                .load(Ordering::Relaxed)
         {
             self.update_auto_scroll(app);
         }
@@ -252,7 +253,7 @@ impl TimelineView {
         painter: &egui::Painter,
         ui: &mut egui::Ui,
         rect: egui::Rect,
-        track: &mut crate::state::Track,
+        track: &mut Track,
         track_idx: usize,
         app: &mut super::app::YadawApp,
     ) {
@@ -607,7 +608,7 @@ impl TimelineView {
         &mut self,
         ui: &mut egui::Ui,
         track_rect: egui::Rect,
-        track: &mut crate::state::Track,
+        track: &mut Track,
         track_idx: usize,
         app: &mut super::app::YadawApp,
     ) {

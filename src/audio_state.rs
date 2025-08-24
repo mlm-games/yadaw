@@ -1,10 +1,7 @@
-use crossbeam::atomic::AtomicCell;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-
-use crate::state::{AutomationLane, MidiClip};
 
 pub struct AtomicF64 {
     storage: AtomicU64,
@@ -16,11 +13,9 @@ impl AtomicF64 {
             storage: AtomicU64::new(value.to_bits()),
         }
     }
-
     pub fn load(&self) -> f64 {
         f64::from_bits(self.storage.load(Ordering::Relaxed))
     }
-
     pub fn store(&self, value: f64) {
         self.storage.store(value.to_bits(), Ordering::Relaxed);
     }
@@ -36,11 +31,9 @@ impl AtomicF32 {
             storage: AtomicU32::new(value.to_bits()),
         }
     }
-
     pub fn load(&self) -> f32 {
         f32::from_bits(self.storage.load(Ordering::Relaxed))
     }
-
     pub fn store(&self, value: f32) {
         self.storage.store(value.to_bits(), Ordering::Relaxed);
     }
@@ -70,14 +63,13 @@ impl AudioState {
             master_volume: Arc::new(AtomicF32::new(0.8)),
             loop_enabled: Arc::new(AtomicBool::new(false)),
             loop_start: Arc::new(AtomicF64::new(0.0)),
-            loop_end: Arc::new(AtomicF64::new(16.0)), // Default 4 bars
+            loop_end: Arc::new(AtomicF64::new(16.0)),
         }
     }
 
     pub fn get_position(&self) -> f64 {
         self.position.load()
     }
-
     pub fn set_position(&self, pos: f64) {
         self.position.store(pos);
     }
@@ -94,9 +86,9 @@ pub struct TrackSnapshot {
     pub armed: bool,
     pub is_midi: bool,
     pub audio_clips: Vec<AudioClipSnapshot>,
-    pub midi_clips: Vec<MidiClipSnapshot>, // Add this
+    pub midi_clips: Vec<MidiClipSnapshot>,
     pub plugin_chain: Vec<PluginDescriptorSnapshot>,
-    pub automation_lanes: Vec<AutomationLaneSnapshot>,
+    pub automation_lanes: Vec<RtAutomationLaneSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +104,7 @@ pub struct MidiClipSnapshot {
 pub struct MidiNoteSnapshot {
     pub pitch: u8,
     pub velocity: u8,
-    pub start: f64, // Relative to clip start
+    pub start: f64,
     pub duration: f64,
 }
 
@@ -139,7 +131,7 @@ pub enum RealtimeCommand {
     UpdateTrackSolo(usize, bool),
     UpdatePluginBypass(usize, usize, bool),
     UpdatePluginParam(usize, usize, String, f32),
-    PreviewNote(usize, u8, f64), // track_id, pitch, start_position
+    PreviewNote(usize, u8, f64),
     StopPreviewNote,
     SetLoopEnabled(bool),
     SetLoopRegion(f64, f64),
@@ -154,26 +146,37 @@ pub struct PluginDescriptorSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub struct AutomationLaneSnapshot {
-    pub parameter: AutomationTarget,
-    pub points: Vec<AutomationPoint>,
+pub struct RtAutomationLaneSnapshot {
+    pub parameter: RtAutomationTarget,
+    pub points: Vec<RtAutomationPoint>,
     pub visible: bool,
     pub height: f32,
     pub color: Option<(u8, u8, u8)>,
 }
 
 #[derive(Debug, Clone)]
-pub struct AutomationPoint {
+pub struct RtAutomationPoint {
     pub beat: f64,
     pub value: f32,
-    pub curve_type: CurveType,
+    pub curve_type: RtCurveType,
 }
 
 #[derive(Debug, Clone)]
-pub enum CurveType {
+pub enum RtCurveType {
     Linear,
     Exponential,
     Step,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RtAutomationTarget {
+    TrackVolume,
+    TrackPan,
+    TrackSend(usize),
+    PluginParam {
+        plugin_idx: usize,
+        param_name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -186,15 +189,4 @@ pub struct AudioClipSnapshot {
     pub fade_in: Option<f64>,
     pub fade_out: Option<f64>,
     pub gain: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum AutomationTarget {
-    TrackVolume,
-    TrackPan,
-    TrackSend(usize),
-    PluginParam {
-        plugin_idx: usize,
-        param_name: String,
-    },
 }

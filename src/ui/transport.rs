@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use super::*;
-use crate::state::AudioCommand;
+use crate::messages::AudioCommand;
 use crate::transport::{LoopMode, Transport, TransportState};
 
 pub struct TransportUI {

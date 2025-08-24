@@ -2,17 +2,17 @@ use std::vec;
 
 use crate::{
     constants::PIANO_KEY_WIDTH,
-    state::{MidiClip, MidiNote},
+    model::{MidiClip, MidiNote},
 };
 use eframe::{egui, egui_glow::painter};
 
 pub struct PianoRoll {
-    pub zoom_x: f32, // Pixels per beat
-    pub zoom_y: f32, // Pixels per semitone
+    pub zoom_x: f32,
+    pub zoom_y: f32,
     pub scroll_x: f32,
     pub scroll_y: f32,
     pub selected_notes: Vec<usize>,
-    pub grid_snap: f32, // Snap to grid in beats (0.25 = 16th notes)
+    pub grid_snap: f32,
     interaction_state: InteractionState,
     hover_note: Option<usize>,
     hover_edge: Option<ResizeEdge>,
@@ -24,7 +24,7 @@ enum InteractionState {
     Idle,
     DraggingNotes {
         initial_positions: Vec<(usize, MidiNote)>,
-        click_offset: egui::Vec2, // Offset from click point to first note
+        click_offset: egui::Vec2,
         last_beat_delta: f64,
         last_pitch_delta: i32,
     },
@@ -37,18 +37,10 @@ enum InteractionState {
     },
 }
 
-#[derive(Clone)]
-struct DragState {
-    note_index: usize,
-    start_offset: egui::Vec2, // Offset from note start to mouse
-    original_note: MidiNote,
-}
-
-#[derive(Clone)]
-struct ResizeState {
-    note_index: usize,
-    edge: ResizeEdge,
-    original_note: MidiNote,
+#[derive(Clone, Copy, PartialEq)]
+enum ResizeEdge {
+    Left,
+    Right,
 }
 
 impl Default for PianoRoll {
@@ -57,7 +49,7 @@ impl Default for PianoRoll {
             zoom_x: 100.0,
             zoom_y: 20.0,
             scroll_x: 0.0,
-            scroll_y: 60.0 * 20.0, // Start at middle C
+            scroll_y: 60.0 * 20.0,
             grid_snap: 0.25,
             selected_notes: Vec::new(),
             hover_note: None,
@@ -66,12 +58,6 @@ impl Default for PianoRoll {
             preview_notes: vec![],
         }
     }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum ResizeEdge {
-    Left,
-    Right,
 }
 
 impl PianoRoll {

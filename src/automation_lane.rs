@@ -1,5 +1,5 @@
-use crate::audio_state::AutomationTarget;
-use egui;
+use crate::audio_state::RtAutomationTarget;
+use eframe::egui;
 
 #[derive(Debug, Clone)]
 pub enum AutomationAction {
@@ -22,7 +22,7 @@ impl AutomationLaneWidget {
     pub fn ui(
         &mut self,
         _ui: &mut egui::Ui,
-        _lane: &mut crate::state::AutomationLane,
+        _lane: &mut crate::model::automation::AutomationLane,
         _lane_rect: egui::Rect,
         _zoom_x: f32,
         _scroll_x: f32,
@@ -30,8 +30,7 @@ impl AutomationLaneWidget {
         Vec::new()
     }
 
-    // Linear value evaluation for state lanes (used by audio engine)
-    pub fn get_value_at_beat(lane: &crate::state::AutomationLane, beat: f64) -> f32 {
+    pub fn get_value_at_beat(lane: &crate::model::automation::AutomationLane, beat: f64) -> f32 {
         if lane.points.is_empty() {
             return 0.0;
         }

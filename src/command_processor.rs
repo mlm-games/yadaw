@@ -1,15 +1,8 @@
-use crate::audio_state::{
-    AudioClipSnapshot, AudioState, AutomationLaneSnapshot, AutomationPoint as AutomationPointSnap,
-    CurveType as CurveTypeSnap, MidiClipSnapshot, MidiNoteSnapshot, PluginDescriptorSnapshot,
-    RealtimeCommand, TrackSnapshot,
-};
-use crate::state::{
-    AppState, AudioCommand, AutomationLane, AutomationMode, AutomationPoint, MidiClip, UIUpdate,
-};
-
+use crate::audio_state::{AudioState, RealtimeCommand};
+use crate::messages::{AudioCommand, UIUpdate};
 use crate::plugin;
+use crate::project::AppState;
 use crossbeam_channel::{Receiver, Sender};
-use dashmap::DashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
@@ -66,8 +59,7 @@ fn process_command(
         }
 
         AudioCommand::UpdateTracks => {
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::SetTrackVolume(track_id, volume) => {
@@ -109,22 +101,20 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 track.armed = *armed;
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::AddPlugin(track_id, uri) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Ok(plugin) =
+                if let Ok(plugin_desc) =
                     crate::plugin::create_plugin_instance(uri, audio_state.sample_rate.load())
                 {
-                    track.plugin_chain.push(plugin);
+                    track.plugin_chain.push(plugin_desc);
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::RemovePlugin(track_id, plugin_idx) => {
@@ -135,8 +125,7 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::SetPluginBypass(track_id, plugin_idx, bypass) => {
@@ -180,6 +169,7 @@ fn process_command(
         }
 
         AudioCommand::CreateMidiClip(track_id, start_beat, length_beats) => {
+            use crate::model::clip::MidiClip;
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 let clip = MidiClip {
@@ -193,8 +183,7 @@ fn process_command(
                 track.midi_clips.push(clip);
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::UpdateMidiClip(track_id, clip_id, notes) => {
@@ -205,8 +194,7 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::DeleteMidiClip(track_id, clip_id) => {
@@ -217,8 +205,7 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::MoveMidiClip(track_id, clip_id, new_start_beat) => {
@@ -229,11 +216,11 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::AddAutomationPoint(track_id, target, beat, value) => {
+            use crate::model::automation::{AutomationLane, AutomationMode, AutomationPoint};
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 // Find existing lane index or create a new one
@@ -244,21 +231,21 @@ fn process_command(
                 {
                     idx
                 } else {
-                    track.automation_lanes.push(crate::state::AutomationLane {
+                    track.automation_lanes.push(AutomationLane {
                         parameter: target.clone(),
                         points: Vec::new(),
                         visible: true,
                         height: 30.0,
                         color: None,
-                        write_mode: crate::state::AutomationMode::Read,
+                        write_mode: AutomationMode::Read,
                         read_enabled: true,
                     });
                     track.automation_lanes.len() - 1
                 };
 
-                // Push point as a struct (not a tuple)
+                // Push point
                 if let Some(lane) = track.automation_lanes.get_mut(lane_idx) {
-                    lane.points.push(crate::state::AutomationPoint {
+                    lane.points.push(AutomationPoint {
                         beat: *beat,
                         value: *value,
                     });
@@ -268,8 +255,7 @@ fn process_command(
 
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
@@ -280,15 +266,10 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            let snapshots = create_track_snapshots(app_state);
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::PreviewNote(track_id, pitch) => {
-            let converter = crate::time_utils::TimeConverter::new(
-                audio_state.sample_rate.load(),
-                audio_state.bpm.load(),
-            );
             let current_position = audio_state.get_position();
             let _ = realtime_tx.send(RealtimeCommand::PreviewNote(
                 *track_id,
@@ -302,109 +283,13 @@ fn process_command(
         }
 
         _ => {
-            // Nothin'
+            // No-op
         }
     }
 }
 
-fn create_track_snapshots(app_state: &Arc<Mutex<AppState>>) -> Vec<TrackSnapshot> {
+fn send_tracks_snapshot(app_state: &Arc<Mutex<AppState>>, realtime_tx: &Sender<RealtimeCommand>) {
     let state = app_state.lock().unwrap();
-
-    state
-        .tracks
-        .iter()
-        .map(|track| {
-            // Convert plugin descriptors to snapshots
-            let plugin_chain = track
-                .plugin_chain
-                .iter()
-                .map(|plugin| {
-                    let params = Arc::new(DashMap::new());
-                    for (key, value) in &plugin.params {
-                        params.insert(key.clone(), *value);
-                    }
-
-                    PluginDescriptorSnapshot {
-                        uri: plugin.uri.clone(),
-                        name: plugin.name.clone(),
-                        bypass: plugin.bypass,
-                        params,
-                    }
-                })
-                .collect();
-
-            // Convert automation lanes to snapshots
-            let automation_lanes = track
-                .automation_lanes
-                .iter()
-                .map(|lane| AutomationLaneSnapshot {
-                    parameter: lane.parameter.clone(),
-                    points: lane
-                        .points
-                        .iter()
-                        .map(|p| AutomationPointSnap {
-                            beat: p.beat,
-                            value: p.value,
-                            curve_type: CurveTypeSnap::Linear,
-                        })
-                        .collect(),
-                    visible: lane.visible,
-                    height: lane.height,
-                    color: lane.color,
-                })
-                .collect();
-
-            // Convert audio clips to snapshots
-            let audio_clips = track
-                .audio_clips
-                .iter()
-                .map(|clip| AudioClipSnapshot {
-                    name: clip.name.clone(),
-                    start_beat: clip.start_beat,
-                    length_beats: clip.length_beats,
-                    samples: clip.samples.clone(),
-                    sample_rate: clip.sample_rate,
-                    fade_in: clip.fade_in,
-                    fade_out: clip.fade_out,
-                    gain: clip.gain,
-                })
-                .collect();
-
-            // Convert MIDI clips to snapshots
-            let midi_clips = track
-                .midi_clips
-                .iter()
-                .map(|clip| MidiClipSnapshot {
-                    name: clip.name.clone(),
-                    start_beat: clip.start_beat,
-                    length_beats: clip.length_beats,
-                    notes: clip
-                        .notes
-                        .iter()
-                        .map(|note| MidiNoteSnapshot {
-                            pitch: note.pitch,
-                            velocity: note.velocity,
-                            start: note.start,
-                            duration: note.duration,
-                        })
-                        .collect(),
-                    color: clip.color,
-                })
-                .collect();
-
-            TrackSnapshot {
-                name: track.name.clone(),
-                volume: track.volume,
-                pan: track.pan,
-                muted: track.muted,
-                solo: track.solo,
-                armed: track.armed,
-                is_midi: track.is_midi,
-                audio_clips,
-                midi_clips,
-                plugin_chain,
-                automation_lanes,
-            }
-        })
-        .collect()
+    let snapshots = crate::audio_snapshot::build_track_snapshots(&state.tracks);
+    let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
 }

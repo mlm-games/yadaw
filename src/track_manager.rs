@@ -1,9 +1,11 @@
 use crate::constants::{
     DEFAULT_AUDIO_TRACK_PREFIX, DEFAULT_MIDI_TRACK_PREFIX, DEFAULT_TRACK_VOLUME,
 };
-use crate::state::{AudioCommand, MidiClip, MidiNote, Track};
+use crate::messages::AudioCommand;
+use crate::model::clip::{MidiClip, MidiNote};
+use crate::model::track::Track;
 use crossbeam_channel::Sender;
-use std::sync::{Arc, Mutex};
+use eframe::egui;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrackType {
@@ -20,6 +22,7 @@ pub struct TrackGroup {
     pub color: egui::Color32,
     pub collapsed: bool,
 }
+
 #[derive(Debug, Clone)]
 pub struct TrackBuilder {
     id_hint: usize,
@@ -111,7 +114,6 @@ impl TrackBuilder {
         }
     }
 
-    /// Create the default C major scale pattern used for new MIDI tracks
     pub fn create_default_pattern() -> MidiClip {
         MidiClip {
             name: "Pattern 1".to_string(),
@@ -123,7 +125,6 @@ impl TrackBuilder {
         }
     }
 
-    /// Create the default C major scale notes
     pub fn create_default_notes() -> Vec<MidiNote> {
         vec![
             MidiNote {
@@ -256,7 +257,6 @@ pub fn solo_track(tracks: &mut Vec<Track>, track_id: usize, command_tx: &Sender<
         let new_solo = !track.solo;
         track.solo = new_solo;
 
-        // If soloing this track, unsolo all others
         if new_solo {
             for (i, t) in tracks.iter_mut().enumerate() {
                 if i != track_id && t.solo {
@@ -297,12 +297,9 @@ pub fn mute_track(tracks: &mut Vec<Track>, track_id: usize, command_tx: &Sender<
 }
 
 pub fn arm_track_exclusive(tracks: &mut Vec<Track>, track_id: usize) {
-    // Disarm all tracks first
     for t in tracks.iter_mut() {
         t.armed = false;
     }
-
-    // Arm selected track
     if let Some(track) = tracks.get_mut(track_id) {
         track.armed = true;
     }

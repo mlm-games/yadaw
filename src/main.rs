@@ -20,18 +20,24 @@ mod performance;
 mod piano_roll;
 mod plugin;
 mod project_manager;
-mod state;
 mod time_utils;
 mod track_manager;
 mod transport;
 mod ui;
 mod waveform;
 
+mod audio_snapshot;
+mod messages;
+mod model;
+mod plugin_host;
+mod project;
+
 use audio_state::{AudioState, RealtimeCommand};
 use command_processor::run_command_processor;
 use config::Config;
+use messages::{AudioCommand, UIUpdate};
 use plugin::PluginScanner;
-use state::{AppState, AudioCommand, UIUpdate};
+use project::AppState;
 use std::sync::{Arc, Mutex};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,8 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
     let (ui_tx, ui_rx) = crossbeam_channel::unbounded::<UIUpdate>();
 
-    // Initialize plugin host with audio settings
-    plugin::initialize_plugin_host(
+    // Initialize the global LV2 plugin host with current audio settings
+    plugin_host::init(
         audio_state.sample_rate.load() as f64,
         constants::MAX_BUFFER_SIZE,
     )?;
@@ -92,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    println!("Starting audio thread...");
+    println!("Priming audio graph with current tracks...");
     {
         let _ = command_tx.send(AudioCommand::UpdateTracks);
     }

@@ -1,13 +1,12 @@
-use crate::lv2_plugin_host::{ControlPortInfo, LV2PluginHost, PluginInfo};
-use crate::state::{AudioCommand, PluginDescriptor, PluginParam};
-use anyhow::Result;
-use once_cell::sync::Lazy;
-use parking_lot::Mutex;
-use std::collections::HashMap;
+use anyhow::{anyhow, Result};
+
+use crate::lv2_plugin_host::PluginInfo;
+use crate::messages::AudioCommand;
+use crate::model::plugin::{PluginDescriptor, PluginParam};
+use crate::model::track::Track;
+use crate::plugin_host::get_available_plugins;
 
 pub use crate::lv2_plugin_host::PluginInfo as PluginScanResult;
-
-static PLUGIN_HOST: Lazy<Mutex<Option<LV2PluginHost>>> = Lazy::new(|| Mutex::new(None));
 
 pub struct PluginScanner {
     pub(crate) plugins: Vec<PluginInfo>,
@@ -21,11 +20,7 @@ impl PluginScanner {
     }
 
     pub fn discover_plugins(&mut self) {
-        // Get plugins from the host
-        let host_lock = PLUGIN_HOST.lock();
-        if let Some(host) = host_lock.as_ref() {
-            self.plugins = host.get_available_plugins().to_vec();
-        }
+        self.plugins = get_available_plugins().unwrap_or_default();
     }
 
     pub fn get_plugins(&self) -> Vec<PluginScanResult> {
@@ -34,28 +29,19 @@ impl PluginScanner {
 }
 
 /// Create a plugin descriptor from URI
-pub fn create_plugin_instance(
-    uri: &str,
-    _sample_rate: f32,
-) -> anyhow::Result<crate::state::PluginDescriptor> {
-    let host_lock = PLUGIN_HOST.lock();
-    let host = host_lock
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Plugin host not initialized"))?;
-
-    let plugin_info = host
-        .get_available_plugins()
-        .iter()
+pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDescriptor> {
+    let list = get_available_plugins()?;
+    let plugin_info = list
+        .into_iter()
         .find(|p| p.uri == uri)
-        .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", uri))?;
+        .ok_or_else(|| anyhow!("Plugin not found: {}", uri))?;
 
     let mut params = std::collections::HashMap::new();
     for port in &plugin_info.control_ports {
-        // Store only the value in the descriptor (0..1 or whatever the LV2 default range implies)
         params.insert(port.symbol.clone(), port.default);
     }
 
-    Ok(crate::state::PluginDescriptor {
+    Ok(PluginDescriptor {
         uri: uri.to_string(),
         name: plugin_info.name.clone(),
         bypass: false,
@@ -63,12 +49,6 @@ pub fn create_plugin_instance(
         preset_name: None,
         custom_name: None,
     })
-}
-
-pub fn initialize_plugin_host(sample_rate: f64, max_block_size: usize) -> Result<()> {
-    let mut host_lock = PLUGIN_HOST.lock();
-    *host_lock = Some(LV2PluginHost::new(sample_rate, max_block_size)?);
-    Ok(())
 }
 
 pub struct PluginParameterUpdate {
@@ -80,15 +60,15 @@ pub struct PluginParameterUpdate {
 
 impl PluginParameterUpdate {
     pub fn apply_to_descriptor(
-        descriptor: &mut crate::state::PluginDescriptor,
+        descriptor: &mut PluginDescriptor,
         param_name: &str,
         value: f32,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if let Some(v) = descriptor.params.get_mut(param_name) {
             *v = value;
             Ok(())
         } else {
-            Err(anyhow::anyhow!("Parameter {} not found", param_name))
+            Err(anyhow!("Parameter {} not found", param_name))
         }
     }
 
@@ -114,22 +94,22 @@ pub trait PluginParameterAccess {
     fn get_plugin_param(&self, plugin_idx: usize, param_name: &str) -> Option<f32>;
 }
 
-impl PluginParameterAccess for crate::state::Track {
+impl PluginParameterAccess for Track {
     fn update_plugin_param(
         &mut self,
         plugin_idx: usize,
         param_name: &str,
         value: f32,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         self.plugin_chain
             .get_mut(plugin_idx)
-            .ok_or_else(|| anyhow::anyhow!("Plugin index {} out of bounds", plugin_idx))
+            .ok_or_else(|| anyhow!("Plugin index {} out of bounds", plugin_idx))
             .and_then(|plugin| {
                 if let Some(v) = plugin.params.get_mut(param_name) {
                     *v = value;
                     Ok(())
                 } else {
-                    Err(anyhow::anyhow!("Parameter {} not found", param_name))
+                    Err(anyhow!("Parameter {} not found", param_name))
                 }
             })
     }
@@ -151,32 +131,24 @@ pub enum PluginKind {
 }
 
 pub fn classify_plugin_uri(uri: &str) -> Option<PluginKind> {
-    let host_lock = PLUGIN_HOST.lock();
-    let host = host_lock.as_ref()?;
-    host.get_available_plugins()
-        .iter()
-        .find(|p| p.uri == uri)
-        .map(|info| {
-            // Instruments: is_instrument flag OR (has MIDI input and generates audio)
-            if info.is_instrument {
-                PluginKind::Instrument
-            } else if info.has_midi && info.audio_outputs > 0 {
-                // Plugin accepts MIDI and produces audio - it's an instrument
-                PluginKind::Instrument
-            } else if info.audio_inputs > 0 && info.audio_outputs > 0 {
-                // Has audio I/O - it's an effect
-                PluginKind::Effect
-            } else if info.has_midi && info.audio_inputs == 0 && info.audio_outputs == 0 {
-                // MIDI only - MIDI effect
-                PluginKind::MidiFx
-            } else {
-                PluginKind::Unknown
-            }
-        })
+    let list = get_available_plugins().ok()?;
+    list.into_iter().find(|p| p.uri == uri).map(|info| {
+        if info.is_instrument {
+            PluginKind::Instrument
+        } else if info.has_midi && info.audio_outputs > 0 {
+            PluginKind::Instrument
+        } else if info.audio_inputs > 0 && info.audio_outputs > 0 {
+            PluginKind::Effect
+        } else if info.has_midi && info.audio_inputs == 0 && info.audio_outputs == 0 {
+            PluginKind::MidiFx
+        } else {
+            PluginKind::Unknown
+        }
+    })
 }
 
 /// Categorizes plugin (based on name for effect subtypes)
-pub fn categorize_plugin(plugin: &crate::lv2_plugin_host::PluginInfo) -> Vec<String> {
+pub fn categorize_plugin(plugin: &PluginInfo) -> Vec<String> {
     let mut categories = Vec::new();
 
     categories.push("All".to_string());

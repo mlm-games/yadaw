@@ -3,8 +3,8 @@ use crate::automation::AutomationEngine;
 use crate::midi_engine::MidiEngine;
 use crate::mixer::MixerEngine;
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
+use crate::project::AppState;
 use crate::project_manager::ProjectManager;
-use crate::state::AppState;
 use crate::track_manager::{TrackManager, TrackType};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -36,13 +36,12 @@ impl DawCore {
     pub fn process_audio_cycle(&self, position_beats: f64, buffer_size: usize, sample_rate: f32) {
         let start_time = Instant::now();
 
-        // Apply automation
+        // Apply automation (example)
         let track_count = {
             let state = self.state.read();
             state.tracks.len()
         };
 
-        // Get automation values and apply updates
         let mut automation = self.automation.write();
         for track_idx in 0..track_count {
             if let Some(volume) = automation.get_value(track_idx, position_beats) {
@@ -53,14 +52,6 @@ impl DawCore {
             }
         }
 
-        // Process MIDI
-        let midi_engine = self.midi_engine.read();
-        // MIDI processing would happen here
-
-        // Process plugins
-        // TODO? or just redundant
-
-        // Update performance metrics
         let processing_time = start_time.elapsed();
         let cpu_usage = processing_time.as_secs_f32() / (buffer_size as f32 / sample_rate);
 
@@ -78,19 +69,16 @@ impl DawCore {
     }
 
     fn estimate_memory_usage(&self) -> usize {
-        // Rough estimation of memory usage
         let state = self.state.read();
         let mut total = 0;
 
         for track in &state.tracks {
-            // Estimate audio clip memory
             for clip in &track.audio_clips {
                 total += clip.samples.len() * std::mem::size_of::<f32>();
             }
 
-            // Estimate pattern memory
-            for pattern in &track.midi_clips {
-                total += pattern.notes.len() * std::mem::size_of::<crate::state::MidiNote>();
+            for clip in &track.midi_clips {
+                total += clip.notes.len() * std::mem::size_of::<crate::model::MidiNote>();
             }
         }
 
@@ -118,8 +106,12 @@ impl DawCore {
         self.mixer.write().create_bus("Reverb Bus".to_string());
     }
 
-    pub fn export_audio(&self, path: &std::path::Path, format: ExportFormat) -> Result<(), String> {
-        // This would implement the actual audio export
+    pub fn export_audio(
+        &self,
+        _path: &std::path::Path,
+        _format: ExportFormat,
+    ) -> Result<(), String> {
+        // Stub
         Ok(())
     }
 }
@@ -132,84 +124,4 @@ pub enum ExportFormat {
     Mp3(u32), // bitrate
     Flac,
     Ogg,
-}
-
-// Keyboard shortcuts handler
-pub struct KeyboardShortcuts {
-    shortcuts: std::collections::HashMap<String, Box<dyn Fn() + Send + Sync>>,
-}
-
-impl KeyboardShortcuts {
-    pub fn new() -> Self {
-        Self {
-            shortcuts: std::collections::HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, key_combo: &str, action: impl Fn() + Send + Sync + 'static) {
-        self.shortcuts
-            .insert(key_combo.to_string(), Box::new(action));
-    }
-
-    pub fn handle_input(&self, key_combo: &str) {
-        if let Some(action) = self.shortcuts.get(key_combo) {
-            action();
-        }
-    }
-}
-
-// Session management
-pub struct SessionManager {
-    auto_save_interval: Duration,
-    last_auto_save: Instant,
-    recovery_points: Vec<RecoveryPoint>,
-    max_recovery_points: usize,
-}
-
-#[derive(Clone)]
-pub struct RecoveryPoint {
-    timestamp: Instant,
-    state_snapshot: AppState,
-    description: String,
-}
-
-impl SessionManager {
-    pub fn new() -> Self {
-        Self {
-            auto_save_interval: Duration::from_secs(300), // 5 minutes
-            last_auto_save: Instant::now(),
-            recovery_points: Vec::new(),
-            max_recovery_points: 10,
-        }
-    }
-
-    pub fn check_auto_save(&mut self, state: &AppState, project_manager: &mut ProjectManager) {
-        if self.last_auto_save.elapsed() >= self.auto_save_interval {
-            if let Err(e) = project_manager.auto_save(state) {
-                eprintln!("Auto-save failed: {}", e);
-            }
-            self.last_auto_save = Instant::now();
-        }
-    }
-
-    pub fn create_recovery_point(&mut self, state: &AppState, description: String) {
-        let recovery_point = RecoveryPoint {
-            timestamp: Instant::now(),
-            state_snapshot: state.clone(),
-            description,
-        };
-
-        self.recovery_points.push(recovery_point);
-
-        // Keep only the most recent recovery points
-        if self.recovery_points.len() > self.max_recovery_points {
-            self.recovery_points.remove(0);
-        }
-    }
-
-    pub fn restore_recovery_point(&self, index: usize) -> Option<AppState> {
-        self.recovery_points
-            .get(index)
-            .map(|rp| rp.state_snapshot.clone())
-    }
 }

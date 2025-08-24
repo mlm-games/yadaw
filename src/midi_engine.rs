@@ -1,7 +1,6 @@
 use crate::constants::{DEFAULT_GRID_SNAP, MIDI_TIMING_SAMPLE_RATE};
 use crate::midi_utils::{MidiNoteUtils, MidiVelocity};
-use crate::state::MidiNote;
-use crate::state::Pattern;
+use crate::model::clip::{MidiClip, MidiNote};
 use crate::time_utils::TimeConverter;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use std::collections::HashMap;
@@ -75,7 +74,6 @@ impl MidiEngine {
             return Err("Invalid port index".into());
         }
 
-        // Get all ports and select the one we want
         let ports = midi_in.ports();
         let port = ports.get(port_index).ok_or("Port not found")?;
 
@@ -100,7 +98,6 @@ impl MidiEngine {
             return Err("Invalid port index".into());
         }
 
-        // Get all ports and select the one we want
         let ports = midi_out.ports();
         let port = ports.get(port_index).ok_or("Port not found")?;
 
@@ -140,7 +137,6 @@ impl MidiEngine {
         for conn in &mut self.output_connections {
             let _ = conn.send(&message);
         }
-
         self.active_notes
             .insert((channel, pitch), self.get_current_time());
     }
@@ -150,7 +146,6 @@ impl MidiEngine {
         for conn in &mut self.output_connections {
             let _ = conn.send(&message);
         }
-
         self.active_notes.remove(&(channel, pitch));
     }
 
@@ -161,32 +156,11 @@ impl MidiEngine {
         }
     }
 
-    pub fn send_program_change(&mut self, channel: u8, program: u8) {
-        let message = [0xC0 | (channel & 0x0F), program & 0x7F];
-        for conn in &mut self.output_connections {
-            let _ = conn.send(&message);
-        }
-    }
-
-    pub fn send_pitch_bend(&mut self, channel: u8, value: i16) {
-        let value_u14 = ((value + 8192).clamp(0, 16383)) as u16;
-        let lsb = (value_u14 & 0x7F) as u8;
-        let msb = ((value_u14 >> 7) & 0x7F) as u8;
-        let message = [0xE0 | (channel & 0x0F), lsb, msb];
-        for conn in &mut self.output_connections {
-            let _ = conn.send(&message);
-        }
-    }
-
     pub fn panic(&mut self) {
-        // Send all notes off on all channels
         for channel in 0..16 {
-            // All notes off
-            self.send_control_change(channel, 123, 0);
-            // All sound off
-            self.send_control_change(channel, 120, 0);
+            self.send_control_change(channel, 123, 0); // All notes off
+            self.send_control_change(channel, 120, 0); // All sound off
         }
-
         self.active_notes.clear();
     }
 
@@ -201,7 +175,7 @@ impl MidiEngine {
         self.recording_buffer.clone()
     }
 
-    pub fn convert_recording_to_pattern(&self, bpm: f32, quantize: bool) -> Pattern {
+    pub fn convert_recording_to_clip(&self, bpm: f32, quantize: bool) -> MidiClip {
         let mut notes = Vec::new();
         let mut note_ons: HashMap<u8, (u64, u8)> = HashMap::new();
 
@@ -236,11 +210,15 @@ impl MidiEngine {
         }
 
         notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+        let length_beats = notes.last().map(|n| n.start + n.duration).unwrap_or(4.0);
 
-        Pattern {
-            name: "Recorded Pattern".to_string(),
-            length: notes.last().map(|n| n.start + n.duration).unwrap_or(4.0),
+        MidiClip {
+            name: "Recorded Clip".to_string(),
+            start_beat: 0.0,
+            length_beats,
             notes,
+            color: Some((100, 150, 200)),
+            ..Default::default()
         }
     }
 
@@ -257,7 +235,6 @@ impl MidiEngine {
     }
 
     pub fn process_input_event(&mut self, event: MidiEvent) {
-        // Apply input filter
         let channel = event.channel;
         if !self.input_filter.channels[channel as usize] {
             return;
@@ -267,48 +244,38 @@ impl MidiEngine {
 
         match &mut filtered_event.event_type {
             MidiEventType::NoteOn { pitch, velocity } => {
-                // Apply note range filter
                 if *pitch < self.input_filter.note_range.0
                     || *pitch > self.input_filter.note_range.1
                 {
                     return;
                 }
-
-                // Apply velocity range filter
                 if *velocity < self.input_filter.velocity_range.0
                     || *velocity > self.input_filter.velocity_range.1
                 {
                     return;
                 }
-
-                // Apply transpose
                 let transposed = (*pitch as i16 + self.input_filter.transpose as i16).clamp(0, 127);
                 *pitch = transposed as u8;
             }
             MidiEventType::NoteOff { pitch } => {
-                // Apply transpose to note off as well
                 let transposed = (*pitch as i16 + self.input_filter.transpose as i16).clamp(0, 127);
                 *pitch = transposed as u8;
             }
             _ => {}
         }
 
-        // Record if recording
         if self.is_recording {
             self.recording_buffer.push(filtered_event.clone());
         }
 
-        // Echo to output if enabled
         if self.echo_to_output {
             match filtered_event.event_type {
                 MidiEventType::NoteOn { pitch, velocity } => {
-                    self.send_note_on(channel, pitch, velocity);
+                    self.send_note_on(channel, pitch, velocity)
                 }
-                MidiEventType::NoteOff { pitch } => {
-                    self.send_note_off(channel, pitch);
-                }
+                MidiEventType::NoteOff { pitch } => self.send_note_off(channel, pitch),
                 MidiEventType::ControlChange { controller, value } => {
-                    self.send_control_change(channel, controller, value);
+                    self.send_control_change(channel, controller, value)
                 }
                 _ => {}
             }

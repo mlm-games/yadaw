@@ -1,9 +1,10 @@
-use crate::constants::PROJECT_EXTENSION;
-use crate::state::{AppState, Project};
 use anyhow::{anyhow, Result};
 use chrono::Local;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::constants::PROJECT_EXTENSION;
+use crate::project::{AppState, Project};
 
 #[derive(Debug, Clone)]
 pub struct ProjectInfo {
@@ -147,8 +148,7 @@ impl ProjectManager {
             let audio_dir = bundle_dir.join("audio");
             fs::create_dir_all(&audio_dir)?;
 
-            // TODO: Copy audio files to bundle
-            // This would require tracking original audio file paths
+            // TODO: Copy audio files to bundle (requires tracking original file paths)
         } else {
             // Regular save
             let project = Project::from(state);
@@ -243,7 +243,7 @@ impl ProjectManager {
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
-        // This would need to track if state has changed since last save
+        // A future improvement: track a state revision counter vs last save.
         false
     }
 

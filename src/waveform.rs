@@ -1,4 +1,4 @@
-use crate::state::AudioClip;
+use crate::model::AudioClip;
 use eframe::egui;
 
 pub fn draw_waveform(

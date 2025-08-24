@@ -1,29 +1,26 @@
-use crate::audio_state::AutomationTarget;
-use crate::audio_state::{AudioState, MidiClipSnapshot, RealtimeCommand, TrackSnapshot};
-use crate::audio_state::{AutomationLaneSnapshot, CurveType};
-use crate::audio_utils::calculate_stereo_gains;
-use crate::automation_lane::AutomationLaneWidget;
-use crate::constants::{
-    DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_AMPLITUDE, PREVIEW_NOTE_DURATION,
-    RECORDING_BUFFER_SIZE, SINE_WAVE_AMPLITUDE,
+use crate::audio_state::{
+    AudioState, MidiClipSnapshot, RealtimeCommand, RtAutomationLaneSnapshot, RtAutomationTarget,
+    RtCurveType, TrackSnapshot,
 };
-use crate::lv2_plugin_host::{LV2PluginHost, LV2PluginInstance};
+use crate::audio_utils::{calculate_stereo_gains, soft_clip};
+use crate::constants::{
+    DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION, RECORDING_BUFFER_SIZE,
+};
+use crate::lv2_plugin_host::LV2PluginInstance;
+use crate::messages::UIUpdate;
 use crate::midi_utils::{generate_sine_for_note, MidiNoteUtils};
 use crate::mixer::{ChannelStrip, MixerEngine};
-use crate::state::{AudioClip, UIUpdate};
+use crate::model::clip::AudioClip;
+use crate::plugin_host;
 use crate::time_utils::TimeConverter;
-use core::f32;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-
-static PLUGIN_HOST: Lazy<parking_lot::Mutex<Option<LV2PluginHost>>> =
-    Lazy::new(|| parking_lot::Mutex::new(None));
 
 pub(crate) struct AudioEngine {
     tracks: Arc<RwLock<Vec<TrackSnapshot>>>,
@@ -35,7 +32,6 @@ pub(crate) struct AudioEngine {
     updates: Sender<UIUpdate>,
     mixer: MixerEngine,
     channel_strips: Vec<ChannelStrip>,
-    // last_playing: bool,
 }
 
 struct TrackProcessor {
@@ -67,6 +63,7 @@ struct ActiveMidiNote {
     start_sample: f64,
 }
 
+#[derive(Clone)]
 struct PreviewNote {
     track_id: usize,
     pitch: u8,
@@ -92,16 +89,7 @@ pub fn run_audio_thread(
     let sample_rate = config.sample_rate().0 as f64;
     let channels = config.channels() as usize;
 
-    // Update audio state
     audio_state.sample_rate.store(sample_rate as f32);
-
-    // Initialize plugin host
-    {
-        let mut host_lock = PLUGIN_HOST.lock();
-        *host_lock = Some(
-            LV2PluginHost::new(sample_rate, MAX_BUFFER_SIZE).expect("Failed to create plugin host"),
-        );
-    }
 
     // Create recording buffer
     let (recording_producer, recording_consumer) = RingBuffer::<f32>::new(RECORDING_BUFFER_SIZE);
@@ -140,15 +128,11 @@ pub fn run_audio_thread(
 
                 let input_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if audio_state_clone.recording.load(Ordering::Relaxed) {
-                        // Convert to mono and push to ring buffer
                         let mut producer = recording_producer.lock();
                         for frame in data.chunks(channels) {
-                            let mono_sample = frame.iter().sum::<f32>() / channels as f32;
-                            let _ = producer.push(mono_sample);
-
-                            // Send level update
-                            let level = mono_sample.abs();
-                            let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
+                            let mono = frame.iter().sum::<f32>() / channels as f32;
+                            let _ = producer.push(mono);
+                            let _ = updates_clone.try_send(UIUpdate::RecordingLevel(mono.abs()));
                         }
                     }
                 };
@@ -162,7 +146,7 @@ pub fn run_audio_thread(
                     if let Err(e) = input_stream.play() {
                         eprintln!("Failed to play input stream: {}", e);
                     }
-                    std::thread::park(); // Keep thread alive
+                    std::thread::park();
                 }
             }
         }
@@ -172,28 +156,22 @@ pub fn run_audio_thread(
     let audio_callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         let num_frames = data.len() / channels;
 
-        // Process realtime commands
         while let Ok(cmd) = realtime_commands.try_recv() {
             engine.process_realtime_command(cmd);
         }
 
-        // Handle recording
+        // Recording gather
         if engine.audio_state.recording.load(Ordering::Relaxed) {
             if !engine.recording_state.is_recording {
-                // Start recording
                 engine.recording_state.is_recording = true;
                 engine.recording_state.recording_start_position = engine.audio_state.get_position();
                 engine.recording_state.accumulated_samples.clear();
             }
-
-            // Collect recorded samples
             while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
                 engine.recording_state.accumulated_samples.push(sample);
             }
         } else if engine.recording_state.is_recording {
-            // Stop recording and create audio clip
             engine.recording_state.is_recording = false;
-
             if let Some(track_id) = engine.recording_state.recording_track {
                 if !engine.recording_state.accumulated_samples.is_empty() {
                     let converter =
@@ -222,11 +200,8 @@ pub fn run_audio_thread(
         // Clear output buffer
         data.fill(0.0);
 
-        // Check if playing
         if !engine.audio_state.playing.load(Ordering::Relaxed) {
             engine.midi_panic();
-
-            // Reset pattern positions when stopped
             for processor in &mut engine.track_processors {
                 processor.last_pattern_position = 0.0;
                 processor.pattern_loop_count = 0;
@@ -235,24 +210,15 @@ pub fn run_audio_thread(
             return;
         }
 
-        // Get current position
+        // Process block(s)
         let current_position = engine.audio_state.get_position();
+        let next_position = engine.process_audio(data, num_frames, channels, current_position);
 
-        // Process audio
-        engine.process_audio(data, num_frames, channels, current_position);
-
-        // Update position
-        engine
-            .audio_state
-            .set_position(current_position + num_frames as f64);
-
-        // Send position update
-        let _ = engine
-            .updates
-            .try_send(UIUpdate::Position(engine.audio_state.get_position()));
+        // Update once
+        engine.audio_state.set_position(next_position);
+        let _ = engine.updates.try_send(UIUpdate::Position(next_position));
     };
 
-    // Create and start audio stream
     let stream = device
         .build_output_stream(
             &config.into(),
@@ -263,8 +229,6 @@ pub fn run_audio_thread(
         .expect("Failed to create audio stream");
 
     stream.play().expect("Failed to start audio stream");
-
-    // Keep thread alive
     std::thread::park();
 }
 
@@ -334,7 +298,6 @@ impl AudioEngine {
     }
 
     fn update_track_processors(&mut self, tracks: &[TrackSnapshot]) {
-        // Ensure we have enough processors
         while self.track_processors.len() < tracks.len() {
             self.track_processors.push(TrackProcessor {
                 id: self.track_processors.len(),
@@ -353,33 +316,24 @@ impl AudioEngine {
             });
         }
 
-        // Update plugin processors
         for (track_idx, track) in tracks.iter().enumerate() {
             if let Some(processor) = self.track_processors.get_mut(track_idx) {
-                // Update plugins if changed
                 if processor.plugins.len() != track.plugin_chain.len() {
                     processor.plugins.clear();
-                    let host_lock = PLUGIN_HOST.lock();
-                    if let Some(host) = host_lock.as_ref() {
-                        for plugin_desc in &track.plugin_chain {
-                            let mut instance = host.instantiate_plugin(&plugin_desc.uri).ok();
-
-                            if let Some(inst) = instance.as_mut() {
-                                for entry in plugin_desc.params.iter() {
-                                    inst.get_params()
-                                        .insert(entry.key().clone(), *entry.value());
-                                }
-                                // Bind the instance's param cache to the same Arc as the snapshot
-                                inst.set_params_arc(plugin_desc.params.clone());
+                    for plugin_desc in &track.plugin_chain {
+                        let mut instance = plugin_host::instantiate(&plugin_desc.uri).ok();
+                        if let Some(inst) = instance.as_mut() {
+                            for entry in plugin_desc.params.iter() {
+                                inst.get_params()
+                                    .insert(entry.key().clone(), *entry.value());
                             }
-
-                            let plugin_processor = PluginProcessor {
-                                instance,
-                                uri: plugin_desc.uri.clone(),
-                                bypass: plugin_desc.bypass,
-                            };
-                            processor.plugins.push(plugin_processor);
+                            inst.set_params_arc(plugin_desc.params.clone());
                         }
+                        processor.plugins.push(PluginProcessor {
+                            instance,
+                            uri: plugin_desc.uri.clone(),
+                            bypass: plugin_desc.bypass,
+                        });
                     }
                 }
             }
@@ -389,7 +343,6 @@ impl AudioEngine {
             self.channel_strips.push(ChannelStrip::default());
         }
 
-        // Update channel strips from track data
         for (idx, track) in tracks.iter().enumerate() {
             if let Some(strip) = self.channel_strips.get_mut(idx) {
                 strip.gain = track.volume;
@@ -400,20 +353,13 @@ impl AudioEngine {
         }
     }
 
-    fn get_converter(&self) -> TimeConverter {
-        TimeConverter::new(
-            self.audio_state.sample_rate.load(),
-            self.audio_state.bpm.load(),
-        )
-    }
-
     fn process_audio(
         &mut self,
         output: &mut [f32],
         num_frames: usize,
         channels: usize,
         mut current_position: f64,
-    ) {
+    ) -> f64 {
         let tracks = self.tracks.read().clone();
         let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
@@ -422,46 +368,51 @@ impl AudioEngine {
         let loop_end = self.audio_state.loop_end.load();
 
         let converter = TimeConverter::new(self.sample_rate as f32, bpm);
+        let mut frames_processed = 0usize;
 
-        // Handle looping at block level
-        let mut frames_processed = 0;
         while frames_processed < num_frames {
-            let current_beat = converter.samples_to_beats(current_position);
+            let block_start_pos = current_position;
+            let block_start_beat = converter.samples_to_beats(block_start_pos);
 
-            // Calculate how many frames until loop end (if looping)
-            let frames_to_process =
-                if loop_enabled && loop_end > loop_start && current_beat < loop_end {
-                    let samples_to_loop_end = converter.beats_to_samples(loop_end - current_beat);
-                    ((samples_to_loop_end as usize).min(num_frames - frames_processed))
-                        .min(MAX_BUFFER_SIZE)
+            let frames_to_loop_end =
+                if loop_enabled && loop_end > loop_start && block_start_beat < loop_end {
+                    let samples_to_loop_end =
+                        converter.beats_to_samples(loop_end - block_start_beat);
+                    samples_to_loop_end as usize
                 } else {
-                    (num_frames - frames_processed).min(MAX_BUFFER_SIZE)
+                    usize::MAX
                 };
 
-            // Clear this block in output
+            let frames_to_process = frames_to_loop_end
+                .min(num_frames - frames_processed)
+                .min(MAX_BUFFER_SIZE);
+
+            // Clear sub-block
             for i in frames_processed..(frames_processed + frames_to_process) {
-                output[i * channels] = 0.0;
+                let out_idx = i * channels;
+                output[out_idx] = 0.0;
                 if channels > 1 {
-                    output[i * channels + 1] = 0.0;
+                    output[out_idx + 1] = 0.0;
                 }
             }
 
             let any_track_soloed = tracks.iter().any(|t| t.solo);
+            let preview_opt = self.preview_note.clone();
 
-            // Process tracks for this block
             for (track_idx, track) in tracks.iter().enumerate() {
                 if track.muted || (any_track_soloed && !track.solo) {
                     continue;
                 }
 
                 if let Some(processor) = self.track_processors.get_mut(track_idx) {
-                    // Process based on track type
+                    apply_automation(track, processor, block_start_beat);
+
                     if track.is_midi {
                         process_midi_track(
                             track,
                             processor,
                             frames_to_process,
-                            current_position,
+                            block_start_pos,
                             bpm,
                             self.sample_rate,
                             loop_enabled,
@@ -473,19 +424,30 @@ impl AudioEngine {
                             track,
                             processor,
                             frames_to_process,
-                            current_position,
+                            block_start_pos,
                             bpm,
                             self.sample_rate,
                         );
                     }
 
-                    // Process plugins if any
+                    if let Some(ref preview) = preview_opt {
+                        if preview.track_id == track_idx {
+                            process_preview_note(
+                                processor,
+                                preview,
+                                frames_to_process,
+                                block_start_pos,
+                                self.sample_rate,
+                            );
+                        }
+                    }
+
                     if !processor.plugins.is_empty() {
                         process_track_plugins(
                             track,
                             processor,
                             frames_to_process,
-                            current_position,
+                            block_start_pos,
                             bpm,
                             self.sample_rate,
                             loop_enabled,
@@ -494,103 +456,91 @@ impl AudioEngine {
                         );
                     }
 
-                    // Mix to output
-                    let (left_gain, right_gain) = calculate_stereo_gains(track.volume, track.pan);
+                    let (left_gain, right_gain) = effective_gains(track, processor);
                     for i in 0..frames_to_process {
                         let out_idx = (frames_processed + i) * channels;
-                        output[out_idx] += processor.input_buffer_l[i] * left_gain * master_volume;
+                        output[out_idx] += processor.input_buffer_l[i] * left_gain;
                         if channels > 1 {
-                            output[out_idx + 1] +=
-                                processor.input_buffer_r[i] * right_gain * master_volume;
+                            output[out_idx + 1] += processor.input_buffer_r[i] * right_gain;
                         }
                     }
                 }
             }
 
-            // Update position
+            // Apply master after summing
+            for i in frames_processed..(frames_processed + frames_to_process) {
+                let out_idx = i * channels;
+                output[out_idx] = soft_clip(output[out_idx] * master_volume);
+                if channels > 1 {
+                    output[out_idx + 1] = soft_clip(output[out_idx + 1] * master_volume);
+                }
+            }
+
             current_position += frames_to_process as f64;
             frames_processed += frames_to_process;
 
-            // Loop jump
             let new_beat = converter.samples_to_beats(current_position);
             if loop_enabled && loop_end > loop_start && new_beat >= loop_end {
-                // Jump back to loop start
                 current_position = converter.beats_to_samples(loop_start);
-
-                // Clear all active notes when looping
                 for processor in &mut self.track_processors {
                     processor.active_notes.clear();
                 }
             }
         }
 
-        // Update global position
-        self.audio_state.set_position(current_position);
-
-        // Send position update
-        let _ = self.updates.try_send(UIUpdate::Position(current_position));
+        current_position
     }
 
     fn midi_panic(&mut self) {
         for processor in self.track_processors.iter_mut() {
-            // Send note off for all active notes
             if !processor.active_notes.is_empty() {
                 let mut events: Vec<(u8, u8, u8, i64)> = Vec::new();
-
                 for note in &processor.active_notes {
-                    events.push((0x80, note.pitch, 0, 0)); // Note off at frame 0
+                    events.push((0x80, note.pitch, 0, 0));
                 }
-
-                // Send to all plugins in the chain
                 for plugin in processor.plugins.iter_mut() {
                     if let Some(instance) = &mut plugin.instance {
                         instance.prepare_midi_raw_events(&events);
-                        // Process a small buffer to ensure the events are handled
-                        let mut dummy_l = vec![0.0f32; 64];
-                        let mut dummy_r = vec![0.0f32; 64];
-                        let _ = instance.process(
-                            &mut dummy_l.clone(),
-                            &mut dummy_r.clone(),
-                            &mut dummy_l,
-                            &mut dummy_r,
-                            64,
-                        );
+                        let mut dl = vec![0.0f32; 64];
+                        let mut dr = vec![0.0f32; 64];
+                        let _ = instance.process(&dl.clone(), &dr.clone(), &mut dl, &mut dr, 64);
                     }
                 }
             }
-
-            // Clear state
             processor.active_notes.clear();
             processor.last_pattern_position = 0.0;
             processor.pattern_loop_count = 0;
             processor.notes_triggered_this_loop.clear();
 
-            // Send All Notes Off and All Sound Off
             let panic_events: Vec<(u8, u8, u8, i64)> = (0..16)
-                .flat_map(|ch| {
-                    vec![
-                        (0xB0 | ch, 123, 0, 0), // All Notes Off
-                        (0xB0 | ch, 120, 0, 0), // All Sound Off
-                    ]
-                })
+                .flat_map(|ch| vec![(0xB0 | ch, 123, 0, 0), (0xB0 | ch, 120, 0, 0)])
                 .collect();
 
             for plugin in processor.plugins.iter_mut() {
                 if let Some(instance) = &mut plugin.instance {
                     instance.prepare_midi_raw_events(&panic_events);
-                    let mut dummy_l = vec![0.0f32; 64];
-                    let mut dummy_r = vec![0.0f32; 64];
-                    let _ = instance.process(
-                        &mut dummy_l.clone(),
-                        &mut dummy_r.clone(),
-                        &mut dummy_l,
-                        &mut dummy_r,
-                        64,
-                    );
+                    let mut dl = vec![0.0f32; 64];
+                    let mut dr = vec![0.0f32; 64];
+                    let _ = instance.process(&dl.clone(), &dr.clone(), &mut dl, &mut dr, 64);
                 }
             }
         }
     }
+}
+
+#[inline]
+fn effective_gains(track: &TrackSnapshot, processor: &TrackProcessor) -> (f32, f32) {
+    let vol = if processor.automated_volume.is_finite() {
+        processor.automated_volume
+    } else {
+        track.volume
+    };
+    let pan = if processor.automated_pan.is_finite() {
+        processor.automated_pan
+    } else {
+        track.pan
+    };
+    calculate_stereo_gains(vol, pan)
 }
 
 fn process_midi_track(
@@ -904,7 +854,7 @@ fn process_track_plugins(
     }
 }
 
-fn value_at_beat_snapshot(lane: &AutomationLaneSnapshot, beat: f64) -> f32 {
+fn value_at_beat_snapshot(lane: &RtAutomationLaneSnapshot, beat: f64) -> f32 {
     if lane.points.is_empty() {
         return 0.0;
     }
@@ -924,9 +874,9 @@ fn value_at_beat_snapshot(lane: &AutomationLaneSnapshot, beat: f64) -> f32 {
     }
     let t = ((beat - prev.beat) / (next.beat - prev.beat)).clamp(0.0, 1.0);
     match next.curve_type {
-        CurveType::Step => prev.value,
-        CurveType::Linear => prev.value + ((next.value - prev.value) * t as f32),
-        CurveType::Exponential => {
+        RtCurveType::Step => prev.value,
+        RtCurveType::Linear => prev.value + ((next.value - prev.value) * t as f32),
+        RtCurveType::Exponential => {
             let t2 = (t as f32).powf(2.0);
             prev.value + (next.value - prev.value) * t2
         }
@@ -941,13 +891,13 @@ fn apply_automation(
     for lane in &track.automation_lanes {
         let value = value_at_beat_snapshot(lane, current_beat);
         match &lane.parameter {
-            AutomationTarget::TrackVolume => {
+            RtAutomationTarget::TrackVolume => {
                 processor.automated_volume = value;
             }
-            AutomationTarget::TrackPan => {
+            RtAutomationTarget::TrackPan => {
                 processor.automated_pan = value * 2.0 - 1.0;
             }
-            AutomationTarget::PluginParam {
+            RtAutomationTarget::PluginParam {
                 plugin_idx,
                 param_name,
             } => {
@@ -955,7 +905,9 @@ fn apply_automation(
                     .automated_plugin_params
                     .insert((*plugin_idx, param_name.clone()), value);
             }
-            AutomationTarget::TrackSend(_) => todo!(),
+            RtAutomationTarget::TrackSend(_) => {
+                // TODO: implement
+            }
         }
     }
 }

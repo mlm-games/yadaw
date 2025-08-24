@@ -1,6 +1,6 @@
 use crate::audio_state::AudioState;
 use crate::constants::DEFAULT_BPM;
-use crate::state::AudioCommand;
+use crate::messages::AudioCommand;
 use crate::time_utils::{format_bars_beats_sixteenths, format_minutes_seconds, TimeConverter};
 use crossbeam_channel::Sender;
 use std::sync::atomic::Ordering;

@@ -2,7 +2,7 @@ use super::*;
 use crate::edit_actions::EditProcessor;
 use crate::error::UserNotification;
 use crate::plugin::categorize_plugin;
-use crate::state::AudioCommand;
+use crate::messages::AudioCommand;
 use crate::ui::theme;
 
 macro_rules! simple_dialog {
@@ -673,7 +673,7 @@ impl PluginBrowserDialog {
                                 }
 
                                 // Proceed with adding anyway (can choose)
-                                let _ = app.command_tx.send(crate::state::AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
+                                let _ = app.command_tx.send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
                                 self.closed = true;
                             }
                         }

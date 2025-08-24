@@ -4,8 +4,8 @@ use rayon::vec;
 
 use super::*;
 use crate::constants::PIANO_KEY_WIDTH;
+use crate::model::{MidiClip, MidiNote};
 use crate::piano_roll::{PianoRoll, PianoRollAction};
-use crate::state::{AudioCommand, MidiClip, MidiNote};
 
 pub struct PianoRollView {
     piano_roll: PianoRoll,
