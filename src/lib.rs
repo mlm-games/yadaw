@@ -10,12 +10,10 @@ pub mod config;
 pub mod constants;
 pub mod edit_actions;
 pub mod error;
-pub mod integration;
 pub mod level_meter;
 pub mod lv2_plugin_host;
 pub mod messages;
 pub mod metering;
-pub mod midi_engine;
 pub mod midi_utils;
 pub mod mixer;
 pub mod model;
@@ -31,5 +29,3 @@ pub mod track_manager;
 pub mod transport;
 pub mod ui;
 pub mod waveform;
-
-pub use integration::DawCore;

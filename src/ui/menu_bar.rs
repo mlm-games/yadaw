@@ -350,6 +350,30 @@ impl MenuBar {
                 let _ = app
                     .command_tx
                     .send(AudioCommand::SetLoopEnabled(loop_enabled));
+
+                if loop_enabled {
+                    let (start, end) = {
+                        // compute project end in beats
+                        let state = app.state.lock().unwrap();
+                        let mut max_beat: f64 = 4.0;
+                        for t in &state.tracks {
+                            for c in &t.audio_clips {
+                                max_beat = max_beat.max(c.start_beat + c.length_beats);
+                            }
+                            for c in &t.midi_clips {
+                                max_beat = max_beat.max(c.start_beat + c.length_beats);
+                            }
+                        }
+                        (0.0, max_beat)
+                    };
+                    let cur_s = app.audio_state.loop_start.load();
+                    let cur_e = app.audio_state.loop_end.load();
+                    if !(cur_e > cur_s) {
+                        app.audio_state.loop_start.store(start);
+                        app.audio_state.loop_end.store(end);
+                        let _ = app.command_tx.send(AudioCommand::SetLoopRegion(start, end));
+                    }
+                }
                 ui.close();
             }
 
@@ -361,6 +385,30 @@ impl MenuBar {
             if ui.button("Clear Loop").clicked() {
                 app.audio_state.loop_enabled.store(false, Ordering::Relaxed);
                 let _ = app.command_tx.send(AudioCommand::SetLoopEnabled(false));
+                ui.close();
+            }
+
+            if ui.button("Go to End").clicked() {
+                let end_beats = {
+                    let state = app.state.lock().unwrap();
+                    let mut max_beat: f64 = 4.0;
+                    for t in &state.tracks {
+                        for c in &t.audio_clips {
+                            max_beat = max_beat.max(c.start_beat + c.length_beats);
+                        }
+                        for c in &t.midi_clips {
+                            max_beat = max_beat.max(c.start_beat + c.length_beats);
+                        }
+                    }
+                    max_beat
+                };
+                // convert beats->samples
+                let sr = app.audio_state.sample_rate.load() as f64;
+                let bpm = app.audio_state.bpm.load() as f64;
+                if bpm > 0.0 && sr > 0.0 {
+                    let samples = end_beats * (60.0 / bpm) * sr;
+                    let _ = app.command_tx.send(AudioCommand::SetPosition(samples));
+                }
                 ui.close();
             }
         });
