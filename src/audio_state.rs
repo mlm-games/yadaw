@@ -85,6 +85,7 @@ pub struct TrackSnapshot {
     pub solo: bool,
     pub armed: bool,
     pub is_midi: bool,
+    pub monitor_enabled: bool,
     pub audio_clips: Vec<AudioClipSnapshot>,
     pub midi_clips: Vec<MidiClipSnapshot>,
     pub plugin_chain: Vec<PluginDescriptorSnapshot>,

@@ -32,6 +32,7 @@ fn track_to_snapshot(t: &Track) -> TrackSnapshot {
         solo: t.solo,
         armed: t.armed,
         is_midi: t.is_midi,
+        monitor_enabled: t.monitor_enabled,
         audio_clips: t.audio_clips.iter().map(audio_clip_to_snapshot).collect(),
         midi_clips: t.midi_clips.iter().map(midi_clip_to_snapshot).collect(),
         plugin_chain: t.plugin_chain.iter().map(plugin_desc_to_snapshot).collect(),

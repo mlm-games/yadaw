@@ -282,6 +282,16 @@ fn process_command(
             let _ = realtime_tx.send(RealtimeCommand::StopPreviewNote);
         }
 
+        AudioCommand::SetTrackMonitor(track_id, enabled) => {
+            let mut state = app_state.lock().unwrap();
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                track.monitor_enabled = *enabled;
+                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+            }
+            // so the new monitor flag reaches the audio thread
+            send_tracks_snapshot(app_state, realtime_tx);
+        }
+
         _ => {
             // No-op
         }

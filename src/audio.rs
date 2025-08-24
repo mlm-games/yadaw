@@ -76,6 +76,7 @@ struct RecordingState {
     recording_consumer: Consumer<f32>,
     recording_start_position: f64,
     accumulated_samples: Vec<f32>,
+    monitor_queue: Vec<f32>,
 }
 
 pub fn run_audio_thread(
@@ -106,6 +107,7 @@ pub fn run_audio_thread(
             recording_consumer,
             recording_start_position: 0.0,
             accumulated_samples: Vec::new(),
+            monitor_queue: Vec::new(),
         },
         preview_note: None,
         sample_rate,
@@ -127,13 +129,15 @@ pub fn run_audio_thread(
                 let recording_producer = recording_producer.clone();
 
                 let input_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if audio_state_clone.recording.load(Ordering::Relaxed) {
-                        let mut producer = recording_producer.lock();
-                        for frame in data.chunks(channels) {
-                            let mono = frame.iter().sum::<f32>() / channels as f32;
-                            let _ = producer.push(mono);
-                            let _ = updates_clone.try_send(UIUpdate::RecordingLevel(mono.abs()));
-                        }
+                    // Always push to the ring for monitoring/recording
+                    let mut producer = recording_producer.lock();
+                    for frame in data.chunks(channels) {
+                        let mono_sample = frame.iter().sum::<f32>() / channels as f32;
+                        let _ = producer.push(mono_sample);
+
+                        // Level update (harmless even when not recording)
+                        let level = mono_sample.abs();
+                        let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
                     }
                 };
 
@@ -163,15 +167,27 @@ pub fn run_audio_thread(
         // Recording gather
         if engine.audio_state.recording.load(Ordering::Relaxed) {
             if !engine.recording_state.is_recording {
+                // Start recording
                 engine.recording_state.is_recording = true;
                 engine.recording_state.recording_start_position = engine.audio_state.get_position();
                 engine.recording_state.accumulated_samples.clear();
             }
-            while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
+        }
+
+        // Drain source ring into monitor FIFO; if recording, also into the clip buffer
+        while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
+            engine.recording_state.monitor_queue.push(sample);
+            if engine.recording_state.is_recording {
                 engine.recording_state.accumulated_samples.push(sample);
             }
-        } else if engine.recording_state.is_recording {
+        }
+
+        // If stopped recording, create the clip
+        if !engine.audio_state.recording.load(Ordering::Relaxed)
+            && engine.recording_state.is_recording
+        {
             engine.recording_state.is_recording = false;
+
             if let Some(track_id) = engine.recording_state.recording_track {
                 if !engine.recording_state.accumulated_samples.is_empty() {
                     let converter =
@@ -351,6 +367,12 @@ impl AudioEngine {
                 strip.solo = track.solo;
             }
         }
+
+        self.recording_state.recording_track = tracks
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.armed && !t.is_midi)
+            .map(|(i, _)| i);
     }
 
     fn process_audio(
@@ -368,6 +390,12 @@ impl AudioEngine {
         let loop_end = self.audio_state.loop_end.load();
 
         let converter = TimeConverter::new(self.sample_rate as f32, bpm);
+
+        // Meters (max across sub-blocks)
+        let mut track_peaks = vec![(0.0f32, 0.0f32); tracks.len()];
+        let mut master_peak_l = 0.0f32;
+        let mut master_peak_r = 0.0f32;
+
         let mut frames_processed = 0usize;
 
         while frames_processed < num_frames {
@@ -398,6 +426,8 @@ impl AudioEngine {
 
             let any_track_soloed = tracks.iter().any(|t| t.solo);
             let preview_opt = self.preview_note.clone();
+            let is_recording_now = self.audio_state.recording.load(Ordering::Relaxed);
+            let rec_track_idx = self.recording_state.recording_track;
 
             for (track_idx, track) in tracks.iter().enumerate() {
                 if track.muted || (any_track_soloed && !track.solo) {
@@ -405,8 +435,10 @@ impl AudioEngine {
                 }
 
                 if let Some(processor) = self.track_processors.get_mut(track_idx) {
+                    // Evaluate automation at block start
                     apply_automation(track, processor, block_start_beat);
 
+                    // Build per-track buffers (post-clip, pre-plugin)
                     if track.is_midi {
                         process_midi_track(
                             track,
@@ -430,6 +462,7 @@ impl AudioEngine {
                         );
                     }
 
+                    // note preview
                     if let Some(ref preview) = preview_opt {
                         if preview.track_id == track_idx {
                             process_preview_note(
@@ -442,6 +475,26 @@ impl AudioEngine {
                         }
                     }
 
+                    // Mix input monitoring into the recording track (mono -> stereo)
+                    if track.monitor_enabled
+                        || (is_recording_now && Some(track_idx) == rec_track_idx)
+                    {
+                        let take = self
+                            .recording_state
+                            .monitor_queue
+                            .len()
+                            .min(frames_to_process);
+                        for i in 0..take {
+                            let s = self.recording_state.monitor_queue[i];
+                            processor.input_buffer_l[i] += s;
+                            processor.input_buffer_r[i] += s;
+                        }
+                        if take > 0 {
+                            self.recording_state.monitor_queue.drain(..take);
+                        }
+                    }
+
+                    // Run plugin chain
                     if !processor.plugins.is_empty() {
                         process_track_plugins(
                             track,
@@ -456,29 +509,53 @@ impl AudioEngine {
                         );
                     }
 
+                    // Mix into output and compute per-track peaks (post pan/track volume)
                     let (left_gain, right_gain) = effective_gains(track, processor);
+
+                    let mut tp_l = 0.0f32;
+                    let mut tp_r = 0.0f32;
+
                     for i in 0..frames_to_process {
                         let out_idx = (frames_processed + i) * channels;
-                        output[out_idx] += processor.input_buffer_l[i] * left_gain;
+                        let l = processor.input_buffer_l[i] * left_gain;
+                        let r = processor.input_buffer_r[i] * right_gain;
+
+                        output[out_idx] += l;
                         if channels > 1 {
-                            output[out_idx + 1] += processor.input_buffer_r[i] * right_gain;
+                            output[out_idx + 1] += r;
                         }
+
+                        tp_l = tp_l.max(l.abs());
+                        tp_r = tp_r.max(r.abs());
+                    }
+
+                    if let Some(slot) = track_peaks.get_mut(track_idx) {
+                        slot.0 = slot.0.max(tp_l);
+                        slot.1 = slot.1.max(tp_r);
                     }
                 }
             }
 
-            // Apply master after summing
+            // Apply master gain and soft clip; update master peaks
             for i in frames_processed..(frames_processed + frames_to_process) {
                 let out_idx = i * channels;
-                output[out_idx] = soft_clip(output[out_idx] * master_volume);
+                let l = soft_clip(output[out_idx] * master_volume);
+                output[out_idx] = l;
+                master_peak_l = master_peak_l.max(l.abs());
+
                 if channels > 1 {
-                    output[out_idx + 1] = soft_clip(output[out_idx + 1] * master_volume);
+                    let r = soft_clip(output[out_idx + 1] * master_volume);
+                    output[out_idx + 1] = r;
+                    master_peak_r = master_peak_r.max(r.abs());
+                } else {
+                    master_peak_r = master_peak_r.max(l.abs());
                 }
             }
 
             current_position += frames_to_process as f64;
             frames_processed += frames_to_process;
 
+            // Handle loop jump
             let new_beat = converter.samples_to_beats(current_position);
             if loop_enabled && loop_end > loop_start && new_beat >= loop_end {
                 current_position = converter.beats_to_samples(loop_start);
@@ -487,6 +564,12 @@ impl AudioEngine {
                 }
             }
         }
+
+        // Send meters once per callback
+        let _ = self.updates.try_send(UIUpdate::TrackLevels(track_peaks));
+        let _ = self
+            .updates
+            .try_send(UIUpdate::MasterLevel(master_peak_l, master_peak_r));
 
         current_position
     }
@@ -638,35 +721,73 @@ fn process_audio_track(
     bpm: f32,
     sample_rate: f64,
 ) {
-    // Ensure buffers are zeroed
+    // Zero
     processor.input_buffer_l[..num_frames].fill(0.0);
     processor.input_buffer_r[..num_frames].fill(0.0);
 
     let converter = TimeConverter::new(sample_rate as f32, bpm);
 
+    let buffer_start = current_position;
+    let buffer_end = current_position + num_frames as f64;
+
     for clip in &track.audio_clips {
         let clip_start_samples = converter.beats_to_samples(clip.start_beat);
-        let clip_duration_samples = clip.samples.len() as f64;
-        let clip_end_samples = clip_start_samples + clip_duration_samples;
+        let clip_end_samples = clip_start_samples
+            + clip.samples.len() as f64 * (sample_rate / clip.sample_rate as f64);
 
-        // Calculate overlap with current buffer
-        let buffer_start = current_position;
-        let buffer_end = current_position + num_frames as f64;
+        // Intersect with current buffer (all in project-rate samples)
+        let overlap_start = buffer_start.max(clip_start_samples);
+        let overlap_end = buffer_end.min(clip_end_samples);
+        if overlap_end <= overlap_start {
+            continue;
+        }
 
-        if clip_end_samples > buffer_start && clip_start_samples < buffer_end {
-            let start_in_buffer =
-                ((clip_start_samples - buffer_start).max(0.0) as usize).min(num_frames);
-            let end_in_buffer =
-                ((clip_end_samples - buffer_start).min(num_frames as f64) as usize).max(0);
-            let start_in_clip = ((buffer_start - clip_start_samples).max(0.0) as usize);
+        let frames = (overlap_end - overlap_start) as usize;
+        let start_in_buffer = (overlap_start - buffer_start) as usize;
 
-            for i in start_in_buffer..end_in_buffer {
-                let clip_idx = start_in_clip + (i - start_in_buffer);
-                if clip_idx < clip.samples.len() {
-                    processor.input_buffer_l[i] += clip.samples[clip_idx];
-                    processor.input_buffer_r[i] += clip.samples[clip_idx];
-                }
+        // For each output frame, sample from clip at its own rate (linear)
+        let ratio = clip.sample_rate as f64 / sample_rate; // src_per_dst
+        let clip_length_beats = clip.length_beats;
+        let fade_in_beats = clip.fade_in.unwrap_or(0.0).max(0.0);
+        let fade_out_beats = clip.fade_out.unwrap_or(0.0).max(0.0);
+
+        for i in 0..frames {
+            let buf_idx = start_in_buffer + i;
+            if buf_idx >= num_frames {
+                break;
             }
+
+            // Project sample offset inside the clip window (dst/project domain)
+            let proj_off = (overlap_start - clip_start_samples) + i as f64;
+            // Source float index (clip domain)
+            let src_pos = proj_off * ratio;
+            let src_idx = src_pos.floor() as usize;
+            let frac = (src_pos - src_idx as f64) as f32;
+
+            // Linear interpolation from clip.samples (mono)
+            let s0 = clip.samples.get(src_idx).copied().unwrap_or(0.0);
+            let s1 = clip.samples.get(src_idx + 1).copied().unwrap_or(s0);
+            let mut s = s0 * (1.0 - frac) + s1 * frac;
+
+            // Apply clip gain
+            s *= clip.gain;
+
+            // Apply fades (in beats, relative to clip start)
+            let clip_pos_beats = converter.samples_to_beats(proj_off);
+            // Fade in
+            if fade_in_beats > 0.0 && clip_pos_beats < fade_in_beats {
+                let f = (clip_pos_beats / fade_in_beats) as f32;
+                s *= f.clamp(0.0, 1.0);
+            }
+            // Fade out
+            if fade_out_beats > 0.0 && clip_pos_beats > (clip_length_beats - fade_out_beats) {
+                let rem = (clip_length_beats - clip_pos_beats).max(0.0);
+                let f = (rem / fade_out_beats) as f32;
+                s *= f.clamp(0.0, 1.0);
+            }
+
+            processor.input_buffer_l[buf_idx] += s;
+            processor.input_buffer_r[buf_idx] += s;
         }
     }
 }

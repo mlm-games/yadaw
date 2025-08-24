@@ -118,6 +118,7 @@ impl TracksPanel {
                             &mut state.tracks[track_idx],
                             track_idx,
                             &mut track_actions,
+                            app,
                         );
                     }
 
@@ -183,6 +184,7 @@ impl TracksPanel {
         track: &mut Track,
         idx: usize,
         actions: &mut Vec<(&str, usize)>,
+        app: &mut super::app::YadawApp,
     ) {
         ui.horizontal(|ui| {
             if ui
@@ -208,11 +210,15 @@ impl TracksPanel {
             }
             if !track.is_midi {
                 if ui
-                    .selectable_label(false, "🎧")
+                    .selectable_label(track.monitor_enabled, "🎧")
                     .on_hover_text("Input Monitoring")
                     .clicked()
                 {
-                    actions.push(("monitor", idx));
+                    // Toggle and notify audio thread
+                    track.monitor_enabled = !track.monitor_enabled;
+                    let _ = app
+                        .command_tx
+                        .send(AudioCommand::SetTrackMonitor(idx, track.monitor_enabled));
                 }
             }
         });
