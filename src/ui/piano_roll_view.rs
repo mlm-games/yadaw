@@ -23,6 +23,8 @@ pub struct PianoRollView {
     // MIDI input
     midi_input_enabled: bool,
     midi_octave_offset: i32,
+
+    undo_armed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +51,7 @@ impl PianoRollView {
             midi_octave_offset: 0,
             selected_clip: None,
             editing_notes: vec![],
+            undo_armed: false,
         }
     }
 
@@ -337,6 +340,27 @@ impl PianoRollView {
 
             // Process actions and send updates
             let mut notes_changed = false;
+
+            // If any edit action is about to modify notes, arm undo once
+            let mut about_to_modify = false;
+            for a in &actions {
+                match a {
+                    PianoRollAction::AddNote(_)
+                    | PianoRollAction::RemoveNote(_)
+                    | PianoRollAction::UpdateNote(_, _) => {
+                        about_to_modify = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if about_to_modify && !self.undo_armed {
+                // Take a snapshot now so Ctrl+Z reverts this edit gesture
+                app.push_undo();
+                self.undo_armed = true;
+            }
+
+            // Apply actions
             for action in actions {
                 match action {
                     PianoRollAction::AddNote(note) => {
@@ -358,10 +382,15 @@ impl PianoRollView {
                     PianoRollAction::PreviewNote(pitch) => {
                         let _ = app
                             .command_tx
-                            .send(AudioCommand::PreviewNote(app.selected_track, pitch));
+                            .send(crate::messages::AudioCommand::PreviewNote(
+                                app.selected_track,
+                                pitch,
+                            ));
                     }
                     PianoRollAction::StopPreview => {
-                        let _ = app.command_tx.send(AudioCommand::StopPreviewNote);
+                        let _ = app
+                            .command_tx
+                            .send(crate::messages::AudioCommand::StopPreviewNote);
                     }
                 }
             }
@@ -375,6 +404,10 @@ impl PianoRollView {
                         self.editing_notes.clone(),
                     ));
                 }
+            }
+
+            if ui.input(|i| i.pointer.any_released()) {
+                self.undo_armed = false;
             }
         }
     }

@@ -239,7 +239,6 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
                     clip.notes = notes.clone();
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             send_tracks_snapshot(app_state, realtime_tx);
@@ -261,7 +260,6 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
                     clip.start_beat = *new_start_beat;
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             send_tracks_snapshot(app_state, realtime_tx);
