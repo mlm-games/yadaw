@@ -832,6 +832,9 @@ impl YadawApp {
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
         ctx.input(|i| {
             // File shortcuts
             if i.modifiers.ctrl {
