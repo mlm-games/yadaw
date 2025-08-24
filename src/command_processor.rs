@@ -123,18 +123,17 @@ fn process_command(
                         params_dashmap.insert(key.clone(), *value);
                     }
 
+                    let tracks_clone = state.tracks.clone();
                     drop(state);
 
                     match crate::plugin_host::instantiate(uri) {
                         Ok(mut instance) => {
-                            // Set initial parameters
                             for entry in params_dashmap.iter() {
                                 instance.set_parameter(entry.key(), *entry.value());
                             }
                             // Share the same Arc with the instance
                             instance.set_params_arc(params_dashmap.clone());
 
-                            // Send pre-instantiated plugin to audio thread
                             let _ = realtime_tx.send(RealtimeCommand::AddPluginInstance {
                                 track_id: *track_id,
                                 plugin_idx,
@@ -143,6 +142,10 @@ fn process_command(
                                 uri: uri.to_string(),
                                 bypass: plugin_desc.bypass,
                             });
+
+                            let snapshots =
+                                crate::audio_snapshot::build_track_snapshots(&tracks_clone);
+                            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
                         }
                         Err(e) => {
                             eprintln!("Failed to instantiate plugin: {}", e);
@@ -169,11 +172,13 @@ fn process_command(
                 }
             }
 
-            // Tell audio thread to remove the instance
             let _ = realtime_tx.send(RealtimeCommand::RemovePluginInstance {
                 track_id: *track_id,
                 plugin_idx: *plugin_idx,
             });
+
+            let snapshots = crate::audio_snapshot::build_track_snapshots(&state.tracks);
+            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
         }
 
         AudioCommand::SetPluginBypass(track_id, plugin_idx, bypass) => {

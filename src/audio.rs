@@ -1015,57 +1015,55 @@ fn process_track_plugins(
     processor.output_buffer_l[..num_frames].fill(0.0);
     processor.output_buffer_r[..num_frames].fill(0.0);
 
-    // If no plugins, nothing to do
+    // Check processor's plugins, not track's plugin_chain
     if processor.plugins.is_empty() {
         return;
     }
 
-    // Process chain
+    // Process chain using processor's actual plugin instances
     let mut first_active_plugin = true;
 
-    for (plugin_idx, plugin_desc) in track.plugin_chain.iter().enumerate() {
-        if plugin_desc.bypass {
+    for (plugin_idx, plugin_processor) in processor.plugins.iter_mut().enumerate() {
+        if plugin_processor.bypass {
             continue;
         }
 
-        if let Some(plugin) = processor.plugins.get_mut(plugin_idx) {
-            if let Some(instance) = &mut plugin.instance {
-                // Apply automated plugin param values (if any)
-                for kv in processor.automated_plugin_params.iter() {
-                    let ((p_idx, param_name), value) = (kv.key().clone(), *kv.value());
-                    if p_idx == plugin_idx {
-                        instance.set_parameter(&param_name, value);
-                    }
+        if let Some(instance) = &mut plugin_processor.instance {
+            // Apply automated plugin param values (if any)
+            for kv in processor.automated_plugin_params.iter() {
+                let ((p_idx, param_name), value) = (kv.key().clone(), *kv.value());
+                if p_idx == plugin_idx {
+                    instance.set_parameter(&param_name, value);
                 }
+            }
 
-                // Feed MIDI to the first active plugin on MIDI tracks
-                if track.is_midi {
-                    if first_active_plugin && !all_midi_events.is_empty() {
-                        instance.prepare_midi_raw_events(&all_midi_events);
-                    } else {
-                        instance.clear_midi_events();
-                    }
-                    first_active_plugin = false;
+            // Feed MIDI to the first active plugin on MIDI tracks
+            if track.is_midi {
+                if first_active_plugin && !all_midi_events.is_empty() {
+                    instance.prepare_midi_raw_events(&all_midi_events);
                 } else {
                     instance.clear_midi_events();
                 }
+                first_active_plugin = false;
+            } else {
+                instance.clear_midi_events();
+            }
 
-                // Run plugin
-                if let Err(e) = instance.process(
-                    &processor.input_buffer_l[..num_frames],
-                    &processor.input_buffer_r[..num_frames],
-                    &mut processor.output_buffer_l[..num_frames],
-                    &mut processor.output_buffer_r[..num_frames],
-                    num_frames,
-                ) {
-                    eprintln!("Plugin processing error: {}", e);
-                } else {
-                    // Copy output to input for next plugin
-                    processor.input_buffer_l[..num_frames]
-                        .copy_from_slice(&processor.output_buffer_l[..num_frames]);
-                    processor.input_buffer_r[..num_frames]
-                        .copy_from_slice(&processor.output_buffer_r[..num_frames]);
-                }
+            // Run plugin
+            if let Err(e) = instance.process(
+                &processor.input_buffer_l[..num_frames],
+                &processor.input_buffer_r[..num_frames],
+                &mut processor.output_buffer_l[..num_frames],
+                &mut processor.output_buffer_r[..num_frames],
+                num_frames,
+            ) {
+                eprintln!("Plugin processing error: {}", e);
+            } else {
+                // Copy output to input for next plugin
+                processor.input_buffer_l[..num_frames]
+                    .copy_from_slice(&processor.output_buffer_l[..num_frames]);
+                processor.input_buffer_r[..num_frames]
+                    .copy_from_slice(&processor.output_buffer_r[..num_frames]);
             }
         }
     }
