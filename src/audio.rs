@@ -50,6 +50,26 @@ struct TrackProcessor {
     notes_triggered_this_loop: Vec<u8>,
 }
 
+impl TrackProcessor {
+    fn new(id: usize) -> Self {
+        Self {
+            id,
+            plugins: Vec::new(),
+            input_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
+            input_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
+            output_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
+            output_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
+            active_notes: Vec::new(),
+            last_pattern_position: 0.0,
+            automated_volume: f32::NAN,
+            automated_pan: f32::NAN,
+            automated_plugin_params: DashMap::new(),
+            pattern_loop_count: 0,
+            notes_triggered_this_loop: Vec::new(),
+        }
+    }
+}
+
 struct PluginProcessor {
     instance: Option<LV2PluginInstance>,
     uri: String,
@@ -310,7 +330,83 @@ impl AudioEngine {
                 self.audio_state.loop_start.store(start);
                 self.audio_state.loop_end.store(end);
             }
+            RealtimeCommand::AddPluginInstance {
+                track_id,
+                plugin_idx,
+                instance,
+                descriptor: _, // We don't need this here since instance already has params
+                uri,
+                bypass,
+            } => {
+                // Ensure processor exists
+                while self.track_processors.len() <= track_id {
+                    self.track_processors
+                        .push(TrackProcessor::new(self.track_processors.len()));
+                }
+
+                if let Some(processor) = self.track_processors.get_mut(track_id) {
+                    let plugin = PluginProcessor {
+                        instance: Some(instance),
+                        uri,
+                        bypass,
+                    };
+
+                    // Insert at correct position or append
+                    if plugin_idx >= processor.plugins.len() {
+                        processor.plugins.push(plugin);
+                    } else {
+                        processor.plugins.insert(plugin_idx, plugin);
+                    }
+                }
+            }
+
+            RealtimeCommand::RemovePluginInstance {
+                track_id,
+                plugin_idx,
+            } => {
+                if let Some(processor) = self.track_processors.get_mut(track_id) {
+                    if plugin_idx < processor.plugins.len() {
+                        processor.plugins.remove(plugin_idx);
+                    }
+                }
+            }
+
+            // Keep the existing UpdateTracks but don't instantiate plugins in it
+            RealtimeCommand::UpdateTracks(new_tracks) => {
+                *self.tracks.write() = new_tracks.clone();
+                self.update_track_processors_without_plugins(&new_tracks);
+            }
         }
+    }
+
+    fn update_track_processors_without_plugins(&mut self, tracks: &[TrackSnapshot]) {
+        // Ensure we have enough processors
+        while self.track_processors.len() < tracks.len() {
+            self.track_processors
+                .push(TrackProcessor::new(self.track_processors.len()));
+        }
+
+        // DON'T touch plugins here - they're managed separately now
+
+        // Update channel strips
+        while self.channel_strips.len() < tracks.len() {
+            self.channel_strips.push(ChannelStrip::default());
+        }
+
+        for (idx, track) in tracks.iter().enumerate() {
+            if let Some(strip) = self.channel_strips.get_mut(idx) {
+                strip.gain = track.volume;
+                strip.pan = track.pan;
+                strip.mute = track.muted;
+                strip.solo = track.solo;
+            }
+        }
+
+        self.recording_state.recording_track = tracks
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.armed && !t.is_midi)
+            .map(|(i, _)| i);
     }
 
     fn update_track_processors(&mut self, tracks: &[TrackSnapshot]) {
@@ -495,19 +591,19 @@ impl AudioEngine {
                     }
 
                     // Run plugin chain
-                    if !processor.plugins.is_empty() {
-                        process_track_plugins(
-                            track,
-                            processor,
-                            frames_to_process,
-                            block_start_pos,
-                            bpm,
-                            self.sample_rate,
-                            loop_enabled,
-                            loop_start,
-                            loop_end,
-                        );
-                    }
+                    // if !processor.plugins.is_empty() {
+                    process_track_plugins(
+                        track,
+                        processor,
+                        frames_to_process,
+                        block_start_pos,
+                        bpm,
+                        self.sample_rate,
+                        loop_enabled,
+                        loop_start,
+                        loop_end,
+                    );
+                    // }
 
                     // Mix into output and compute per-track peaks (post pan/track volume)
                     let (left_gain, right_gain) = effective_gains(track, processor);

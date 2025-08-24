@@ -138,6 +138,8 @@ impl LV2PluginHost {
     }
 }
 
+#[derive(Debug)]
+
 pub struct LV2PluginInstance {
     instance: Instance,
     features: Arc<Features>,

@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::lv2_plugin_host::LV2PluginInstance;
+use crate::model::PluginDescriptor;
+
 pub struct AtomicF64 {
     storage: AtomicU64,
 }
@@ -123,7 +126,7 @@ pub struct PatternSnapshot {
 }
 
 /// Commands that require immediate audio state updates
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RealtimeCommand {
     UpdateTracks(Vec<TrackSnapshot>),
     UpdateTrackVolume(usize, f32),
@@ -136,6 +139,18 @@ pub enum RealtimeCommand {
     StopPreviewNote,
     SetLoopEnabled(bool),
     SetLoopRegion(f64, f64),
+    AddPluginInstance {
+        track_id: usize,
+        plugin_idx: usize,
+        instance: LV2PluginInstance,
+        descriptor: Arc<DashMap<String, f32>>, // Plugin params
+        uri: String,
+        bypass: bool,
+    },
+    RemovePluginInstance {
+        track_id: usize,
+        plugin_idx: usize,
+    },
 }
 
 #[derive(Debug, Clone)]

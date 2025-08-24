@@ -3,6 +3,7 @@ use crate::messages::{AudioCommand, UIUpdate};
 use crate::plugin;
 use crate::project::AppState;
 use crossbeam_channel::{Receiver, Sender};
+use dashmap::DashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
@@ -105,16 +106,58 @@ fn process_command(
         }
 
         AudioCommand::AddPlugin(track_id, uri) => {
+            let sample_rate = audio_state.sample_rate.load();
+
+            // First update the model
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Ok(plugin_desc) =
-                    crate::plugin::create_plugin_instance(uri, audio_state.sample_rate.load())
-                {
-                    track.plugin_chain.push(plugin_desc);
+                // Create descriptor (metadata only)
+                if let Ok(plugin_desc) = crate::plugin::create_plugin_instance(uri, sample_rate) {
+                    let plugin_idx = track.plugin_chain.len();
+                    track.plugin_chain.push(plugin_desc.clone());
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+
+                    // Convert HashMap to Arc<DashMap> for thread-safe sharing
+                    let params_dashmap = Arc::new(DashMap::new());
+                    for (key, value) in plugin_desc.params.iter() {
+                        params_dashmap.insert(key.clone(), *value);
+                    }
+
+                    drop(state);
+
+                    match crate::plugin_host::instantiate(uri) {
+                        Ok(mut instance) => {
+                            // Set initial parameters
+                            for entry in params_dashmap.iter() {
+                                instance.set_parameter(entry.key(), *entry.value());
+                            }
+                            // Share the same Arc with the instance
+                            instance.set_params_arc(params_dashmap.clone());
+
+                            // Send pre-instantiated plugin to audio thread
+                            let _ = realtime_tx.send(RealtimeCommand::AddPluginInstance {
+                                track_id: *track_id,
+                                plugin_idx,
+                                instance,
+                                descriptor: params_dashmap,
+                                uri: uri.to_string(),
+                                bypass: plugin_desc.bypass,
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to instantiate plugin: {}", e);
+                            let _ = ui_tx
+                                .send(UIUpdate::Error(format!("Failed to load plugin: {}", e)));
+
+                            // Remove from model since instantiation failed
+                            let mut state = app_state.lock().unwrap();
+                            if let Some(track) = state.tracks.get_mut(*track_id) {
+                                track.plugin_chain.pop();
+                            }
+                        }
+                    }
                 }
             }
-            send_tracks_snapshot(app_state, realtime_tx);
         }
 
         AudioCommand::RemovePlugin(track_id, plugin_idx) => {
@@ -125,7 +168,12 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            send_tracks_snapshot(app_state, realtime_tx);
+
+            // Tell audio thread to remove the instance
+            let _ = realtime_tx.send(RealtimeCommand::RemovePluginInstance {
+                track_id: *track_id,
+                plugin_idx: *plugin_idx,
+            });
         }
 
         AudioCommand::SetPluginBypass(track_id, plugin_idx, bypass) => {
