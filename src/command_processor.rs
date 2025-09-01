@@ -60,7 +60,8 @@ fn process_command(
         }
 
         AudioCommand::UpdateTracks => {
-            send_tracks_snapshot(app_state, realtime_tx);
+            let mut state = app_state.lock().unwrap();
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::SetTrackVolume(track_id, volume) => {
@@ -102,7 +103,7 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 track.armed = *armed;
             }
-            send_tracks_snapshot(app_state, realtime_tx);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::AddPlugin(track_id, uri) => {
@@ -236,7 +237,7 @@ fn process_command(
                 track.midi_clips.push(clip);
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            send_tracks_snapshot(app_state, realtime_tx);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::UpdateMidiClip(track_id, clip_id, notes) => {
@@ -246,7 +247,7 @@ fn process_command(
                     clip.notes = notes.clone();
                 }
             }
-            send_tracks_snapshot(app_state, realtime_tx);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::DeleteMidiClip(track_id, clip_id) => {
@@ -257,7 +258,7 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            send_tracks_snapshot(app_state, realtime_tx);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::MoveMidiClip(track_id, clip_id, new_start_beat) => {
@@ -267,7 +268,7 @@ fn process_command(
                     clip.start_beat = *new_start_beat;
                 }
             }
-            send_tracks_snapshot(app_state, realtime_tx);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::AddAutomationPoint(track_id, target, beat, value) => {
@@ -306,7 +307,7 @@ fn process_command(
 
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            send_tracks_snapshot(app_state, realtime_tx);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
@@ -317,7 +318,7 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            send_tracks_snapshot(app_state, realtime_tx);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::PreviewNote(track_id, pitch) => {
@@ -340,7 +341,7 @@ fn process_command(
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
             // so the new monitor flag reaches the audio thread
-            send_tracks_snapshot(app_state, realtime_tx);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::CreateMidiClipWithData(track_id, clip) => {
@@ -350,8 +351,8 @@ fn process_command(
                     track.midi_clips.push(clip.clone());
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::MoveAudioClip(track_id, clip_id, new_start) => {
@@ -363,8 +364,8 @@ fn process_command(
                     }
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::ResizeAudioClip(track_id, clip_id, new_start, new_length) => {
@@ -419,8 +420,8 @@ fn process_command(
                     }
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::ResizeMidiClip(track_id, clip_id, new_start, new_length) => {
@@ -435,8 +436,8 @@ fn process_command(
                     }
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::DuplicateAudioClip(track_id, clip_id) => {
@@ -451,8 +452,8 @@ fn process_command(
                     }
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::DuplicateMidiClip(track_id, clip_id) => {
@@ -467,8 +468,8 @@ fn process_command(
                     }
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::DeleteAudioClip(track_id, clip_id) => {
@@ -478,8 +479,8 @@ fn process_command(
                     track.audio_clips.remove(*clip_id);
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         // Note-level edits in the selected MIDI clip
@@ -494,8 +495,8 @@ fn process_command(
                     }
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::RemoveNote(track_id, clip_id, note_index) => {
@@ -509,8 +510,8 @@ fn process_command(
                     }
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::UpdateNote(track_id, clip_id, note_index, note) => {
@@ -526,8 +527,8 @@ fn process_command(
                     }
                 }
             }
-            drop(state);
-            send_tracks_snapshot(app_state, realtime_tx);
+            // drop(state);
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         _ => {
@@ -536,8 +537,7 @@ fn process_command(
     }
 }
 
-fn send_tracks_snapshot(app_state: &Arc<Mutex<AppState>>, realtime_tx: &Sender<RealtimeCommand>) {
-    let state = app_state.lock().unwrap();
+fn send_tracks_snapshot_locked(state: &AppState, realtime_tx: &Sender<RealtimeCommand>) {
     let snapshots = crate::audio_snapshot::build_track_snapshots(&state.tracks);
     let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
 }

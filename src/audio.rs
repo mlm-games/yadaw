@@ -41,7 +41,7 @@ struct TrackProcessor {
     input_buffer_r: Vec<f32>,
     output_buffer_l: Vec<f32>,
     output_buffer_r: Vec<f32>,
-    active_notes: Vec<ActiveMidiNote>,
+    active_notes: Vec<ActiveMidiNote>, // Remove later, not needed
     last_pattern_position: f64,
     automated_volume: f32,
     automated_pan: f32,
@@ -271,10 +271,6 @@ pub fn run_audio_thread(
 impl AudioEngine {
     fn process_realtime_command(&mut self, cmd: RealtimeCommand) {
         match cmd {
-            RealtimeCommand::UpdateTracks(new_tracks) => {
-                *self.tracks.write() = new_tracks.clone();
-                self.update_track_processors(&new_tracks);
-            }
             RealtimeCommand::UpdateTrackVolume(id, vol) => {
                 if let Some(track) = self.tracks.write().get_mut(id) {
                     track.volume = vol;
@@ -371,7 +367,6 @@ impl AudioEngine {
                 }
             }
 
-            // Keep the existing UpdateTracks but don't instantiate plugins in it
             RealtimeCommand::UpdateTracks(new_tracks) => {
                 *self.tracks.write() = new_tracks.clone();
                 self.update_track_processors_without_plugins(&new_tracks);
@@ -733,16 +728,16 @@ fn process_midi_track(
     loop_start: f64,
     loop_end: f64,
 ) {
+    use std::collections::HashSet;
+
     let converter = TimeConverter::new(sample_rate as f32, bpm);
     let current_beat = converter.samples_to_beats(current_position);
 
     // Handle looping
     let effective_beat = if loop_enabled && loop_end > loop_start {
-        let loop_length = loop_end - loop_start;
+        let loop_len = loop_end - loop_start;
         if current_beat >= loop_end {
-            loop_start + ((current_beat - loop_start) % loop_length)
-        } else if current_beat < loop_start {
-            current_beat
+            loop_start + ((current_beat - loop_start) % loop_len)
         } else {
             current_beat
         }
@@ -750,41 +745,41 @@ fn process_midi_track(
         current_beat
     };
 
-    // Process MIDI clips at the effective beat position
+    // Compute which notes should be ON at effective_beat
+    let mut desired: HashSet<u8> = HashSet::new();
+    // Keep velocity and start_beat for proper synth phase alignment
+    let mut desired_detail: Vec<(u8, u8, f64)> = Vec::new();
+
     for clip in &track.midi_clips {
         let clip_end = clip.start_beat + clip.length_beats;
-
-        // Check if we're within this clip
-        if effective_beat >= clip.start_beat && effective_beat < clip_end {
-            let clip_position = effective_beat - clip.start_beat;
-
-            // Process notes in the clip
-            for note in &clip.notes {
-                let note_start_abs = clip.start_beat + note.start;
-                let note_end_abs = clip.start_beat + note.start + note.duration;
-
-                // Check if note should be playing
-                if effective_beat >= note_start_abs && effective_beat < note_end_abs {
-                    // Check if this note needs to be triggered
-                    let should_trigger =
-                        !processor.active_notes.iter().any(|n| n.pitch == note.pitch);
-
-                    if should_trigger {
-                        processor.active_notes.push(ActiveMidiNote {
-                            pitch: note.pitch,
-                            velocity: note.velocity,
-                            start_sample: current_position,
-                        });
-                    }
-                }
-
-                // Check if note should stop
-                if processor.active_notes.iter().any(|n| n.pitch == note.pitch) {
-                    if effective_beat >= note_end_abs || effective_beat < note_start_abs {
-                        processor.active_notes.retain(|n| n.pitch != note.pitch);
-                    }
-                }
+        if effective_beat < clip.start_beat || effective_beat >= clip_end {
+            continue;
+        }
+        for n in &clip.notes {
+            let s = clip.start_beat + n.start;
+            let e = s + n.duration;
+            if s <= effective_beat && effective_beat < e && desired.insert(n.pitch) {
+                desired_detail.push((n.pitch, n.velocity, s));
             }
+        }
+    }
+
+    // Remove any stale active notes that shouldn't be on now
+    processor
+        .active_notes
+        .retain(|n| desired.contains(&n.pitch));
+
+    // Add newly required active notes
+    for (pitch, vel, start_abs_beat) in desired_detail {
+        if !processor.active_notes.iter().any(|n| n.pitch == pitch) {
+            // Start sample so the oscillator phase corresponds to the real note start
+            let elapsed_beats = effective_beat - start_abs_beat;
+            let elapsed_samples = converter.beats_to_samples(elapsed_beats).max(0.0);
+            processor.active_notes.push(ActiveMidiNote {
+                pitch,
+                velocity: vel,
+                start_sample: current_position - elapsed_samples,
+            });
         }
     }
 
@@ -796,13 +791,11 @@ fn process_midi_track(
     if processor.plugins.is_empty() && !processor.active_notes.is_empty() {
         for i in 0..num_frames {
             let mut sample = 0.0;
-
             for note in &processor.active_notes {
                 let sample_offset = current_position + i as f64 - note.start_sample;
                 sample +=
                     generate_sine_for_note(note.pitch, note.velocity, sample_offset, sample_rate);
             }
-
             processor.input_buffer_l[i] = sample;
             processor.input_buffer_r[i] = sample;
         }
@@ -928,7 +921,7 @@ fn build_block_midi_events(
 
     let mut events = Vec::new();
 
-    // Adjust for loop if enabled
+    // Loop-adjusted start/end beats for this block
     let effective_start_beat =
         if loop_enabled && loop_end > loop_start && block_start_beat >= loop_end {
             let loop_length = loop_end - loop_start;
@@ -945,37 +938,40 @@ fn build_block_midi_events(
         block_end_beat
     };
 
-    // Check if this clip is active during this block
+    // Clip window check
     let clip_end = clip.start_beat + clip.length_beats;
-
     if effective_start_beat < clip_end && effective_end_beat > clip.start_beat {
         for note in &clip.notes {
-            let note_start_abs = clip.start_beat + note.start;
-            let note_end_abs = clip.start_beat + note.start + note.duration;
+            let s = clip.start_beat + note.start;
+            let e = s + note.duration;
+            if s <= effective_start_beat && effective_start_beat < e {
+                // We’re inside the note at the start of this block: fire Note On at frame 0
+                events.push((0x90, note.pitch, note.velocity, 0));
+            }
+        }
 
-            // Check if note on occurs in this block
-            if note_start_abs >= effective_start_beat && note_start_abs < effective_end_beat {
-                let beat_offset = note_start_abs - block_start_beat;
-                let sample_offset = converter.beats_to_samples(beat_offset);
-                let frame = sample_offset.round() as i64;
-                if frame >= 0 && frame < frames as i64 {
+        for note in &clip.notes {
+            let s = clip.start_beat + note.start;
+            let e = s + note.duration;
+
+            if s >= effective_start_beat && s < effective_end_beat {
+                let beat_off = s - block_start_beat;
+                let frame = converter.beats_to_samples(beat_off).round() as i64;
+                if (0..frames as i64).contains(&frame) {
                     events.push((0x90, note.pitch, note.velocity, frame));
                 }
             }
 
-            // Check if note off occurs in this block
-            if note_end_abs > effective_start_beat && note_end_abs <= effective_end_beat {
-                let beat_offset = note_end_abs - block_start_beat;
-                let sample_offset = converter.beats_to_samples(beat_offset);
-                let frame = sample_offset.round() as i64;
-                if frame >= 0 && frame < frames as i64 {
+            if e > effective_start_beat && e <= effective_end_beat {
+                let beat_off = e - block_start_beat;
+                let frame = converter.beats_to_samples(beat_off).round() as i64;
+                if (0..frames as i64).contains(&frame) {
                     events.push((0x80, note.pitch, 0, frame));
                 }
             }
         }
     }
 
-    // Sort events by frame time
     events.sort_by_key(|e| e.3);
     events
 }
