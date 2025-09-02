@@ -8,7 +8,7 @@ use crate::constants::{
 };
 use crate::lv2_plugin_host::LV2PluginInstance;
 use crate::messages::UIUpdate;
-use crate::midi_utils::{generate_sine_for_note, MidiNoteUtils};
+use crate::midi_utils::{MidiNoteUtils, generate_sine_for_note};
 use crate::mixer::{ChannelStrip, MixerEngine};
 use crate::model::clip::AudioClip;
 use crate::plugin_host;
@@ -19,8 +19,8 @@ use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 pub(crate) struct AudioEngine {
     tracks: Arc<RwLock<Vec<TrackSnapshot>>>,
@@ -32,6 +32,7 @@ pub(crate) struct AudioEngine {
     updates: Sender<UIUpdate>,
     mixer: MixerEngine,
     channel_strips: Vec<ChannelStrip>,
+    xrun_count: u64,
 }
 
 struct TrackProcessor {
@@ -134,6 +135,7 @@ pub fn run_audio_thread(
         updates: updates.clone(),
         mixer: MixerEngine::new(),
         channel_strips: Vec::new(),
+        xrun_count: 0,
     };
 
     // Start recording input thread if available
@@ -179,19 +181,34 @@ pub fn run_audio_thread(
     // Audio callback
     let audio_callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         let num_frames = data.len() / channels;
+        let cb_start = std::time::Instant::now();
 
         while let Ok(cmd) = realtime_commands.try_recv() {
             engine.process_realtime_command(cmd);
         }
 
         // Recording gather
-        if engine.audio_state.recording.load(Ordering::Relaxed) {
-            if !engine.recording_state.is_recording {
-                // Start recording
-                engine.recording_state.is_recording = true;
-                engine.recording_state.recording_start_position = engine.audio_state.get_position();
-                engine.recording_state.accumulated_samples.clear();
+        if !engine.audio_state.playing.load(Ordering::Relaxed) {
+            engine.midi_panic();
+            for processor in &mut engine.track_processors {
+                processor.last_pattern_position = 0.0;
+                processor.pattern_loop_count = 0;
+                processor.notes_triggered_this_loop.clear();
             }
+            // Even when idle, report low CPU and latency of this block size
+            let elapsed = cb_start.elapsed();
+            let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
+            let cpu = (elapsed.as_secs_f64() / budget) as f32;
+            let health = (1.0 - cpu).clamp(0.0, 1.0);
+            let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
+            let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
+                cpu_usage: cpu,
+                buffer_fill: health,
+                xruns: engine.xrun_count as u32,
+                plugin_time_ms: 0.0,
+                latency_ms,
+            });
+            return;
         }
 
         // Drain source ring into monitor FIFO; if recording, also into the clip buffer
@@ -248,10 +265,39 @@ pub fn run_audio_thread(
 
         // Process block(s)
         let current_position = engine.audio_state.get_position();
-        let next_position = engine.process_audio(data, num_frames, channels, current_position);
 
-        // Update once
+        // Accumulate plugin time across all tracks this callback
+        let mut plugin_time_ms_accum: f32 = 0.0;
+
+        // Slight refactor: pass &mut plugin_time_ms_accum into process_audio
+        let next_position = engine.process_audio(
+            data,
+            num_frames,
+            channels,
+            current_position,
+            &mut plugin_time_ms_accum,
+        );
+
         engine.audio_state.set_position(next_position);
+
+        // End-of-callback telemetry
+        let elapsed = cb_start.elapsed();
+        let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
+        let cpu = (elapsed.as_secs_f64() / budget) as f32;
+        if cpu > 1.0 {
+            engine.xrun_count += 1;
+        }
+        let health = (1.0 - cpu).clamp(0.0, 1.0);
+        let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
+
+        let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
+            cpu_usage: cpu,
+            buffer_fill: health,
+            xruns: engine.xrun_count as u32,
+            plugin_time_ms: plugin_time_ms_accum,
+            latency_ms,
+        });
+
         let _ = engine.updates.try_send(UIUpdate::Position(next_position));
     };
 
@@ -472,6 +518,7 @@ impl AudioEngine {
         num_frames: usize,
         channels: usize,
         mut current_position: f64,
+        plugin_time_ms_accum: &mut f32,
     ) -> f64 {
         let tracks = self.tracks.read().clone();
         let bpm = self.audio_state.bpm.load();
@@ -597,6 +644,7 @@ impl AudioEngine {
                         loop_enabled,
                         loop_start,
                         loop_end,
+                        plugin_time_ms_accum,
                     );
                     // }
 
@@ -986,6 +1034,7 @@ fn process_track_plugins(
     loop_enabled: bool,
     loop_start: f64,
     loop_end: f64,
+    plugin_time_ms_accum: &mut f32,
 ) {
     // Build MIDI events for this block if it's a MIDI track
     let mut all_midi_events = Vec::new();
@@ -1046,16 +1095,19 @@ fn process_track_plugins(
             }
 
             // Run plugin
-            if let Err(e) = instance.process(
+            let t0 = std::time::Instant::now();
+            let res = instance.process(
                 &processor.input_buffer_l[..num_frames],
                 &processor.input_buffer_r[..num_frames],
                 &mut processor.output_buffer_l[..num_frames],
                 &mut processor.output_buffer_r[..num_frames],
                 num_frames,
-            ) {
+            );
+            *plugin_time_ms_accum += t0.elapsed().as_secs_f32() * 1000.0;
+
+            if let Err(e) = res {
                 eprintln!("Plugin processing error: {}", e);
             } else {
-                // Copy output to input for next plugin
                 processor.input_buffer_l[..num_frames]
                     .copy_from_slice(&processor.output_buffer_l[..num_frames]);
                 processor.input_buffer_r[..num_frames]

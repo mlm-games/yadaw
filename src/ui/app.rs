@@ -580,11 +580,9 @@ impl YadawApp {
         taps.push(now);
 
         if taps.len() >= 2 {
-            // Average interval between consecutive taps
-            let total_interval: f64 = taps.windows(2).map(|w| (w[1] - w[0]).as_secs_f64()).sum();
-            let avg_interval = total_interval / (taps.len() - 1) as f64;
-
-            let bpm = (60.0 / avg_interval) as f32;
+            let total: f64 = taps.windows(2).map(|w| (w[1] - w[0]).as_secs_f64()).sum();
+            let avg = total / (taps.len() - 1) as f64;
+            let bpm = (60.0 / avg) as f32;
             if (20.0..=999.0).contains(&bpm) {
                 if let Some(transport) = &mut self.transport_ui.transport {
                     transport.set_bpm(bpm);
@@ -729,16 +727,19 @@ impl YadawApp {
                 cpu_usage,
                 buffer_fill,
                 xruns,
+                plugin_time_ms,
+                latency_ms,
             } => {
                 let metrics = PerformanceMetrics {
                     cpu_usage,
                     memory_usage: self.estimate_memory_usage(),
                     disk_streaming_rate: 0.0,
                     audio_buffer_health: buffer_fill,
-                    plugin_processing_time: Duration::from_millis(0),
+                    plugin_processing_time: std::time::Duration::from_secs_f32(
+                        plugin_time_ms / 1000.0,
+                    ),
                     xruns: xruns as usize,
-                    latency_ms: (MAX_BUFFER_SIZE as f32 / self.audio_state.sample_rate.load()) // TODO: add buffer size to audio_state...
-                        * 1000.0,
+                    latency_ms,
                 };
                 self.performance_monitor.update_metrics(metrics);
             }

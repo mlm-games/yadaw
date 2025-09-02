@@ -92,6 +92,8 @@ pub enum UIUpdate {
         cpu_usage: f32,
         buffer_fill: f32,
         xruns: u32,
+        plugin_time_ms: f32,
+        latency_ms: f32,
     },
 
     TrackAdded(usize),

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BIN_NAME: velodown   # TODO: SET WHEN COPYING
+  BIN_NAME: yadaw   # TODO: SET WHEN COPYING
   CARGO_TERM_COLOR: always
 
 jobs:
