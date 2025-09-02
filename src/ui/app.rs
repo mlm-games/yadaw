@@ -4,7 +4,7 @@ use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config::Config;
 use crate::constants::MAX_BUFFER_SIZE;
 use crate::edit_actions::EditProcessor;
-use crate::error::{common, ResultExt, UserNotification};
+use crate::error::{ResultExt, UserNotification, common};
 use crate::level_meter::LevelMeter;
 use crate::lv2_plugin_host::PluginInfo;
 use crate::model::automation::AutomationTarget;
@@ -74,6 +74,7 @@ struct TouchState {
     last_touch_pos: Option<egui::Pos2>,
     pinch_distance: Option<f32>,
     gesture_start_time: Option<std::time::Instant>,
+    tap_times: Vec<std::time::Instant>,
 }
 
 impl YadawApp {
@@ -127,6 +128,7 @@ impl YadawApp {
                 last_touch_pos: None,
                 pinch_distance: None,
                 gesture_start_time: None,
+                tap_times: Vec::new(),
             },
         }
     }
@@ -570,34 +572,32 @@ impl YadawApp {
     }
 
     pub fn tap_tempo(&mut self) {
-        // Implement tap tempo with timing detection
-        static mut TAP_TIMES: Vec<std::time::Instant> = Vec::new();
+        let now = std::time::Instant::now();
+        let taps = &mut self.touch_state.tap_times;
 
-        unsafe {
-            let now = std::time::Instant::now();
+        // Keep only taps within the last 2 seconds
+        taps.retain(|t| now.duration_since(*t).as_secs_f64() < 2.0);
+        taps.push(now);
 
-            // Clear old taps if more than 2 seconds have passed
-            TAP_TIMES.retain(|t| now.duration_since(*t).as_secs() < 2);
+        if taps.len() >= 2 {
+            // Average interval between consecutive taps
+            let total_interval: f64 = taps.windows(2).map(|w| (w[1] - w[0]).as_secs_f64()).sum();
+            let avg_interval = total_interval / (taps.len() - 1) as f64;
 
-            TAP_TIMES.push(now);
-
-            if TAP_TIMES.len() >= 2 {
-                // Calculate average interval
-                let mut total_interval = 0.0;
-                for i in 1..TAP_TIMES.len() {
-                    total_interval += TAP_TIMES[i].duration_since(TAP_TIMES[i - 1]).as_secs_f64();
+            let bpm = (60.0 / avg_interval) as f32;
+            if (20.0..=999.0).contains(&bpm) {
+                if let Some(transport) = &mut self.transport_ui.transport {
+                    transport.set_bpm(bpm);
                 }
-
-                let avg_interval = total_interval / (TAP_TIMES.len() - 1) as f64;
-                let bpm = (60.0 / avg_interval) as f32;
-
-                if bpm >= 20.0 && bpm <= 999.0 {
-                    if let Some(transport) = &mut self.transport_ui.transport {
-                        transport.set_bpm(bpm);
-                    }
-                    self.audio_state.bpm.store(bpm);
-                }
+                self.audio_state.bpm.store(bpm);
             }
+        }
+
+        // cap stored taps so the Vec doesn't grow unbounded over time
+        const MAX_TAPS: usize = 8;
+        if taps.len() > MAX_TAPS {
+            let drain = taps.len() - MAX_TAPS;
+            taps.drain(0..drain);
         }
     }
 

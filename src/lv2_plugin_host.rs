@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use livi::event::LV2AtomSequence;
 use livi::{
