@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
+use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
 use crate::model::{AudioClip, MidiClip, Track};
 
@@ -163,7 +164,9 @@ impl TimelineView {
 
     fn draw_timeline(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         // Determine total beats to show (content + margin)
-        let project_end_beats = self.compute_project_end_beats(app).max(4.0);
+        let project_end_beats = self
+            .compute_project_end_beats(app)
+            .max(DEFAULT_MIN_PROJECT_BEATS);
         let margin_beats = 8.0;
         let content_beats = project_end_beats + margin_beats;
 
@@ -652,7 +655,7 @@ impl TimelineView {
 
     fn compute_project_end_beats(&self, app: &super::app::YadawApp) -> f64 {
         let state = app.state.lock().unwrap();
-        let mut max_beat: f64 = 4.0;
+        let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
         for t in &state.tracks {
             for c in &t.audio_clips {
                 max_beat = max_beat.max(c.start_beat + c.length_beats);
@@ -908,7 +911,7 @@ impl TimelineView {
                         let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
                             track_idx,
                             beat as f64,
-                            4.0,
+                            DEFAULT_MIDI_CLIP_LEN,
                         ));
                     }
                 }

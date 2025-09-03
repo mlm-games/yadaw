@@ -2,7 +2,7 @@ use super::*;
 use crate::audio_state::AudioState;
 use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config::Config;
-use crate::constants::MAX_BUFFER_SIZE;
+use crate::constants::{DEFAULT_MIN_PROJECT_BEATS, MAX_BUFFER_SIZE};
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::level_meter::LevelMeter;
@@ -550,7 +550,7 @@ impl YadawApp {
     pub fn zoom_to_fit(&mut self) {
         // Calculate the extent of all content
         let state = self.state.lock().unwrap();
-        let mut max_beat: f64 = 4.0; // Minimum 4 beats
+        let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS; // Minimum 4 beats
 
         for track in &state.tracks {
             for clip in &track.audio_clips {

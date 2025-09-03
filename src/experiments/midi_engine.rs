@@ -210,7 +210,10 @@ impl MidiEngine {
         }
 
         notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-        let length_beats = notes.last().map(|n| n.start + n.duration).unwrap_or(4.0);
+        let length_beats = notes
+            .last()
+            .map(|n| n.start + n.duration)
+            .unwrap_or(DEFAULT_MIN_PROJECT_BEATS);
 
         MidiClip {
             name: "Recorded Clip".to_string(),

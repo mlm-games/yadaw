@@ -1,8 +1,9 @@
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 use crate::lv2_plugin_host::LV2PluginInstance;
 use crate::model::PluginDescriptor;
 
@@ -64,9 +65,9 @@ impl AudioState {
             bpm: Arc::new(AtomicF32::new(120.0)),
             sample_rate: Arc::new(AtomicF32::new(44100.0)),
             master_volume: Arc::new(AtomicF32::new(0.8)),
-            loop_enabled: Arc::new(AtomicBool::new(false)),
+            loop_enabled: Arc::new(AtomicBool::new(true)),
             loop_start: Arc::new(AtomicF64::new(0.0)),
-            loop_end: Arc::new(AtomicF64::new(16.0)),
+            loop_end: Arc::new(AtomicF64::new(4.0)),
         }
     }
 

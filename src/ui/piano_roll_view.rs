@@ -3,7 +3,7 @@ use std::fs::read_to_string;
 use rayon::vec;
 
 use super::*;
-use crate::constants::PIANO_KEY_WIDTH;
+use crate::constants::{DEFAULT_MIDI_CLIP_LEN, PIANO_KEY_WIDTH};
 use crate::model::{MidiClip, MidiNote};
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 
@@ -149,7 +149,7 @@ impl PianoRollView {
                     let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
                         app.selected_track,
                         current_beat,
-                        4.0, // Default 1 bar length
+                        DEFAULT_MIDI_CLIP_LEN, // Default 1 bar length
                     ));
                 }
 

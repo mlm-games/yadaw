@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MidiNote {
     pub pitch: u8,
@@ -30,7 +32,7 @@ impl Default for MidiClip {
         Self {
             name: "MIDI Clip".to_string(),
             start_beat: 0.0,
-            length_beats: 4.0,
+            length_beats: DEFAULT_MIN_PROJECT_BEATS,
             notes: Vec::new(),
             color: Some((100, 150, 200)),
             velocity_offset: 0,
@@ -71,7 +73,7 @@ impl Default for AudioClip {
         Self {
             name: "Audio Clip".to_string(),
             start_beat: 0.0,
-            length_beats: 4.0,
+            length_beats: DEFAULT_MIN_PROJECT_BEATS,
             samples: Vec::new(),
             sample_rate: 44100.0,
             fade_in: None,

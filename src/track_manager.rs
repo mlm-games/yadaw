@@ -1,5 +1,6 @@
 use crate::constants::{
-    DEFAULT_AUDIO_TRACK_PREFIX, DEFAULT_MIDI_TRACK_PREFIX, DEFAULT_TRACK_VOLUME,
+    DEFAULT_AUDIO_TRACK_PREFIX, DEFAULT_MIDI_TRACK_PREFIX, DEFAULT_MIN_PROJECT_BEATS,
+    DEFAULT_TRACK_VOLUME,
 };
 use crate::messages::AudioCommand;
 use crate::model::clip::{MidiClip, MidiNote};
@@ -119,7 +120,7 @@ impl TrackBuilder {
             name: "Pattern 1".to_string(),
             notes: Self::create_default_notes(),
             start_beat: 0.0,
-            length_beats: 4.0,
+            length_beats: DEFAULT_MIN_PROJECT_BEATS,
             color: Some((1, 1, 1)),
             ..Default::default()
         }

@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use super::*;
-use crate::messages::AudioCommand;
+use crate::{constants::DEFAULT_MIN_PROJECT_BEATS, messages::AudioCommand};
 
 pub struct MenuBar {
     show_about: bool,
@@ -355,7 +355,7 @@ impl MenuBar {
                     let (start, end) = {
                         // compute project end in beats
                         let state = app.state.lock().unwrap();
-                        let mut max_beat: f64 = 4.0;
+                        let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
                         for t in &state.tracks {
                             for c in &t.audio_clips {
                                 max_beat = max_beat.max(c.start_beat + c.length_beats);
@@ -391,7 +391,7 @@ impl MenuBar {
             if ui.button("Go to End").clicked() {
                 let end_beats = {
                     let state = app.state.lock().unwrap();
-                    let mut max_beat: f64 = 4.0;
+                    let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
                     for t in &state.tracks {
                         for c in &t.audio_clips {
                             max_beat = max_beat.max(c.start_beat + c.length_beats);
