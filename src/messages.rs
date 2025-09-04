@@ -5,6 +5,13 @@ use crate::model::{
     clip::{AudioClip, MidiClip, MidiNote},
 };
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum NoteDelta {
+    Set { index: usize, note: MidiNote },
+    Add { index: usize, note: MidiNote },
+    Remove { index: usize },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AudioCommand {
     Play,
@@ -77,6 +84,25 @@ pub enum AudioCommand {
     RemoveGroup(usize),
     AddTrackToGroup(usize, usize),
     RemoveTrackFromGroup(usize),
+
+    BeginMidiEdit {
+        track_id: usize,
+        clip_id: usize,
+        session_id: u64,
+        base_note_count: usize,
+    },
+    ApplyMidiNoteDelta {
+        track_id: usize,
+        clip_id: usize,
+        session_id: u64,
+        delta: NoteDelta,
+    },
+    CommitMidiEdit {
+        track_id: usize,
+        clip_id: usize,
+        session_id: u64,
+        final_notes: Vec<MidiNote>,
+    },
 }
 
 #[derive(Debug, Clone)]

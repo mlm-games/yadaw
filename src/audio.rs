@@ -49,6 +49,7 @@ struct TrackProcessor {
     automated_plugin_params: DashMap<(usize, String), f32>,
     pattern_loop_count: u32,
     notes_triggered_this_loop: Vec<u8>,
+    last_block_end_samples: f64,
 }
 
 impl TrackProcessor {
@@ -67,6 +68,7 @@ impl TrackProcessor {
             automated_plugin_params: DashMap::new(),
             pattern_loop_count: 0,
             notes_triggered_this_loop: Vec::new(),
+            last_block_end_samples: 0.0,
         }
     }
 }
@@ -183,35 +185,15 @@ pub fn run_audio_thread(
         let num_frames = data.len() / channels;
         let cb_start = std::time::Instant::now();
 
+        // Always clear the buffer first so any early return outputs silence
+        data.fill(0.0);
+
+        // Drain RT commands at block start (still do this even if paused)
         while let Ok(cmd) = realtime_commands.try_recv() {
             engine.process_realtime_command(cmd);
         }
 
-        // Recording gather
-        if !engine.audio_state.playing.load(Ordering::Relaxed) {
-            engine.midi_panic();
-            for processor in &mut engine.track_processors {
-                processor.last_pattern_position = 0.0;
-                processor.pattern_loop_count = 0;
-                processor.notes_triggered_this_loop.clear();
-            }
-            // Even when idle, report low CPU and latency of this block size
-            let elapsed = cb_start.elapsed();
-            let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
-            let cpu = (elapsed.as_secs_f64() / budget) as f32;
-            let health = (1.0 - cpu).clamp(0.0, 1.0);
-            let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
-            let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
-                cpu_usage: cpu,
-                buffer_fill: health,
-                xruns: engine.xrun_count as u32,
-                plugin_time_ms: 0.0,
-                latency_ms,
-            });
-            return;
-        }
-
-        // Drain source ring into monitor FIFO; if recording, also into the clip buffer
+        // Pull new input samples into the monitor/recording FIFOs regardless of play state
         while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
             engine.recording_state.monitor_queue.push(sample);
             if engine.recording_state.is_recording {
@@ -219,7 +201,7 @@ pub fn run_audio_thread(
             }
         }
 
-        // If stopped recording, create the clip
+        // If we just transitioned out of recording, finalize clip (unchanged logic)
         if !engine.audio_state.recording.load(Ordering::Relaxed)
             && engine.recording_state.is_recording
         {
@@ -250,34 +232,47 @@ pub fn run_audio_thread(
             }
         }
 
-        // Clear output buffer
-        data.fill(0.0);
-
+        // If paused/stopped, keep buffer silent and just push perf metrics; no further processing
         if !engine.audio_state.playing.load(Ordering::Relaxed) {
+            // Send MIDI/all-notes-off once per pause entry (your midi_panic also safely flushes plugins)
             engine.midi_panic();
             for processor in &mut engine.track_processors {
                 processor.last_pattern_position = 0.0;
                 processor.pattern_loop_count = 0;
                 processor.notes_triggered_this_loop.clear();
             }
-            return;
+
+            // Telemetry on a silent block
+            let elapsed = cb_start.elapsed();
+            let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
+            let cpu = (elapsed.as_secs_f64() / budget) as f32;
+            let health = (1.0 - cpu).clamp(0.0, 1.0);
+            let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
+
+            let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
+                cpu_usage: cpu,
+                buffer_fill: health,
+                xruns: engine.xrun_count as u32,
+                plugin_time_ms: 0.0,
+                latency_ms,
+            });
+            return; // buffer is already zeroed
         }
 
-        // Process block(s)
-        let current_position = engine.audio_state.get_position();
+        // From here on, we’re playing. The buffer is zeroed; processing will add audio to it.
 
         // Accumulate plugin time across all tracks this callback
         let mut plugin_time_ms_accum: f32 = 0.0;
 
-        // Slight refactor: pass &mut plugin_time_ms_accum into process_audio
+        // Process and advance transport
+        let current_position = engine.audio_state.get_position();
         let next_position = engine.process_audio(
-            data,
+            data, // interleaved, but your process_audio expects interleaved slice here
             num_frames,
             channels,
             current_position,
             &mut plugin_time_ms_accum,
         );
-
         engine.audio_state.set_position(next_position);
 
         // End-of-callback telemetry
@@ -413,6 +408,38 @@ impl AudioEngine {
                 }
             }
 
+            RealtimeCommand::BeginMidiClipEdit {
+                track_id,
+                clip_id,
+                session_id,
+            } => {
+                //TODO: Mark editing session started?
+            }
+
+            RealtimeCommand::PreviewMidiClipNotes {
+                track_id,
+                clip_id,
+                session_id,
+                notes,
+            } => {
+                //TODO: Store preview overlay for live audition during drag?
+            }
+
+            RealtimeCommand::UpdateMidiClipNotes {
+                track_id,
+                clip_id,
+                notes,
+            } => {
+                // NARROW UPDATE - only update the specific clip's notes
+                let mut tracks = self.tracks.write();
+                if let Some(track) = tracks.get_mut(track_id) {
+                    if let Some(clip) = track.midi_clips.get_mut(clip_id) {
+                        clip.notes = notes;
+                    }
+                }
+                // DO NOT update processors, DO NOT touch plugins
+            }
+
             RealtimeCommand::UpdateTracks(new_tracks) => {
                 *self.tracks.write() = new_tracks.clone();
                 self.update_track_processors_without_plugins(&new_tracks);
@@ -466,6 +493,7 @@ impl AudioEngine {
                 automated_plugin_params: DashMap::new(),
                 pattern_loop_count: 0,
                 notes_triggered_this_loop: Vec::new(),
+                last_block_end_samples: 0.0,
             });
         }
 
@@ -733,6 +761,7 @@ impl AudioEngine {
             processor.last_pattern_position = 0.0;
             processor.pattern_loop_count = 0;
             processor.notes_triggered_this_loop.clear();
+            processor.last_block_end_samples = 0.0;
 
             let panic_events: Vec<(u8, u8, u8, i64)> = (0..16)
                 .flat_map(|ch| vec![(0xB0 | ch, 123, 0, 0), (0xB0 | ch, 120, 0, 0)])
@@ -962,14 +991,14 @@ fn build_block_midi_events(
     loop_enabled: bool,
     loop_start: f64,
     loop_end: f64,
+    transport_jump: bool,
 ) -> Vec<(u8, u8, u8, i64)> {
     let converter = TimeConverter::new(sample_rate as f32, bpm);
+
     let block_start_beat = converter.samples_to_beats(block_start_samples);
     let block_end_beat = converter.samples_to_beats(block_start_samples + frames as f64);
 
-    let mut events = Vec::new();
-
-    // Loop-adjusted start/end beats for this block
+    // Loop-adjusted beats for this block (effective timeline)
     let effective_start_beat =
         if loop_enabled && loop_end > loop_start && block_start_beat >= loop_end {
             let loop_length = loop_end - loop_start;
@@ -986,32 +1015,44 @@ fn build_block_midi_events(
         block_end_beat
     };
 
-    // Clip window check
+    let mut events = Vec::new();
+
+    // Clip window check vs the effective block
     let clip_end = clip.start_beat + clip.length_beats;
     if effective_start_beat < clip_end && effective_end_beat > clip.start_beat {
-        for note in &clip.notes {
-            let s = clip.start_beat + note.start;
-            let e = s + note.duration;
-            if s <= effective_start_beat && effective_start_beat < e {
-                // We’re inside the note at the start of this block: fire Note On at frame 0
-                events.push((0x90, note.pitch, note.velocity, 0));
+        // A) Only when transport jumps (seek/loop wrap/start),
+        //    if we land inside a note at the block start, send a Note On at t=0.
+        //    This avoids re-triggering on every contiguous block.
+        if transport_jump {
+            for note in &clip.notes {
+                let s = clip.start_beat + note.start;
+                let e = s + note.duration;
+                if s < effective_start_beat && effective_start_beat < e {
+                    events.push((0x90, note.pitch, note.velocity, 0));
+                }
             }
         }
 
+        // B) Starts strictly after the (effective) block start and before block end.
+        //    Use offsets relative to effective_start_beat to get correct frame.
         for note in &clip.notes {
             let s = clip.start_beat + note.start;
-            let e = s + note.duration;
-
-            if s >= effective_start_beat && s < effective_end_beat {
-                let beat_off = s - block_start_beat;
+            if s > effective_start_beat && s < effective_end_beat {
+                let beat_off = s - effective_start_beat; // NOTE: effective, not raw block start
                 let frame = converter.beats_to_samples(beat_off).round() as i64;
                 if (0..frames as i64).contains(&frame) {
                     events.push((0x90, note.pitch, note.velocity, frame));
                 }
             }
+        }
 
-            if e > effective_start_beat && e <= effective_end_beat {
-                let beat_off = e - block_start_beat;
+        // C) Ends at or after the (effective) block start and at/before block end.
+        //    If the end coincides with block start, we send Note Off at frame 0 once.
+        for note in &clip.notes {
+            let s = clip.start_beat + note.start;
+            let e = s + note.duration;
+            if e >= effective_start_beat && e <= effective_end_beat {
+                let beat_off = e - effective_start_beat;
                 let frame = converter.beats_to_samples(beat_off).round() as i64;
                 if (0..frames as i64).contains(&frame) {
                     events.push((0x80, note.pitch, 0, frame));
@@ -1040,6 +1081,11 @@ fn process_track_plugins(
     let mut all_midi_events = Vec::new();
 
     if track.is_midi {
+        // Detect transport jump vs contiguous block
+        let contiguous =
+            (processor.last_block_end_samples - block_start_samples).abs() <= f64::EPSILON;
+        let transport_jump = !contiguous;
+
         for clip in &track.midi_clips {
             let clip_events = build_block_midi_events(
                 clip,
@@ -1050,6 +1096,7 @@ fn process_track_plugins(
                 loop_enabled,
                 loop_start,
                 loop_end,
+                transport_jump,
             );
             all_midi_events.extend(clip_events);
         }
@@ -1115,6 +1162,7 @@ fn process_track_plugins(
             }
         }
     }
+    processor.last_block_end_samples = block_start_samples + num_frames as f64;
 }
 
 fn value_at_beat_snapshot(lane: &RtAutomationLaneSnapshot, beat: f64) -> f32 {

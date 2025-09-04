@@ -152,6 +152,24 @@ pub enum RealtimeCommand {
         track_id: usize,
         plugin_idx: usize,
     },
+    UpdateMidiClipNotes {
+        track_id: usize,
+        clip_id: usize,
+        notes: Vec<MidiNoteSnapshot>,
+    },
+
+    BeginMidiClipEdit {
+        track_id: usize,
+        clip_id: usize,
+        session_id: u64,
+    },
+
+    PreviewMidiClipNotes {
+        track_id: usize,
+        clip_id: usize,
+        session_id: u64,
+        notes: Vec<MidiNoteSnapshot>,
+    },
 }
 
 #[derive(Debug, Clone)]

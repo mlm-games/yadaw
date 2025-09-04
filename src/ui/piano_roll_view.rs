@@ -1,4 +1,5 @@
 use std::fs::read_to_string;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rayon::vec;
 
@@ -310,106 +311,175 @@ impl PianoRollView {
             return;
         }
 
-        let mut clip_data = None;
+        // Helper: current millis
+        fn now_ms() -> u128 {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        }
+
+        // Fetch clip bounds once
+        let mut clip_length = None;
         {
             let state = app.state.lock().unwrap();
             if let Some(track) = state.tracks.get(app.selected_track) {
                 if let Some(clip_idx) = self.selected_clip {
                     if let Some(clip) = track.midi_clips.get(clip_idx) {
-                        clip_data = Some((clip.length_beats, clip.start_beat));
+                        clip_length = Some(clip.length_beats);
                     }
                 }
             }
         }
+        let Some(clip_length) = clip_length else {
+            return;
+        };
 
-        if let Some((clip_length, _clip_start)) = clip_data {
-            let mut temp_pattern = MidiClip {
-                name: "temp".to_string(),
-                length_beats: clip_length,
-                notes: self.editing_notes.clone(),
-                start_beat: 0.0,
-                color: Some((1, 1, 1)),
-                ..Default::default()
-            };
+        // Local working clip for the UI draw
+        let mut temp_clip = crate::model::MidiClip {
+            name: "temp".to_string(),
+            start_beat: 0.0,
+            length_beats: clip_length,
+            notes: self.editing_notes.clone(),
+            color: Some((1, 1, 1)),
+            ..Default::default()
+        };
 
-            // Get piano roll actions
-            let actions = self.piano_roll.ui(ui, &mut temp_pattern);
+        // Run PianoRoll UI and capture actions (preview)
+        let actions = self.piano_roll.ui(ui, &mut temp_clip);
 
-            // Update editing notes
-            self.editing_notes = temp_pattern.notes;
+        // Track a small transaction state in egui memory
+        let mem_root = egui::Id::new(("pr_tx", app.selected_track, self.selected_clip));
+        let mut in_tx = ui
+            .ctx()
+            .memory(|m| m.data.get_temp::<bool>(mem_root.with("in_tx")))
+            .unwrap_or(false);
+        let mut session_id = ui
+            .ctx()
+            .memory(|m| m.data.get_temp::<u64>(mem_root.with("sid")));
+        let mut last_send = ui
+            .ctx()
+            .memory(|m| m.data.get_temp::<u128>(mem_root.with("last")))
+            .unwrap_or(0);
 
-            // Process actions and send updates
-            let mut notes_changed = false;
+        // helpers to compare notes structurally (no trait bound needed)
+        fn note_eq(a: &crate::model::MidiNote, b: &crate::model::MidiNote) -> bool {
+            a.pitch == b.pitch
+                && a.velocity == b.velocity
+                && a.start == b.start
+                && a.duration == b.duration
+        }
 
-            // If any edit action is about to modify notes, arm undo once
-            let mut about_to_modify = false;
-            for a in &actions {
-                match a {
-                    PianoRollAction::AddNote(_)
-                    | PianoRollAction::RemoveNote(_)
-                    | PianoRollAction::UpdateNote(_, _) => {
-                        about_to_modify = true;
-                        break;
-                    }
-                    _ => {}
+        // Compute deltas between old and new (by index)
+        let old_notes = std::mem::replace(&mut self.editing_notes, temp_clip.notes.clone());
+        let new_notes = &self.editing_notes;
+        let mut deltas: Vec<crate::messages::NoteDelta> = Vec::new();
+        let max_len = old_notes.len().max(new_notes.len());
+        for i in 0..max_len {
+            match (old_notes.get(i), new_notes.get(i)) {
+                (Some(o), Some(n)) if !note_eq(o, n) => {
+                    deltas.push(crate::messages::NoteDelta::Set { index: i, note: *n });
                 }
+                (None, Some(n)) => {
+                    deltas.push(crate::messages::NoteDelta::Add { index: i, note: *n });
+                }
+                (Some(_), None) => {
+                    deltas.push(crate::messages::NoteDelta::Remove { index: i });
+                }
+                _ => {}
             }
-            if about_to_modify && !self.undo_armed {
-                // Take a snapshot now so Ctrl+Z reverts this edit gesture
+        }
+
+        // Preview sounds passthrough
+        for action in actions {
+            match action {
+                crate::piano_roll::PianoRollAction::PreviewNote(pitch) => {
+                    let _ = app
+                        .command_tx
+                        .send(crate::messages::AudioCommand::PreviewNote(
+                            app.selected_track,
+                            pitch,
+                        ));
+                }
+                crate::piano_roll::PianoRollAction::StopPreview => {
+                    let _ = app
+                        .command_tx
+                        .send(crate::messages::AudioCommand::StopPreviewNote);
+                }
+                _ => {}
+            }
+        }
+
+        // Any changes?
+        let changed = !deltas.is_empty();
+        let released = ui.input(|i| i.pointer.any_released());
+        let now = now_ms();
+        let should_tick = now.saturating_sub(last_send) >= 30; // throttle
+
+        // Begin transaction on first detected change
+        if changed && !in_tx {
+            // Arm undo exactly once per gesture
+            if !self.undo_armed {
                 app.push_undo();
                 self.undo_armed = true;
             }
+            // New session id
+            let sid = (now as u64)
+                ^ ((app.selected_track as u64) << 32)
+                ^ (self.selected_clip.unwrap_or(0) as u64);
+            session_id = Some(sid);
+            in_tx = true;
 
-            // Apply actions
-            for action in actions {
-                match action {
-                    PianoRollAction::AddNote(note) => {
-                        self.editing_notes.push(note);
-                        notes_changed = true;
-                    }
-                    PianoRollAction::RemoveNote(index) => {
-                        if index < self.editing_notes.len() {
-                            self.editing_notes.remove(index);
-                            notes_changed = true;
-                        }
-                    }
-                    PianoRollAction::UpdateNote(index, note) => {
-                        if let Some(n) = self.editing_notes.get_mut(index) {
-                            *n = note;
-                            notes_changed = true;
-                        }
-                    }
-                    PianoRollAction::PreviewNote(pitch) => {
-                        let _ = app
-                            .command_tx
-                            .send(crate::messages::AudioCommand::PreviewNote(
-                                app.selected_track,
-                                pitch,
-                            ));
-                    }
-                    PianoRollAction::StopPreview => {
-                        let _ = app
-                            .command_tx
-                            .send(crate::messages::AudioCommand::StopPreviewNote);
-                    }
+            let _ = app
+                .command_tx
+                .send(crate::messages::AudioCommand::BeginMidiEdit {
+                    track_id: app.selected_track,
+                    clip_id: self.selected_clip.unwrap(),
+                    session_id: sid,
+                    base_note_count: old_notes.len(),
+                });
+        }
+
+        // Send throttled deltas during drag
+        if changed && in_tx && should_tick {
+            if let Some(sid) = session_id {
+                for d in deltas {
+                    let _ =
+                        app.command_tx
+                            .send(crate::messages::AudioCommand::ApplyMidiNoteDelta {
+                                track_id: app.selected_track,
+                                clip_id: self.selected_clip.unwrap(),
+                                session_id: sid,
+                                delta: d,
+                            });
                 }
-            }
-
-            // Send update if notes changed
-            if notes_changed {
-                if let Some(clip_idx) = self.selected_clip {
-                    let _ = app.command_tx.send(AudioCommand::UpdateMidiClip(
-                        app.selected_track,
-                        clip_idx,
-                        self.editing_notes.clone(),
-                    ));
-                }
-            }
-
-            if ui.input(|i| i.pointer.any_released()) {
-                self.undo_armed = false;
+                last_send = now;
             }
         }
+
+        // Commit on release (or if there were no deltas we do nothing)
+        if released && in_tx {
+            if let Some(sid) = session_id {
+                let _ = app
+                    .command_tx
+                    .send(crate::messages::AudioCommand::CommitMidiEdit {
+                        track_id: app.selected_track,
+                        clip_id: self.selected_clip.unwrap(),
+                        session_id: sid,
+                        final_notes: self.editing_notes.clone(),
+                    });
+            }
+            in_tx = false;
+            self.undo_armed = false;
+        }
+
+        // Persist tx state in egui memory
+        ui.ctx().memory_mut(|m| {
+            m.data.insert_temp(mem_root.with("in_tx"), in_tx);
+            m.data
+                .insert_temp(mem_root.with("sid"), session_id.unwrap_or(0));
+            m.data.insert_temp(mem_root.with("last"), last_send);
+        });
     }
 
     fn draw_velocity_lane(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
