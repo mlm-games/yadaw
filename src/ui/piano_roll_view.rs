@@ -1,5 +1,5 @@
 use std::fs::read_to_string;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rayon::vec;
 
@@ -311,94 +311,74 @@ impl PianoRollView {
             return;
         }
 
-        // Helper: current millis
-        fn now_ms() -> u128 {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        }
-
-        // Fetch clip bounds once
-        let mut clip_length = None;
-        {
+        // Get current clip length to bound the grid
+        let clip_length = {
             let state = app.state.lock().unwrap();
             if let Some(track) = state.tracks.get(app.selected_track) {
                 if let Some(clip_idx) = self.selected_clip {
-                    if let Some(clip) = track.midi_clips.get(clip_idx) {
-                        clip_length = Some(clip.length_beats);
-                    }
+                    track.midi_clips.get(clip_idx).map(|c| c.length_beats)
+                } else {
+                    None
                 }
+            } else {
+                None
             }
-        }
+        };
         let Some(clip_length) = clip_length else {
             return;
         };
 
-        // Local working clip for the UI draw
+        // Prepare a temp clip for the UI (start at 0, we edit relative to clip)
+        let old_notes = self.editing_notes.clone();
         let mut temp_clip = crate::model::MidiClip {
             name: "temp".to_string(),
             start_beat: 0.0,
             length_beats: clip_length,
-            notes: self.editing_notes.clone(),
+            notes: old_notes.clone(),
             color: Some((1, 1, 1)),
             ..Default::default()
         };
 
-        // Run PianoRoll UI and capture actions (preview)
+        // Run the piano roll UI; it may mutate temp_clip.notes for drag/resize
         let actions = self.piano_roll.ui(ui, &mut temp_clip);
 
-        // Track a small transaction state in egui memory
+        // Throttle state (egui temp memory)
         let mem_root = egui::Id::new(("pr_tx", app.selected_track, self.selected_clip));
-        let mut in_tx = ui
-            .ctx()
-            .memory(|m| m.data.get_temp::<bool>(mem_root.with("in_tx")))
-            .unwrap_or(false);
-        let mut session_id = ui
-            .ctx()
-            .memory(|m| m.data.get_temp::<u64>(mem_root.with("sid")));
         let mut last_send = ui
             .ctx()
-            .memory(|m| m.data.get_temp::<u128>(mem_root.with("last")))
-            .unwrap_or(0);
+            .memory(|m| m.data.get_temp::<Instant>(mem_root.with("last_send")));
+        let mut dirty = ui
+            .ctx()
+            .memory(|m| m.data.get_temp::<bool>(mem_root.with("dirty")))
+            .unwrap_or(false);
 
-        // helpers to compare notes structurally (no trait bound needed)
-        fn note_eq(a: &crate::model::MidiNote, b: &crate::model::MidiNote) -> bool {
-            a.pitch == b.pitch
-                && a.velocity == b.velocity
-                && a.start == b.start
-                && a.duration == b.duration
-        }
-
-        // Compute deltas between old and new (by index)
-        let old_notes = std::mem::replace(&mut self.editing_notes, temp_clip.notes.clone());
-        let new_notes = &self.editing_notes;
-        let mut deltas: Vec<crate::messages::NoteDelta> = Vec::new();
-        let max_len = old_notes.len().max(new_notes.len());
-        for i in 0..max_len {
-            match (old_notes.get(i), new_notes.get(i)) {
-                (Some(o), Some(n)) if !note_eq(o, n) => {
-                    deltas.push(crate::messages::NoteDelta::Set { index: i, note: *n });
+        // Apply action-based edits (tap-to-add, delete, one-off updates)
+        // Note: PianoRoll::ui does NOT change notes for Add/Remove/Update; we must apply them.
+        let mut action_changed = false;
+        for a in &actions {
+            match a {
+                crate::piano_roll::PianoRollAction::AddNote(n) => {
+                    self.editing_notes.push(*n);
+                    action_changed = true;
                 }
-                (None, Some(n)) => {
-                    deltas.push(crate::messages::NoteDelta::Add { index: i, note: *n });
+                crate::piano_roll::PianoRollAction::RemoveNote(idx) => {
+                    if *idx < self.editing_notes.len() {
+                        self.editing_notes.remove(*idx);
+                        action_changed = true;
+                    }
                 }
-                (Some(_), None) => {
-                    deltas.push(crate::messages::NoteDelta::Remove { index: i });
+                crate::piano_roll::PianoRollAction::UpdateNote(idx, n) => {
+                    if *idx < self.editing_notes.len() {
+                        self.editing_notes[*idx] = *n;
+                        action_changed = true;
+                    }
                 }
-                _ => {}
-            }
-        }
-
-        // Preview sounds passthrough
-        for action in actions {
-            match action {
                 crate::piano_roll::PianoRollAction::PreviewNote(pitch) => {
                     let _ = app
                         .command_tx
                         .send(crate::messages::AudioCommand::PreviewNote(
                             app.selected_track,
-                            pitch,
+                            *pitch,
                         ));
                 }
                 crate::piano_roll::PianoRollAction::StopPreview => {
@@ -406,79 +386,72 @@ impl PianoRollView {
                         .command_tx
                         .send(crate::messages::AudioCommand::StopPreviewNote);
                 }
-                _ => {}
             }
         }
 
-        // Any changes?
-        let changed = !deltas.is_empty();
-        let released = ui.input(|i| i.pointer.any_released());
-        let now = now_ms();
-        let should_tick = now.saturating_sub(last_send) >= 30; // throttle
-
-        // Begin transaction on first detected change
-        if changed && !in_tx {
-            // Arm undo exactly once per gesture
-            if !self.undo_armed {
-                app.push_undo();
-                self.undo_armed = true;
-            }
-            // New session id
-            let sid = (now as u64)
-                ^ ((app.selected_track as u64) << 32)
-                ^ (self.selected_clip.unwrap_or(0) as u64);
-            session_id = Some(sid);
-            in_tx = true;
-
-            let _ = app
-                .command_tx
-                .send(crate::messages::AudioCommand::BeginMidiEdit {
-                    track_id: app.selected_track,
-                    clip_id: self.selected_clip.unwrap(),
-                    session_id: sid,
-                    base_note_count: old_notes.len(),
-                });
+        // Merge drag/resize edits coming from temp_clip.notes (UI mutated that)
+        // If actions already wrote into editing_notes, take that as leading source; otherwise adopt temp UI edits.
+        if !action_changed {
+            self.editing_notes = temp_clip.notes.clone();
+        } else {
+            // keep UI’s grid-mutated ordering consistent if actions happened too
+            // (optional: you can sort by start if desired)
         }
 
-        // Send throttled deltas during drag
-        if changed && in_tx && should_tick {
-            if let Some(sid) = session_id {
-                for d in deltas {
-                    let _ =
-                        app.command_tx
-                            .send(crate::messages::AudioCommand::ApplyMidiNoteDelta {
-                                track_id: app.selected_track,
-                                clip_id: self.selected_clip.unwrap(),
-                                session_id: sid,
-                                delta: d,
-                            });
+        // Detect if notes changed (either via actions or UI drag/resize)
+        let changed = self.editing_notes != old_notes;
+
+        // Arm undo once per gesture when the first change is detected
+        if changed && !self.undo_armed {
+            app.push_undo();
+            self.undo_armed = true;
+        }
+
+        // Throttled send during drags
+        if changed {
+            dirty = true;
+            let now = Instant::now();
+            let due =
+                last_send.map_or(true, |t| now.duration_since(t) >= Duration::from_millis(30));
+            if due {
+                if let Some(clip_idx) = self.selected_clip {
+                    let _ = app
+                        .command_tx
+                        .send(crate::messages::AudioCommand::UpdateMidiClip(
+                            app.selected_track,
+                            clip_idx,
+                            self.editing_notes.clone(),
+                        ));
+                    last_send = Some(now);
+                    dirty = false; // just flushed
                 }
-                last_send = now;
             }
         }
 
-        // Commit on release (or if there were no deltas we do nothing)
-        if released && in_tx {
-            if let Some(sid) = session_id {
+        // Final flush on pointer release if anything is pending
+        let released = ui.input(|i| i.pointer.any_released());
+        if released && dirty {
+            if let Some(clip_idx) = self.selected_clip {
                 let _ = app
                     .command_tx
-                    .send(crate::messages::AudioCommand::CommitMidiEdit {
-                        track_id: app.selected_track,
-                        clip_id: self.selected_clip.unwrap(),
-                        session_id: sid,
-                        final_notes: self.editing_notes.clone(),
-                    });
+                    .send(crate::messages::AudioCommand::UpdateMidiClip(
+                        app.selected_track,
+                        clip_idx,
+                        self.editing_notes.clone(),
+                    ));
             }
-            in_tx = false;
+            dirty = false;
+        }
+        if released {
             self.undo_armed = false;
         }
 
-        // Persist tx state in egui memory
+        // Persist throttle flags
         ui.ctx().memory_mut(|m| {
-            m.data.insert_temp(mem_root.with("in_tx"), in_tx);
-            m.data
-                .insert_temp(mem_root.with("sid"), session_id.unwrap_or(0));
-            m.data.insert_temp(mem_root.with("last"), last_send);
+            if let Some(t) = last_send {
+                m.data.insert_temp(mem_root.with("last_send"), t);
+            }
+            m.data.insert_temp(mem_root.with("dirty"), dirty);
         });
     }
 

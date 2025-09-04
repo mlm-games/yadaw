@@ -61,6 +61,7 @@ pub struct YadawApp {
     // Other state
     pub(super) project_path: Option<String>,
     pub(super) clipboard: Option<Vec<AudioClip>>,
+    pub(super) midi_clipboard: Option<Vec<crate::model::clip::MidiClip>>,
     pub(super) show_performance: bool,
     pub(super) performance_monitor: PerformanceMonitor,
     pub(super) track_manager: TrackManager,
@@ -119,6 +120,8 @@ impl YadawApp {
 
             project_path: None,
             clipboard: None,
+            midi_clipboard: None,
+
             show_performance: false,
             performance_monitor: PerformanceMonitor::new(),
             track_manager: TrackManager::new(),
@@ -229,37 +232,49 @@ impl YadawApp {
 
     pub fn copy_selected(&mut self) {
         let state = self.state.lock().unwrap();
-        let mut clips = Vec::new();
+        let mut audio = Vec::new();
+        let mut midi = Vec::new();
 
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get(*track_id) {
-                if let Some(clip) = track.audio_clips.get(*clip_id) {
-                    clips.push(clip.clone());
+                if track.is_midi {
+                    if let Some(clip) = track.midi_clips.get(*clip_id) {
+                        midi.push(clip.clone());
+                    }
+                } else {
+                    if let Some(clip) = track.audio_clips.get(*clip_id) {
+                        audio.push(clip.clone());
+                    }
                 }
             }
         }
 
-        self.clipboard = Some(clips);
+        self.clipboard = if audio.is_empty() { None } else { Some(audio) };
+        self.midi_clipboard = if midi.is_empty() { None } else { Some(midi) };
     }
 
     pub fn paste_at_playhead(&mut self) {
         self.push_undo();
 
-        if let Some(clips) = &self.clipboard {
-            if clips.is_empty() {
-                return;
-            }
+        let current_beat = {
+            let position = self.audio_state.get_position();
+            let sample_rate = self.audio_state.sample_rate.load();
+            let bpm = self.audio_state.bpm.load();
+            (position / sample_rate as f64) * (bpm as f64 / 60.0)
+        };
 
-            let current_beat = {
-                let position = self.audio_state.get_position();
-                let sample_rate = self.audio_state.sample_rate.load();
-                let bpm = self.audio_state.bpm.load();
-                (position / sample_rate as f64) * (bpm as f64 / 60.0)
-            };
-
-            let mut state = self.state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(self.selected_track) {
-                if !track.is_midi {
+        let mut state = self.state.lock().unwrap();
+        if let Some(track) = state.tracks.get_mut(self.selected_track) {
+            if track.is_midi {
+                if let Some(clips) = &self.midi_clipboard {
+                    for clip in clips {
+                        let mut new_clip = clip.clone();
+                        new_clip.start_beat = current_beat;
+                        track.midi_clips.push(new_clip);
+                    }
+                }
+            } else {
+                if let Some(clips) = &self.clipboard {
                     for clip in clips {
                         let mut new_clip = clip.clone();
                         new_clip.start_beat = current_beat;
@@ -268,6 +283,8 @@ impl YadawApp {
                 }
             }
         }
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     pub fn delete_selected(&mut self) {
@@ -276,22 +293,38 @@ impl YadawApp {
         }
 
         self.push_undo();
-
         let mut state = self.state.lock().unwrap();
 
-        // Sort clips by index in reverse order to delete from end to start
+        // Delete from end to start within each track
+        // We already have track_id, clip_id tuples but they may come from multiple tracks
+        // Sort by track, then reverse-clip index to keep indices valid
         let mut clips_to_delete = self.selected_clips.clone();
-        clips_to_delete.sort_by(|a, b| b.1.cmp(&a.1));
+        clips_to_delete.sort_by(|a, b| {
+            if a.0 == b.0 {
+                b.1.cmp(&a.1)
+            } else {
+                a.0.cmp(&b.0)
+            }
+        });
 
         for (track_id, clip_id) in clips_to_delete {
             if let Some(track) = state.tracks.get_mut(track_id) {
-                if clip_id < track.audio_clips.len() {
-                    track.audio_clips.remove(clip_id);
+                if track.is_midi {
+                    if clip_id < track.midi_clips.len() {
+                        track.midi_clips.remove(clip_id);
+                    }
+                } else {
+                    if clip_id < track.audio_clips.len() {
+                        track.audio_clips.remove(clip_id);
+                    }
                 }
             }
         }
 
         self.selected_clips.clear();
+        // Notify audio thread of structure change
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     // Selection

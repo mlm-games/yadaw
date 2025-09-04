@@ -445,7 +445,6 @@ impl TimelineView {
         } else {
             egui::Color32::from_rgb(100, 150, 200)
         };
-
         painter.rect_filled(clip_rect, 4.0, color);
 
         // Draw MIDI notes preview
@@ -467,7 +466,7 @@ impl TimelineView {
             );
         }
 
-        // Draw clip name
+        // Clip name
         painter.text(
             clip_rect.min + egui::vec2(5.0, 5.0),
             egui::Align2::LEFT_TOP,
@@ -476,7 +475,7 @@ impl TimelineView {
             egui::Color32::WHITE,
         );
 
-        // Handle interaction
+        // Interaction
         let response = ui.interact(
             clip_rect,
             ui.id().with(("midi_clip", track_idx, clip_idx)),
@@ -489,7 +488,8 @@ impl TimelineView {
             app.open_midi_clip_in_piano_roll(clip_idx);
         }
 
-        // TODO: drag/resize similar to audio clips
+        // MIDI clips' selection/drag/resize/delete
+        self.handle_clip_interaction(response, track_idx, clip_idx, clip_rect, app);
     }
 
     fn handle_clip_interaction(
