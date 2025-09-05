@@ -23,6 +23,11 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub enum ActiveEditTarget {
+    Clips,
+    Notes,
+}
+
 pub struct YadawApp {
     // Core state
     pub(super) state: Arc<Mutex<AppState>>,
@@ -69,6 +74,10 @@ pub struct YadawApp {
 
     // Touch support
     touch_state: TouchState,
+
+    pub(super) note_clipboard: Option<Vec<MidiNote>>,
+    pub(super) active_edit_target: ActiveEditTarget,
+    pub(crate) reserved_note_ids: Vec<u64>,
 }
 
 struct TouchState {
@@ -121,6 +130,11 @@ impl YadawApp {
             project_path: None,
             clipboard: None,
             midi_clipboard: None,
+            note_clipboard: None,
+
+            reserved_note_ids: Vec::new(),
+
+            active_edit_target: ActiveEditTarget::Clips,
 
             show_performance: false,
             performance_monitor: PerformanceMonitor::new(),
@@ -175,6 +189,7 @@ impl YadawApp {
         let mut state = self.state.lock().unwrap();
         let track = self.track_manager.create_track(TrackType::Audio, None);
         state.tracks.push(track);
+        state.ensure_ids();
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
@@ -184,6 +199,7 @@ impl YadawApp {
         let mut state = self.state.lock().unwrap();
         let track = self.track_manager.create_track(TrackType::Midi, None);
         state.tracks.push(track);
+        state.ensure_ids();
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
@@ -193,6 +209,7 @@ impl YadawApp {
         let mut state = self.state.lock().unwrap();
         let track = self.track_manager.create_track(TrackType::Bus, None);
         state.tracks.push(track);
+        state.ensure_ids();
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
@@ -737,18 +754,15 @@ impl YadawApp {
             UIUpdate::TrackLevels(levels) => {
                 self.tracks_ui.update_levels(levels);
             }
-            UIUpdate::RecordingFinished(track_id, clip) => {
+            UIUpdate::RecordingFinished(track_id, mut clip) => {
                 let mut state = self.state.lock().unwrap();
+                clip.id = state.fresh_id();
                 if let Some(track) = state.tracks.get_mut(track_id) {
                     track.audio_clips.push(clip);
                 }
             }
-            UIUpdate::RecordingLevel(_level) => {
-                // Update recording level display
-            }
-            UIUpdate::MasterLevel(_left, _right) => {
-                // Update master meter
-            }
+            UIUpdate::RecordingLevel(_level) => {}
+            UIUpdate::MasterLevel(_left, _right) => {}
             UIUpdate::PushUndo(snapshot) => {
                 self.undo_stack.push(snapshot);
                 self.redo_stack.clear();
@@ -776,7 +790,9 @@ impl YadawApp {
                 };
                 self.performance_monitor.update_metrics(metrics);
             }
-
+            UIUpdate::ReservedNoteIds(ids) => {
+                self.reserved_note_ids.extend(ids);
+            }
             _ => {}
         }
     }

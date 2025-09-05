@@ -120,7 +120,6 @@ fn process_command(
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackVolume(*track_id, *volume));
         }
-
         AudioCommand::SetTrackPan(track_id, pan) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -128,7 +127,6 @@ fn process_command(
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackPan(*track_id, *pan));
         }
-
         AudioCommand::SetTrackMute(track_id, mute) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -136,7 +134,6 @@ fn process_command(
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackMute(*track_id, *mute));
         }
-
         AudioCommand::SetTrackSolo(track_id, solo) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -144,7 +141,6 @@ fn process_command(
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackSolo(*track_id, *solo));
         }
-
         AudioCommand::SetTrackArmed(track_id, armed) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -208,7 +204,6 @@ fn process_command(
                 }
             }
         }
-
         AudioCommand::RemovePlugin(track_id, plugin_idx) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -217,16 +212,13 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-
             let _ = realtime_tx.send(RealtimeCommand::RemovePluginInstance {
                 track_id: *track_id,
                 plugin_idx: *plugin_idx,
             });
-
             let snapshots = crate::audio_snapshot::build_track_snapshots(&state.tracks);
             let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
         }
-
         AudioCommand::SetPluginBypass(track_id, plugin_idx, bypass) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -240,7 +232,6 @@ fn process_command(
                 *bypass,
             ));
         }
-
         AudioCommand::SetPluginParam(track_id, plugin_idx, param_name, value) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -264,18 +255,23 @@ fn process_command(
             audio_state.loop_enabled.store(*enabled, Ordering::Relaxed);
             let _ = realtime_tx.send(RealtimeCommand::SetLoopEnabled(*enabled));
         }
-
         AudioCommand::SetLoopRegion(start, end) => {
             audio_state.loop_start.store(*start);
             audio_state.loop_end.store(*end);
             let _ = realtime_tx.send(RealtimeCommand::SetLoopRegion(*start, *end));
         }
 
+        // ---------- MIDI CLIPS ----------
         AudioCommand::CreateMidiClip(track_id, start_beat, length_beats) => {
-            use crate::model::clip::MidiClip;
+            // pre-allocate id before borrowing track
+            let new_id = {
+                let mut state = app_state.lock().unwrap();
+                state.fresh_id()
+            };
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
-                let clip = MidiClip {
+                let clip = crate::model::clip::MidiClip {
+                    id: new_id,
                     name: format!("MIDI Clip {}", track.midi_clips.len() + 1),
                     start_beat: *start_beat,
                     length_beats: *length_beats,
@@ -288,27 +284,46 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::CreateMidiClipWithData(track_id, clip) => {
+            // fix ids before borrowing track
+            let mut new_clip = clip.clone();
+            {
+                let mut state = app_state.lock().unwrap();
+                if new_clip.id == 0 {
+                    new_clip.id = state.fresh_id();
+                }
+                for n in &mut new_clip.notes {
+                    if n.id == 0 {
+                        n.id = state.fresh_id();
+                    }
+                }
+            }
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if track.is_midi {
-                    track.midi_clips.push(clip.clone());
+                    track.midi_clips.push(new_clip);
                 }
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::UpdateMidiClip(track_id, clip_id, notes) => {
+            // work on owned vector and assign ids before any track borrow
+            let mut notes_owned = notes.clone();
+            {
+                let mut state = app_state.lock().unwrap();
+                for n in &mut notes_owned {
+                    if n.id == 0 {
+                        n.id = state.fresh_id();
+                    }
+                }
+            }
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                    clip.notes = notes.clone();
+                    clip.notes = notes_owned.clone();
                 }
             }
-
-            // Use NARROW update instead of full snapshot
-            let notes_snapshot: Vec<MidiNoteSnapshot> = notes
+            let notes_snapshot: Vec<MidiNoteSnapshot> = notes_owned
                 .iter()
                 .map(|n| MidiNoteSnapshot {
                     pitch: n.pitch,
@@ -317,15 +332,12 @@ fn process_command(
                     duration: n.duration,
                 })
                 .collect();
-
             let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
                 track_id: *track_id,
                 clip_id: *clip_id,
                 notes: notes_snapshot,
             });
-            // DON'T call send_tracks_snapshot_locked here
         }
-
         AudioCommand::DeleteMidiClip(track_id, clip_id) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -336,7 +348,6 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::MoveMidiClip(track_id, clip_id, new_start_beat) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -344,10 +355,8 @@ fn process_command(
                     clip.start_beat = *new_start_beat;
                 }
             }
-            // Only update position, not notes
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::ResizeMidiClip(track_id, clip_id, new_start, new_length) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -358,27 +367,39 @@ fn process_command(
                     }
                 }
             }
-            // Only update bounds, not notes
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::DuplicateMidiClip(track_id, clip_id) => {
-            let mut state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if track.is_midi {
-                    if let Some(clip) = track.midi_clips.get(*clip_id).cloned() {
-                        let mut new_clip = clip.clone();
-                        new_clip.name = format!("{} (copy)", clip.name);
-                        new_clip.start_beat = clip.start_beat + clip.length_beats;
-                        track.midi_clips.insert(*clip_id + 1, new_clip);
+            // clone source first without holding &mut state borrow
+            let source = {
+                let state = app_state.lock().unwrap();
+                state
+                    .tracks
+                    .get(*track_id)
+                    .and_then(|t| t.midi_clips.get(*clip_id).cloned())
+            };
+            if let Some(mut clip) = source {
+                // assign new ids
+                {
+                    let mut state = app_state.lock().unwrap();
+                    clip.id = state.fresh_id();
+                    for n in &mut clip.notes {
+                        n.id = state.fresh_id();
                     }
                 }
-            }
-            send_tracks_snapshot_locked(&state, realtime_tx);
-        }
+                clip.name = format!("{} (copy)", clip.name);
+                clip.start_beat = clip.start_beat + clip.length_beats;
 
+                let mut state = app_state.lock().unwrap();
+                if let Some(track) = state.tracks.get_mut(*track_id) {
+                    track.midi_clips.insert(*clip_id + 1, clip);
+                }
+                send_tracks_snapshot_locked(&state, realtime_tx);
+            }
+        }
         AudioCommand::SplitMidiClip(_, _, _) => {}
 
+        // ---------- AUDIO CLIPS ----------
         AudioCommand::MoveAudioClip(track_id, clip_id, new_start) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -390,7 +411,6 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::ResizeAudioClip(track_id, clip_id, new_start, new_length) => {
             let mut state = app_state.lock().unwrap();
             let bpm = state.bpm;
@@ -398,7 +418,6 @@ fn process_command(
                 if !track.is_midi {
                     if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
                         let spb = (clip.sample_rate as f64) * (60.0 / bpm as f64);
-
                         if *new_start > clip.start_beat {
                             let delta_beats = *new_start - clip.start_beat;
                             let drop_samples = (delta_beats * spb).round() as usize;
@@ -418,19 +437,15 @@ fn process_command(
                                 clip.samples = padded;
                             }
                         }
-
                         let target_samples = (*new_length * spb).round() as usize;
                         match target_samples.cmp(&clip.samples.len()) {
-                            std::cmp::Ordering::Less => {
-                                clip.samples.truncate(target_samples);
-                            }
+                            std::cmp::Ordering::Less => clip.samples.truncate(target_samples),
                             std::cmp::Ordering::Greater => {
                                 let pad = target_samples - clip.samples.len();
                                 clip.samples.extend(std::iter::repeat(0.0).take(pad));
                             }
                             _ => {}
                         }
-
                         clip.start_beat = *new_start;
                         clip.length_beats = new_length.max(0.0);
                     }
@@ -438,27 +453,35 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::DuplicateAudioClip(track_id, clip_id) => {
-            let mut state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if !track.is_midi {
-                    if let Some(clip) = track.audio_clips.get(*clip_id).cloned() {
-                        let mut new_clip = clip.clone();
-                        new_clip.name = format!("{} (copy)", clip.name);
-                        new_clip.start_beat = clip.start_beat + clip.length_beats;
-                        track.audio_clips.insert(*clip_id + 1, new_clip);
-                    }
+            // clone source without holding &mut state borrow
+            let source = {
+                let state = app_state.lock().unwrap();
+                state
+                    .tracks
+                    .get(*track_id)
+                    .and_then(|t| t.audio_clips.get(*clip_id).cloned())
+            };
+            if let Some(mut clip) = source {
+                // assign id before borrowing track
+                {
+                    let mut state = app_state.lock().unwrap();
+                    clip.id = state.fresh_id();
                 }
-            }
-            send_tracks_snapshot_locked(&state, realtime_tx);
-        }
+                clip.name = format!("{} (copy)", clip.name);
+                clip.start_beat = clip.start_beat + clip.length_beats;
 
+                let mut state = app_state.lock().unwrap();
+                if let Some(track) = state.tracks.get_mut(*track_id) {
+                    track.audio_clips.insert(*clip_id + 1, clip);
+                }
+                send_tracks_snapshot_locked(&state, realtime_tx);
+            }
+        }
         AudioCommand::SplitAudioClip(_, _, _)
         | AudioCommand::SetAudioClipGain(_, _, _)
         | AudioCommand::SetAudioClipFadeIn(_, _, _)
         | AudioCommand::SetAudioClipFadeOut(_, _, _) => {}
-
         AudioCommand::DeleteAudioClip(track_id, clip_id) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -469,6 +492,7 @@ fn process_command(
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
+        // ---------- AUTOMATION ----------
         AudioCommand::AddAutomationPoint(track_id, target, beat, value) => {
             use crate::model::automation::{AutomationLane, AutomationMode, AutomationPoint};
             let mut state = app_state.lock().unwrap();
@@ -491,7 +515,6 @@ fn process_command(
                     });
                     track.automation_lanes.len() - 1
                 };
-
                 if let Some(lane) = track.automation_lanes.get_mut(lane_idx) {
                     lane.points.push(AutomationPoint {
                         beat: *beat,
@@ -500,12 +523,10 @@ fn process_command(
                     lane.points
                         .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
                 }
-
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -516,11 +537,11 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-
         AudioCommand::UpdateAutomationPoint(_, _, _, _, _)
         | AudioCommand::SetAutomationMode(_, _, _)
         | AudioCommand::ClearAutomationLane(_, _) => {}
 
+        // ---------- PREVIEW ----------
         AudioCommand::PreviewNote(track_id, pitch) => {
             let current_position = audio_state.get_position();
             let _ = realtime_tx.send(RealtimeCommand::PreviewNote(
@@ -529,7 +550,6 @@ fn process_command(
                 current_position,
             ));
         }
-
         AudioCommand::StopPreviewNote => {
             let _ = realtime_tx.send(RealtimeCommand::StopPreviewNote);
         }
@@ -552,17 +572,21 @@ fn process_command(
         | AudioCommand::AddTrackToGroup(_, _)
         | AudioCommand::RemoveTrackFromGroup(_) => {}
 
-        // Legacy per-note commands - still use narrow update
-        AudioCommand::AddNote(track_id, clip_id, note) => {
+        // ---------- NOTES ----------
+        AudioCommand::AddNote(track_id, clip_id, note_ref) => {
+            // clone and assign id before borrowing track
+            let mut note = note_ref.clone();
+            if note.id == 0 {
+                let mut state = app_state.lock().unwrap();
+                note.id = state.fresh_id();
+            }
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if track.is_midi {
                     if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                        clip.notes.push(*note);
+                        clip.notes.push(note);
                         clip.notes
                             .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-
-                        // Use narrow update
                         let notes_snapshot: Vec<MidiNoteSnapshot> = clip
                             .notes
                             .iter()
@@ -573,18 +597,16 @@ fn process_command(
                                 duration: n.duration,
                             })
                             .collect();
-
                         let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
                             track_id: *track_id,
                             clip_id: *clip_id,
                             notes: notes_snapshot,
                         });
-                        return; // Skip the full snapshot
+                        return;
                     }
                 }
             }
         }
-
         AudioCommand::RemoveNote(track_id, clip_id, note_index) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -592,8 +614,6 @@ fn process_command(
                     if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
                         if *note_index < clip.notes.len() {
                             clip.notes.remove(*note_index);
-
-                            // Use narrow update
                             let notes_snapshot: Vec<MidiNoteSnapshot> = clip
                                 .notes
                                 .iter()
@@ -604,30 +624,32 @@ fn process_command(
                                     duration: n.duration,
                                 })
                                 .collect();
-
                             let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
                                 track_id: *track_id,
                                 clip_id: *clip_id,
                                 notes: notes_snapshot,
                             });
-                            return; // Skip the full snapshot
+                            return;
                         }
                     }
                 }
             }
         }
-
-        AudioCommand::UpdateNote(track_id, clip_id, note_index, note) => {
+        AudioCommand::UpdateNote(track_id, clip_id, note_index, note_ref) => {
+            // clone and assign id before borrowing track
+            let mut new_note = note_ref.clone();
+            if new_note.id == 0 {
+                let mut state = app_state.lock().unwrap();
+                new_note.id = state.fresh_id();
+            }
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if track.is_midi {
                     if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
                         if *note_index < clip.notes.len() {
-                            clip.notes[*note_index] = *note;
+                            clip.notes[*note_index] = new_note;
                             clip.notes
                                 .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-
-                            // Use narrow update
                             let notes_snapshot: Vec<MidiNoteSnapshot> = clip
                                 .notes
                                 .iter()
@@ -638,20 +660,19 @@ fn process_command(
                                     duration: n.duration,
                                 })
                                 .collect();
-
                             let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
                                 track_id: *track_id,
                                 clip_id: *clip_id,
                                 notes: notes_snapshot,
                             });
-                            return; // Skip the full snapshot
+                            return;
                         }
                     }
                 }
             }
         }
 
-        // MIDI edit transactions - use narrow updates and preview
+        // ---------- MIDI EDIT SESSIONS ----------
         AudioCommand::BeginMidiEdit {
             track_id,
             clip_id,
@@ -671,8 +692,6 @@ fn process_command(
                             base_count: *base_note_count,
                         },
                     );
-
-                    // Notify RT that editing started
                     let _ = realtime_tx.send(RealtimeCommand::BeginMidiClipEdit {
                         track_id: *track_id,
                         clip_id: *clip_id,
@@ -681,7 +700,6 @@ fn process_command(
                 }
             }
         }
-
         AudioCommand::ApplyMidiNoteDelta {
             track_id,
             clip_id,
@@ -690,10 +708,7 @@ fn process_command(
         } => {
             if let Some(sess) = sessions.get_mut(&(*track_id, *clip_id, *session_id)) {
                 apply_delta_vec(&mut sess.pending, delta);
-
-                // Throttled preview
                 if sess.last_send.elapsed() >= Duration::from_millis(MIDI_PREVIEW_THROTTLE_MS) {
-                    // Update model for UI consistency
                     let mut state = app_state.lock().unwrap();
                     if let Some(track) = state.tracks.get_mut(*track_id) {
                         if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
@@ -701,8 +716,6 @@ fn process_command(
                         }
                     }
                     drop(state);
-
-                    // Send narrow preview update to RT
                     let _ = realtime_tx.send(RealtimeCommand::PreviewMidiClipNotes {
                         track_id: *track_id,
                         clip_id: *clip_id,
@@ -713,25 +726,31 @@ fn process_command(
                 }
             }
         }
-
         AudioCommand::CommitMidiEdit {
             track_id,
             clip_id,
             session_id,
             final_notes,
         } => {
-            // Update model
+            // assign ids to any new notes before committing
+            let mut final_owned = final_notes.clone();
+            {
+                let mut state = app_state.lock().unwrap();
+                for n in &mut final_owned {
+                    if n.id == 0 {
+                        n.id = state.fresh_id();
+                    }
+                }
+            }
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                    clip.notes = final_notes.clone();
+                    clip.notes = final_owned.clone();
                     clip.notes
                         .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
                 }
             }
-
-            // Send NARROW update to RT
-            let notes_snapshot: Vec<MidiNoteSnapshot> = final_notes
+            let notes_snapshot: Vec<MidiNoteSnapshot> = final_owned
                 .iter()
                 .map(|n| MidiNoteSnapshot {
                     pitch: n.pitch,
@@ -740,15 +759,24 @@ fn process_command(
                     duration: n.duration,
                 })
                 .collect();
-
             let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
                 track_id: *track_id,
                 clip_id: *clip_id,
                 notes: notes_snapshot,
             });
-
-            // Remove session
             sessions.remove(&(*track_id, *clip_id, *session_id));
+        }
+
+        // ---------- ID RESERVATION ----------
+        AudioCommand::ReserveNoteIds(count) => {
+            let mut ids = Vec::with_capacity(*count);
+            {
+                let mut state = app_state.lock().unwrap();
+                for _ in 0..*count {
+                    ids.push(state.fresh_id());
+                }
+            }
+            let _ = ui_tx.send(UIUpdate::ReservedNoteIds(ids));
         }
     }
 }

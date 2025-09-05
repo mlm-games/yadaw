@@ -2,8 +2,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 
+#[inline]
+fn zero_u64() -> u64 {
+    0
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MidiNote {
+    #[serde(default = "zero_u64")]
+    pub id: u64,
     pub pitch: u8,
     pub velocity: u8,
     pub start: f64,
@@ -12,6 +19,8 @@ pub struct MidiNote {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MidiClip {
+    #[serde(default = "zero_u64")]
+    pub id: u64,
     pub name: String,
     pub start_beat: f64,
     pub length_beats: f64,
@@ -30,6 +39,7 @@ pub struct MidiClip {
 impl Default for MidiClip {
     fn default() -> Self {
         Self {
+            id: 0,
             name: "MIDI Clip".to_string(),
             start_beat: 0.0,
             length_beats: DEFAULT_MIN_PROJECT_BEATS,
@@ -49,6 +59,8 @@ impl Default for MidiClip {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioClip {
+    #[serde(default = "zero_u64")]
+    pub id: u64,
     pub name: String,
     pub start_beat: f64,
     pub length_beats: f64,
@@ -71,6 +83,7 @@ pub struct AudioClip {
 impl Default for AudioClip {
     fn default() -> Self {
         Self {
+            id: 0,
             name: "Audio Clip".to_string(),
             start_beat: 0.0,
             length_beats: DEFAULT_MIN_PROJECT_BEATS,

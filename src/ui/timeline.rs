@@ -182,13 +182,18 @@ impl TimelineView {
             egui::Sense::click_and_drag(),
         );
 
+        // Mark clips as active target when the timeline is hot
+        if response.hovered() || response.is_pointer_button_down_on() {
+            app.active_edit_target = super::app::ActiveEditTarget::Clips;
+        }
+
         let rect = response.rect;
 
-        // Draw grid and ruler/loop region
+        // Grid and loop region
         self.draw_grid(&painter, rect, app.state.lock().unwrap().bpm);
         self.draw_loop_region(&painter, rect, app);
 
-        // Draw tracks
+        // Tracks
         {
             let binding = app.state.clone();
             let mut state = binding.lock().unwrap();
@@ -208,7 +213,7 @@ impl TimelineView {
             }
         }
 
-        // Playhead overlay (always on top)
+        // Playhead overlay
         {
             let position = app.audio_state.get_position();
             let sample_rate = app.audio_state.sample_rate.load();
@@ -225,7 +230,7 @@ impl TimelineView {
             }
         }
 
-        // Handle timeline + ruler interactions
+        // Interactions
         self.handle_timeline_interaction(&response, ui, app);
     }
 

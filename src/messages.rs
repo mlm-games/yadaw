@@ -1,3 +1,4 @@
+use rayon::vec;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
@@ -103,6 +104,8 @@ pub enum AudioCommand {
         session_id: u64,
         final_notes: Vec<MidiNote>,
     },
+
+    ReserveNoteIds(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -139,4 +142,6 @@ pub enum UIUpdate {
     Error(String),
     Warning(String),
     Info(String),
+
+    ReservedNoteIds(Vec<u64>),
 }

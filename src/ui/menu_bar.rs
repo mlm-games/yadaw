@@ -131,35 +131,90 @@ impl MenuBar {
 
             ui.separator();
 
+            let notes_active =
+                matches!(app.active_edit_target, super::app::ActiveEditTarget::Notes)
+                    && app.is_selected_track_midi();
+
+            // CUT
             if ui.button("Cut").clicked() {
-                app.cut_selected();
-                ui.close();
+                let handled = if notes_active {
+                    let mut pr = std::mem::take(&mut app.piano_roll_view);
+                    let handled = pr.menu_cut_notes(ui.ctx(), app);
+                    app.piano_roll_view = pr;
+                    handled
+                } else {
+                    app.cut_selected();
+                    true
+                };
+                if handled {
+                    ui.close();
+                }
             }
 
+            // COPY
             if ui.button("Copy").clicked() {
-                app.copy_selected();
-                ui.close();
+                let handled = if notes_active {
+                    let mut pr = std::mem::take(&mut app.piano_roll_view);
+                    let handled = pr.menu_copy_notes(ui.ctx(), app);
+                    app.piano_roll_view = pr;
+                    handled
+                } else {
+                    app.copy_selected();
+                    true
+                };
+                if handled {
+                    ui.close();
+                }
             }
 
+            // PASTE
             if ui.button("Paste").clicked() {
-                app.paste_at_playhead();
-                ui.close();
+                let handled = if notes_active {
+                    let mut pr = std::mem::take(&mut app.piano_roll_view);
+                    let handled = pr.menu_paste_notes(ui.ctx(), app);
+                    app.piano_roll_view = pr;
+                    handled
+                } else {
+                    app.paste_at_playhead();
+                    true
+                };
+                if handled {
+                    ui.close();
+                }
             }
 
+            // DELETE
             if ui.button("Delete").clicked() {
-                app.delete_selected();
+                if notes_active {
+                    let mut pr = std::mem::take(&mut app.piano_roll_view);
+                    let _ = pr.menu_cut_notes(ui.ctx(), app); // delete via cut (no clipboard use)
+                    app.piano_roll_view = pr;
+                } else {
+                    app.delete_selected();
+                }
                 ui.close();
             }
 
             ui.separator();
 
             if ui.button("Select All").clicked() {
-                app.select_all();
+                if notes_active {
+                    let mut pr = std::mem::take(&mut app.piano_roll_view);
+                    pr.select_all_notes();
+                    app.piano_roll_view = pr;
+                } else {
+                    app.select_all();
+                }
                 ui.close();
             }
 
             if ui.button("Deselect All").clicked() {
-                app.deselect_all();
+                if notes_active {
+                    app.piano_roll_view.piano_roll.selected_note_ids.clear();
+                    app.piano_roll_view.piano_roll.temp_selected_indices.clear();
+                } else {
+                    app.deselect_all();
+                }
                 ui.close();
             }
 

@@ -9,9 +9,9 @@ use crate::model::{MidiClip, MidiNote};
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 
 pub struct PianoRollView {
-    piano_roll: PianoRoll,
+    pub(crate) piano_roll: PianoRoll,
     selected_clip: Option<usize>,
-    editing_notes: Vec<MidiNote>,
+    pub(crate) editing_notes: Vec<MidiNote>,
 
     // View settings
     show_velocity_lane: bool,
@@ -66,21 +66,26 @@ impl PianoRollView {
             let total_h = ui.available_height();
 
             let piano_roll_height = if self.show_velocity_lane {
-                (total_h - self.velocity_lane_height - 6.0).max(0.0) // 6px spacing budget
+                (total_h - self.velocity_lane_height - 6.0).max(0.0)
             } else {
                 total_h
             };
 
-            // 1) Allocate rect for the piano roll area and draw inside a child UI
+            // Piano roll area
             let (roll_resp, _roll_painter) =
                 ui.allocate_painter(egui::vec2(total_w, piano_roll_height), egui::Sense::hover());
             let roll_rect = roll_resp.rect;
+
+            // Mark notes as the active edit target when the roll is hot
+            if roll_resp.hovered() || roll_resp.is_pointer_button_down_on() {
+                app.active_edit_target = super::app::ActiveEditTarget::Notes;
+            }
 
             let mut roll_ui =
                 ui.child_ui(roll_rect, egui::Layout::top_down(egui::Align::Min), None);
             self.draw_piano_roll(&mut roll_ui, app);
 
-            // Always-on-top playhead overlay for the piano roll area
+            // Foreground playhead overlay (topmost)
             if let Some(current_beat) = ui
                 .ctx()
                 .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
@@ -100,7 +105,7 @@ impl PianoRollView {
                 }
             }
 
-            // 2) Velocity lane below
+            // Velocity lane
             if self.show_velocity_lane {
                 ui.add_space(2.0);
                 let (lane_resp, _lane_painter) = ui.allocate_painter(
@@ -114,12 +119,238 @@ impl PianoRollView {
                 self.draw_velocity_lane(&mut lane_ui, app);
             }
 
-            // Controller lanes (if any)
             if self.show_controller_lanes {
                 ui.separator();
                 self.draw_controller_lanes(ui, app);
             }
         });
+    }
+
+    pub fn menu_copy_notes(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) -> bool {
+        if self.selected_clip.is_none() {
+            return false;
+        }
+        // Resolve selection indices against current editing buffer
+        let sel_idx = {
+            // Build id->idx map
+            use std::collections::HashMap;
+            let mut id_to_idx = HashMap::new();
+            for (i, n) in self.editing_notes.iter().enumerate() {
+                if n.id != 0 {
+                    id_to_idx.insert(n.id, i);
+                }
+            }
+            let mut out: Vec<usize> = self
+                .piano_roll
+                .selected_note_ids
+                .iter()
+                .filter_map(|id| id_to_idx.get(id).copied())
+                .collect();
+            for &i in &self.piano_roll.temp_selected_indices {
+                if i < self.editing_notes.len() {
+                    out.push(i);
+                }
+            }
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+
+        if sel_idx.is_empty() {
+            return false;
+        }
+
+        let mut to_copy = Vec::with_capacity(sel_idx.len());
+        let mut min_start = f64::INFINITY;
+        for &idx in &sel_idx {
+            if let Some(n) = self.editing_notes.get(idx) {
+                min_start = min_start.min(n.start);
+            }
+        }
+        if !min_start.is_finite() {
+            return false;
+        }
+        for &idx in &sel_idx {
+            if let Some(n) = self.editing_notes.get(idx).copied() {
+                let mut nn = n;
+                nn.start = (nn.start - min_start).max(0.0);
+                to_copy.push(nn);
+            }
+        }
+
+        app.note_clipboard = Some(to_copy.clone());
+        let CLIP_ID: egui::Id = egui::Id::new("piano_roll_clipboard");
+        ctx.memory_mut(|m| m.data.insert_persisted(CLIP_ID, to_copy));
+        true
+    }
+
+    pub fn menu_cut_notes(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) -> bool {
+        if !self.menu_copy_notes(ctx, app) {
+            return false;
+        }
+        // Resolve indices again (defensive)
+        let mut sel_idx = {
+            use std::collections::HashMap;
+            let mut id_to_idx = HashMap::new();
+            for (i, n) in self.editing_notes.iter().enumerate() {
+                if n.id != 0 {
+                    id_to_idx.insert(n.id, i);
+                }
+            }
+            let mut out: Vec<usize> = self
+                .piano_roll
+                .selected_note_ids
+                .iter()
+                .filter_map(|id| id_to_idx.get(id).copied())
+                .collect();
+            for &i in &self.piano_roll.temp_selected_indices {
+                if i < self.editing_notes.len() {
+                    out.push(i);
+                }
+            }
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+
+        if sel_idx.is_empty() {
+            return false;
+        }
+
+        sel_idx.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in sel_idx {
+            if idx < self.editing_notes.len() {
+                self.editing_notes.remove(idx);
+            }
+        }
+        self.piano_roll.selected_note_ids.clear();
+        self.piano_roll.temp_selected_indices.clear();
+
+        if let Some(clip_idx) = self.selected_clip {
+            let _ = app
+                .command_tx
+                .send(crate::messages::AudioCommand::UpdateMidiClip(
+                    app.selected_track,
+                    clip_idx,
+                    self.editing_notes.clone(),
+                ));
+            return true;
+        }
+        false
+    }
+
+    pub fn menu_paste_notes(
+        &mut self,
+        ctx: &egui::Context,
+        app: &mut super::app::YadawApp,
+    ) -> bool {
+        if self.selected_clip.is_none() {
+            return false;
+        }
+
+        let clip_len = {
+            let state = app.state.lock().unwrap();
+            if let Some(track) = state.tracks.get(app.selected_track) {
+                if let Some(clip_idx) = self.selected_clip {
+                    track
+                        .midi_clips
+                        .get(clip_idx)
+                        .map(|c| c.length_beats)
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            }
+        };
+        if clip_len <= 0.0 {
+            return false;
+        }
+
+        let CLIP_ID: egui::Id = egui::Id::new("piano_roll_clipboard");
+        let buf_opt = app
+            .note_clipboard
+            .clone()
+            .or_else(|| ctx.memory_mut(|m| m.data.get_persisted::<Vec<MidiNote>>(CLIP_ID)));
+        let mut buf = if let Some(b) = buf_opt {
+            b
+        } else {
+            return false;
+        };
+        if buf.is_empty() {
+            return false;
+        }
+
+        let mut target = ctx
+            .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
+            .unwrap_or(0.0);
+        let snap = self.piano_roll.grid_snap as f64;
+        target = if snap > 0.0 {
+            ((target / snap).round() * snap).max(0.0)
+        } else {
+            target.max(0.0)
+        };
+
+        let span = buf
+            .iter()
+            .map(|n| n.start + n.duration)
+            .fold(0.0_f64, f64::max);
+        if target + span > clip_len {
+            target = (clip_len - span).max(0.0);
+        }
+
+        let mut new_indices = Vec::with_capacity(buf.len());
+        let mut base = self.editing_notes.len();
+        for mut n in buf.drain(..) {
+            n.start = (target + n.start).max(0.0);
+            if n.start >= clip_len {
+                continue;
+            }
+            let max_dur = (clip_len - n.start).max(0.0);
+            if max_dur <= 0.0 {
+                continue;
+            }
+            let min_dur = if self.piano_roll.grid_snap > 0.0 {
+                self.piano_roll.grid_snap as f64
+            } else {
+                (clip_len * 0.001).max(1e-6)
+            };
+            n.duration = n.duration.min(max_dur).max(min_dur);
+
+            self.editing_notes.push(n);
+            new_indices.push(base);
+            base += 1;
+        }
+        if new_indices.is_empty() {
+            return false;
+        }
+        self.piano_roll.selected_note_ids.clear();
+        self.piano_roll.temp_selected_indices = new_indices;
+
+        if let Some(clip_idx) = self.selected_clip {
+            let _ = app
+                .command_tx
+                .send(crate::messages::AudioCommand::UpdateMidiClip(
+                    app.selected_track,
+                    clip_idx,
+                    self.editing_notes.clone(),
+                ));
+            return true;
+        }
+        false
+    }
+
+    pub fn select_all_notes(&mut self) {
+        self.piano_roll.selected_note_ids.clear();
+        self.piano_roll.temp_selected_indices.clear();
+        for (i, n) in self.editing_notes.iter().enumerate() {
+            if n.id != 0 {
+                self.piano_roll.selected_note_ids.push(n.id);
+            } else {
+                self.piano_roll.temp_selected_indices.push(i);
+            }
+        }
     }
 
     pub fn set_editing_clip(&mut self, clip_idx: usize) {
@@ -331,7 +562,13 @@ impl PianoRollView {
             return;
         }
 
-        // Get current clip length to bound the grid
+        // Prefetch a pool of note IDs for immediate assignment
+        if app.reserved_note_ids.len() < 32 {
+            let _ = app
+                .command_tx
+                .send(crate::messages::AudioCommand::ReserveNoteIds(64));
+        }
+
         let clip_length = {
             let state = app.state.lock().unwrap();
             if let Some(track) = state.tracks.get(app.selected_track) {
@@ -348,7 +585,6 @@ impl PianoRollView {
             return;
         };
 
-        // Prepare a temp clip for the UI (start at 0, we edit relative to clip)
         let old_notes = self.editing_notes.clone();
         let mut temp_clip = crate::model::MidiClip {
             name: "temp".to_string(),
@@ -359,26 +595,29 @@ impl PianoRollView {
             ..Default::default()
         };
 
-        // Run the piano roll UI; it may mutate temp_clip.notes for drag/resize
+        // Sync IN persisted clipboard
+        {
+            let CLIP_ID: egui::Id = egui::Id::new("piano_roll_clipboard");
+            if let Some(buf) = app.note_clipboard.clone() {
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_persisted(CLIP_ID, buf));
+            }
+        }
+
         let actions = self.piano_roll.ui(ui, &mut temp_clip);
 
-        // Throttle state (egui temp memory)
-        let mem_root = egui::Id::new(("pr_tx", app.selected_track, self.selected_clip));
-        let mut last_send = ui
-            .ctx()
-            .memory(|m| m.data.get_temp::<Instant>(mem_root.with("last_send")));
-        let mut dirty = ui
-            .ctx()
-            .memory(|m| m.data.get_temp::<bool>(mem_root.with("dirty")))
-            .unwrap_or(false);
-
-        // Apply action-based edits (tap-to-add, delete, one-off updates)
-        // Note: PianoRoll::ui does NOT change notes for Add/Remove/Update; we must apply them.
+        // Apply actions (assign IDs on AddNote immediately if possible)
         let mut action_changed = false;
         for a in &actions {
             match a {
                 crate::piano_roll::PianoRollAction::AddNote(n) => {
-                    self.editing_notes.push(*n);
+                    let mut nn = *n;
+                    if nn.id == 0 {
+                        if let Some(id) = app.reserved_note_ids.pop() {
+                            nn.id = id;
+                        }
+                    }
+                    self.editing_notes.push(nn);
                     action_changed = true;
                 }
                 crate::piano_roll::PianoRollAction::RemoveNote(idx) => {
@@ -389,7 +628,13 @@ impl PianoRollView {
                 }
                 crate::piano_roll::PianoRollAction::UpdateNote(idx, n) => {
                     if *idx < self.editing_notes.len() {
-                        self.editing_notes[*idx] = *n;
+                        let mut nn = *n;
+                        if nn.id == 0 {
+                            if let Some(id) = app.reserved_note_ids.pop() {
+                                nn.id = id;
+                            }
+                        }
+                        self.editing_notes[*idx] = nn;
                         action_changed = true;
                     }
                 }
@@ -409,26 +654,28 @@ impl PianoRollView {
             }
         }
 
-        // Merge drag/resize edits coming from temp_clip.notes (UI mutated that)
-        // If actions already wrote into editing_notes, take that as leading source; otherwise adopt temp UI edits.
         if !action_changed {
+            // adopt drag/resize edits from temp clip
             self.editing_notes = temp_clip.notes.clone();
-        } else {
-            // keep UI’s grid-mutated ordering consistent if actions happened too
-            // (optional: you can sort by start if desired)
         }
 
-        // Detect if notes changed (either via actions or UI drag/resize)
         let changed = self.editing_notes != old_notes;
 
-        // Arm undo once per gesture when the first change is detected
         if changed && !self.undo_armed {
             app.push_undo();
             self.undo_armed = true;
         }
 
-        // Throttled send during drags
         if changed {
+            let mem_root = egui::Id::new(("pr_tx", app.selected_track, self.selected_clip));
+            let mut last_send = ui
+                .ctx()
+                .memory(|m| m.data.get_temp::<Instant>(mem_root.with("last_send")));
+            let mut dirty = ui
+                .ctx()
+                .memory(|m| m.data.get_temp::<bool>(mem_root.with("dirty")))
+                .unwrap_or(false);
+
             dirty = true;
             let now = Instant::now();
             let due =
@@ -443,36 +690,45 @@ impl PianoRollView {
                             self.editing_notes.clone(),
                         ));
                     last_send = Some(now);
-                    dirty = false; // just flushed
+                    dirty = false;
                 }
             }
+
+            // flush on pointer release
+            let released = ui.input(|i| i.pointer.any_released());
+            if released && dirty {
+                if let Some(clip_idx) = self.selected_clip {
+                    let _ = app
+                        .command_tx
+                        .send(crate::messages::AudioCommand::UpdateMidiClip(
+                            app.selected_track,
+                            clip_idx,
+                            self.editing_notes.clone(),
+                        ));
+                }
+                dirty = false;
+            }
+            if released {
+                self.undo_armed = false;
+            }
+
+            ui.ctx().memory_mut(|m| {
+                if let Some(t) = last_send {
+                    m.data.insert_temp(mem_root.with("last_send"), t);
+                }
+                m.data.insert_temp(mem_root.with("dirty"), dirty);
+            });
         }
 
-        // Final flush on pointer release if anything is pending
-        let released = ui.input(|i| i.pointer.any_released());
-        if released && dirty {
-            if let Some(clip_idx) = self.selected_clip {
-                let _ = app
-                    .command_tx
-                    .send(crate::messages::AudioCommand::UpdateMidiClip(
-                        app.selected_track,
-                        clip_idx,
-                        self.editing_notes.clone(),
-                    ));
+        // Sync OUT clipboard
+        {
+            let CLIP_ID: egui::Id = egui::Id::new("piano_roll_clipboard");
+            let persisted: Option<Vec<MidiNote>> =
+                ui.ctx().memory_mut(|m| m.data.get_persisted(CLIP_ID));
+            if persisted.is_some() {
+                app.note_clipboard = persisted;
             }
-            dirty = false;
         }
-        if released {
-            self.undo_armed = false;
-        }
-
-        // Persist throttle flags
-        ui.ctx().memory_mut(|m| {
-            if let Some(t) = last_send {
-                m.data.insert_temp(mem_root.with("last_send"), t);
-            }
-            m.data.insert_temp(mem_root.with("dirty"), dirty);
-        });
     }
 
     fn draw_velocity_lane(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
@@ -481,19 +737,16 @@ impl PianoRollView {
         if let Some(track) = state.tracks.get(app.selected_track) {
             if let Some(clip_idx) = self.selected_clip {
                 if let Some(pattern) = track.midi_clips.get(clip_idx) {
-                    let rect = ui.max_rect(); // this is the lane rect
+                    let rect = ui.max_rect();
                     let painter = ui.painter();
 
-                    // Backgrounds
                     painter.rect_filled(rect, 0.0, egui::Color32::from_gray(15));
 
-                    // Keyboard gutter at left
                     let grid_left = rect.left() + PIANO_KEY_WIDTH;
                     let gutter_rect =
                         egui::Rect::from_min_max(rect.min, egui::pos2(grid_left, rect.bottom()));
                     painter.rect_filled(gutter_rect, 0.0, egui::Color32::from_gray(10));
 
-                    // Horizontal guides
                     for i in 0..=4 {
                         let y = rect.top() + (i as f32 / 4.0) * rect.height();
                         painter.line_segment(
@@ -502,7 +755,9 @@ impl PianoRollView {
                         );
                     }
 
-                    // Bars
+                    // Resolve selection indices
+                    let sel_idx = self.piano_roll.selected_indices(pattern);
+
                     for (i, note) in pattern.notes.iter().enumerate() {
                         let x = grid_left
                             + (note.start as f32 * self.piano_roll.zoom_x
@@ -521,7 +776,8 @@ impl PianoRollView {
                             egui::vec2(right - left, height),
                         );
 
-                        let is_selected = self.piano_roll.selected_notes.contains(&i);
+                        let is_selected = sel_idx.contains(&i);
+
                         let color = if is_selected {
                             egui::Color32::from_rgb(100, 150, 255)
                         } else {
@@ -530,7 +786,6 @@ impl PianoRollView {
 
                         painter.rect_filled(bar_rect, 0.0, color);
 
-                        // Drag to change velocity
                         let resp = ui.interact(
                             bar_rect,
                             ui.id().with(("velocity", i)),
@@ -558,7 +813,6 @@ impl PianoRollView {
                         }
                     }
 
-                    // Hover readout
                     if let Some(pos) = ui
                         .interact(rect, ui.id().with("velocity_lane"), egui::Sense::hover())
                         .hover_pos()
