@@ -17,6 +17,7 @@ pub struct PianoRoll {
     hover_note: Option<usize>,
     hover_edge: Option<ResizeEdge>,
     preview_notes: Vec<(u8, bool)>,
+    note_clipboard: Option<Vec<MidiNote>>,
 }
 
 #[derive(Clone)]
@@ -56,6 +57,7 @@ impl Default for PianoRoll {
             interaction_state: InteractionState::Idle,
             hover_edge: None,
             preview_notes: vec![],
+            note_clipboard: None,
         }
     }
 }
@@ -250,13 +252,15 @@ impl PianoRoll {
                             }
                         }
                     }
-                    InteractionState::ResizingNotes { notes, start_pos } => {
+                    InteractionState::ResizingNotes {
+                        notes,
+                        start_pos: _,
+                    } => {
                         let grid_x =
                             (current_pos.x - grid_rect.left() + self.scroll_x) / self.zoom_x;
                         let snapped_beat =
                             ((grid_x / self.grid_snap).round() * self.grid_snap).max(0.0);
 
-                        // Calculate resize amount based on first note
                         if let Some((_, first_original, edge)) = notes.first() {
                             let resize_amount = match edge {
                                 ResizeEdge::Left => snapped_beat as f64 - first_original.start,
@@ -485,7 +489,7 @@ impl PianoRoll {
             }
         }
 
-        // Draw playhead
+        // Draw playhead (optional: kept here if desired; overlay is handled in view)
         if let Some(current_beat) = ui
             .ctx()
             .memory(|mem| mem.data.get_temp::<f64>(egui::Id::new("current_beat")))
@@ -502,45 +506,7 @@ impl PianoRoll {
             }
         }
 
-        // Handle keyboard shortcuts
-        ui.input(|i| {
-            if i.key_pressed(egui::Key::Delete) && !self.selected_notes.is_empty() {
-                let mut indices = self.selected_notes.clone();
-                indices.sort_by(|a, b| b.cmp(a));
-                for idx in indices {
-                    if idx < pattern.notes.len() {
-                        actions.push(PianoRollAction::RemoveNote(idx));
-                    }
-                }
-                self.selected_notes.clear();
-            }
-
-            // Select all
-            if i.key_pressed(egui::Key::A) && i.modifiers.ctrl {
-                self.selected_notes = (0..pattern.notes.len()).collect();
-            }
-
-            // Velocity shortcuts
-            if !self.selected_notes.is_empty() {
-                if i.key_pressed(egui::Key::ArrowUp) && i.modifiers.ctrl {
-                    for &idx in &self.selected_notes {
-                        if idx < pattern.notes.len() {
-                            let mut note = pattern.notes[idx];
-                            note.velocity = (note.velocity + 10).min(127);
-                            actions.push(PianoRollAction::UpdateNote(idx, note));
-                        }
-                    }
-                } else if i.key_pressed(egui::Key::ArrowDown) && i.modifiers.ctrl {
-                    for &idx in &self.selected_notes {
-                        if idx < pattern.notes.len() {
-                            let mut note = pattern.notes[idx];
-                            note.velocity = note.velocity.saturating_sub(10);
-                            actions.push(PianoRollAction::UpdateNote(idx, note));
-                        }
-                    }
-                }
-            }
-        });
+        self.handle_editor_shortcuts(ui, pattern, grid_rect, &response, &mut actions);
 
         // Handle scroll and zoom
         if response.hovered() {
@@ -559,6 +525,212 @@ impl PianoRoll {
         }
 
         actions
+    }
+
+    fn handle_editor_shortcuts(
+        &mut self,
+        ui: &mut egui::Ui,
+        pattern: &mut MidiClip,
+        grid_rect: egui::Rect,
+        response: &egui::Response,
+        actions: &mut Vec<PianoRollAction>,
+    ) {
+        // Editor is “hot” if hovered, pressed, or actively interacting
+        let editor_hot = response.hovered()
+            || response.is_pointer_button_down_on()
+            || !matches!(self.interaction_state, InteractionState::Idle);
+
+        // Respect text inputs elsewhere
+        let allow = editor_hot && !ui.ctx().wants_keyboard_input();
+
+        let cmd = egui::Modifiers::COMMAND; // Ctrl on Linux/Windows
+        let sc_copy = egui::KeyboardShortcut::new(cmd, egui::Key::C);
+        let sc_cut = egui::KeyboardShortcut::new(cmd, egui::Key::X);
+        let sc_paste = egui::KeyboardShortcut::new(cmd, egui::Key::V);
+        let sc_selecta = egui::KeyboardShortcut::new(cmd, egui::Key::A);
+        let sc_v_up = egui::KeyboardShortcut::new(cmd, egui::Key::ArrowUp);
+        let sc_v_down = egui::KeyboardShortcut::new(cmd, egui::Key::ArrowDown);
+
+        // Persisted clipboard so it survives view/widget rebuilds
+        let CLIP_ID: egui::Id = egui::Id::new("piano_roll_clipboard");
+
+        // Select all notes
+        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_selecta)) {
+            self.selected_notes = (0..pattern.notes.len()).collect();
+        }
+
+        // Delete selected notes
+        if allow && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)) {
+            if !self.selected_notes.is_empty() {
+                let mut sel = self.selected_notes.clone();
+                sel.sort_unstable_by(|a, b| b.cmp(a));
+                for idx in sel {
+                    if idx < pattern.notes.len() {
+                        pattern.notes.remove(idx);
+                    }
+                }
+                self.selected_notes.clear();
+            }
+        }
+
+        // Velocity +10 for selected notes
+        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_v_up)) {
+            if !self.selected_notes.is_empty() {
+                for &idx in &self.selected_notes {
+                    if idx < pattern.notes.len() {
+                        let mut n = pattern.notes[idx];
+                        n.velocity = (n.velocity.saturating_add(10)).min(127);
+                        // Emit action so the view marks change and sends update
+                        actions.push(PianoRollAction::UpdateNote(idx, n));
+                    }
+                }
+            }
+        }
+
+        // Velocity -10 for selected notes
+        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_v_down)) {
+            if !self.selected_notes.is_empty() {
+                for &idx in &self.selected_notes {
+                    if idx < pattern.notes.len() {
+                        let mut n = pattern.notes[idx];
+                        n.velocity = n.velocity.saturating_sub(10);
+                        actions.push(PianoRollAction::UpdateNote(idx, n));
+                    }
+                }
+            }
+        }
+
+        // COPY — normalize to earliest start = 0.0; persist to egui memory
+        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_copy)) {
+            if !self.selected_notes.is_empty() {
+                let mut sel: Vec<_> = self.selected_notes.clone();
+                sel.sort_unstable();
+
+                let mut to_copy = Vec::with_capacity(sel.len());
+                let mut min_start = f64::INFINITY;
+                for &idx in &sel {
+                    if let Some(n) = pattern.notes.get(idx) {
+                        min_start = min_start.min(n.start);
+                    }
+                }
+                if min_start.is_finite() {
+                    for idx in sel {
+                        if let Some(n) = pattern.notes.get(idx) {
+                            let mut nn = *n;
+                            nn.start = (nn.start - min_start).max(0.0);
+                            to_copy.push(nn);
+                        }
+                    }
+                    self.note_clipboard = Some(to_copy.clone());
+                    ui.ctx()
+                        .memory_mut(|m| m.data.insert_persisted(CLIP_ID, to_copy));
+                }
+            }
+        }
+
+        // CUT — copy then remove selected from the working clip
+        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_cut)) {
+            if !self.selected_notes.is_empty() {
+                // Copy portion
+                let mut sel_sorted: Vec<_> = self.selected_notes.clone();
+                sel_sorted.sort_unstable();
+
+                let mut to_copy = Vec::with_capacity(sel_sorted.len());
+                let mut min_start = f64::INFINITY;
+                for &idx in &sel_sorted {
+                    if let Some(n) = pattern.notes.get(idx) {
+                        min_start = min_start.min(n.start);
+                    }
+                }
+                if min_start.is_finite() {
+                    for &idx in &sel_sorted {
+                        if let Some(n) = pattern.notes.get(idx) {
+                            let mut nn = *n;
+                            nn.start = (nn.start - min_start).max(0.0);
+                            to_copy.push(nn);
+                        }
+                    }
+                    self.note_clipboard = Some(to_copy.clone());
+                    ui.ctx()
+                        .memory_mut(|m| m.data.insert_persisted(CLIP_ID, to_copy));
+                }
+
+                // Remove selected (reverse order)
+                let mut sel_rev = self.selected_notes.clone();
+                sel_rev.sort_unstable_by(|a, b| b.cmp(a));
+                for idx in sel_rev {
+                    if idx < pattern.notes.len() {
+                        pattern.notes.remove(idx);
+                    }
+                }
+                self.selected_notes.clear();
+            }
+        }
+
+        // PASTE — snap to playhead (or 0), clamp to clip, ensure min duration
+        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_paste)) {
+            let buf_opt = self.note_clipboard.clone().or_else(|| {
+                ui.ctx()
+                    .memory_mut(|m| m.data.get_persisted::<Vec<MidiNote>>(CLIP_ID))
+            });
+
+            if let Some(mut buf) = buf_opt {
+                if buf.is_empty() {
+                    return;
+                }
+
+                let span = buf
+                    .iter()
+                    .map(|n| n.start + n.duration)
+                    .fold(0.0_f64, f64::max);
+
+                let mut target = ui
+                    .ctx()
+                    .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
+                    .unwrap_or(0.0);
+
+                let snap = self.grid_snap as f64;
+                target = if snap > 0.0 {
+                    ((target / snap).round() * snap).max(0.0)
+                } else {
+                    target.max(0.0)
+                };
+
+                let clip_len = pattern.length_beats.max(0.0);
+                if target + span > clip_len {
+                    target = (clip_len - span).max(0.0);
+                }
+
+                // Append and select pasted
+                let mut new_indices = Vec::with_capacity(buf.len());
+                let mut base = pattern.notes.len();
+
+                for mut n in buf.drain(..) {
+                    n.start = (target + n.start).max(0.0);
+                    if n.start >= clip_len {
+                        continue;
+                    }
+                    let max_dur = (clip_len - n.start).max(0.0);
+                    if max_dur <= 0.0 {
+                        continue;
+                    }
+                    let min_dur = if self.grid_snap > 0.0 {
+                        self.grid_snap as f64
+                    } else {
+                        (clip_len * 0.001).max(1e-6)
+                    };
+                    n.duration = n.duration.min(max_dur).max(min_dur);
+
+                    pattern.notes.push(n);
+                    new_indices.push(base);
+                    base += 1;
+                }
+
+                if !new_indices.is_empty() {
+                    self.selected_notes = new_indices;
+                }
+            }
+        }
     }
 
     fn draw_piano_keys(&self, painter: &egui::Painter, rect: egui::Rect) {

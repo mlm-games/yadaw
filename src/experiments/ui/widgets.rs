@@ -1,5 +1,5 @@
 use super::*;
-use crate::metering::{draw_meter_bar, MeterData};
+use crate::metering::{MeterData, draw_meter_bar};
 
 // Custom reusable widgets
 

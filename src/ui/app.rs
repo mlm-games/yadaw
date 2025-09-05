@@ -866,66 +866,63 @@ impl YadawApp {
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        // Space is truly global.
+        let sc_space = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Space);
+        if ctx.input_mut(|i| i.consume_shortcut(&sc_space)) {
+            self.transport_ui.toggle_playback(&self.command_tx);
+        }
+
+        // Respect focused text inputs for the rest
         if ctx.wants_keyboard_input() {
             return;
         }
-        ctx.input(|i| {
+
+        ctx.input_mut(|i| {
+            let cmd = egui::Modifiers::COMMAND; // Ctrl on Linux/Windows
+
             // File shortcuts
-            if i.modifiers.ctrl {
-                if i.key_pressed(egui::Key::N) {
-                    self.new_project();
-                }
-
-                if i.key_pressed(egui::Key::O) {
-                    self.dialogs.show_open_dialog();
-                }
-
-                if i.key_pressed(egui::Key::S) {
-                    if i.modifiers.shift {
-                        self.dialogs.show_save_dialog();
-                    } else {
-                        self.save_project();
-                    }
-                }
-
-                // Edit shortcuts
-                if i.key_pressed(egui::Key::Z) {
-                    if i.modifiers.shift {
-                        self.redo();
-                    } else {
-                        self.undo();
-                    }
-                }
-
-                if i.key_pressed(egui::Key::X) {
-                    self.cut_selected();
-                }
-
-                if i.key_pressed(egui::Key::C) {
-                    self.copy_selected();
-                }
-
-                if i.key_pressed(egui::Key::V) {
-                    self.paste_at_playhead();
-                }
-
-                if i.key_pressed(egui::Key::A) {
-                    self.select_all();
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::N)) {
+                self.new_project();
+            }
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::O)) {
+                self.dialogs.show_open_dialog();
+            }
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::S)) {
+                if i.modifiers.shift {
+                    self.dialogs.show_save_dialog();
+                } else {
+                    self.save_project();
                 }
             }
 
-            // Transport shortcuts
-            if i.key_pressed(egui::Key::Space) {
-                self.transport_ui.toggle_playback(&self.command_tx);
+            // Edit shortcuts (clip-level)
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::Z)) {
+                if i.modifiers.shift {
+                    self.redo();
+                } else {
+                    self.undo();
+                }
+            }
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::X)) {
+                self.cut_selected();
+            }
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::C)) {
+                self.copy_selected();
+            }
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::V)) {
+                self.paste_at_playhead();
+            }
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::A)) {
+                self.select_all();
             }
 
-            if i.key_pressed(egui::Key::Home) {
+            // Transport / loop
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
                 if let Some(transport) = &mut self.transport_ui.transport {
                     transport.set_position(0.0);
                 }
             }
-
-            if i.key_pressed(egui::Key::L) && !i.modifiers.ctrl {
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::L) && !i.modifiers.ctrl {
                 // Toggle loop
                 let enabled = !self.audio_state.loop_enabled.load(Ordering::Relaxed);
                 self.audio_state
@@ -933,13 +930,11 @@ impl YadawApp {
                     .store(enabled, Ordering::Relaxed);
                 let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(enabled));
             }
-
-            if i.key_pressed(egui::Key::L) && i.modifiers.ctrl {
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::L)) {
                 // Set loop to selection
                 self.set_loop_to_selection();
             }
-
-            if i.key_pressed(egui::Key::L) && i.modifiers.shift {
+            if i.consume_key(egui::Modifiers::SHIFT, egui::Key::L) {
                 // Clear loop
                 self.audio_state
                     .loop_enabled
@@ -947,15 +942,15 @@ impl YadawApp {
                 let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(false));
             }
 
-            // Delete
-            if i.key_pressed(egui::Key::Delete) {
+            // Delete clips
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) {
                 if !self.selected_clips.is_empty() {
                     self.delete_selected();
                 }
             }
 
-            // View shortcuts
-            if i.key_pressed(egui::Key::M) && i.modifiers.ctrl {
+            // View
+            if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::M)) {
                 self.mixer_ui.toggle_visibility();
             }
         });

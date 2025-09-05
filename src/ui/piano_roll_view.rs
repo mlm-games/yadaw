@@ -80,6 +80,26 @@ impl PianoRollView {
                 ui.child_ui(roll_rect, egui::Layout::top_down(egui::Align::Min), None);
             self.draw_piano_roll(&mut roll_ui, app);
 
+            // Always-on-top playhead overlay for the piano roll area
+            if let Some(current_beat) = ui
+                .ctx()
+                .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
+            {
+                let grid_left = roll_rect.left() + crate::constants::PIANO_KEY_WIDTH;
+                let x = grid_left
+                    + (current_beat as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
+
+                if x >= roll_rect.left() && x <= roll_rect.right() {
+                    ui.ctx().debug_painter().line_segment(
+                        [
+                            egui::pos2(x, roll_rect.top()),
+                            egui::pos2(x, roll_rect.bottom()),
+                        ],
+                        egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
+                    );
+                }
+            }
+
             // 2) Velocity lane below
             if self.show_velocity_lane {
                 ui.add_space(2.0);

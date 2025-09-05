@@ -208,8 +208,22 @@ impl TimelineView {
             }
         }
 
-        // Draw playhead
-        self.draw_playhead(&painter, rect, app);
+        // Playhead overlay (always on top)
+        {
+            let position = app.audio_state.get_position();
+            let sample_rate = app.audio_state.sample_rate.load();
+            let bpm = app.audio_state.bpm.load();
+            if sample_rate > 0.0 && bpm > 0.0 {
+                let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
+                let x = rect.left() + (current_beat as f32 * self.zoom_x - self.scroll_x);
+                if x >= rect.left() && x <= rect.right() {
+                    ui.ctx().debug_painter().line_segment(
+                        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                        egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
+                    );
+                }
+            }
+        }
 
         // Handle timeline + ruler interactions
         self.handle_timeline_interaction(&response, ui, app);

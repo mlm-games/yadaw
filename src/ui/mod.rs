@@ -7,11 +7,9 @@ mod theme;
 mod timeline;
 mod tracks;
 mod transport;
-mod widgets;
 
 pub use app::YadawApp;
 pub use theme::{Theme, ThemeManager};
-pub use widgets::*;
 
 // Re-export commonly used types
 use crate::messages::{AudioCommand, UIUpdate};
