@@ -551,11 +551,17 @@ impl AudioEngine {
         let tracks = self.tracks.read().clone();
         let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
+
         let loop_enabled = self.audio_state.loop_enabled.load(Ordering::Relaxed);
-        let loop_start = self.audio_state.loop_start.load();
-        let loop_end = self.audio_state.loop_end.load();
+        let loop_start_beats = self.audio_state.loop_start.load();
+        let loop_end_beats = self.audio_state.loop_end.load();
 
         let converter = TimeConverter::new(self.sample_rate as f32, bpm);
+        let loop_start_samp = converter.beats_to_samples(loop_start_beats);
+        let loop_end_samp = converter.beats_to_samples(loop_end_beats);
+
+        // Guard against degenerate/too-short loops (< 1 sample)
+        let loop_active = loop_enabled && (loop_end_samp - loop_start_samp) >= 1.0;
 
         // Meters (max across sub-blocks)
         let mut track_peaks = vec![(0.0f32, 0.0f32); tracks.len()];
@@ -565,23 +571,37 @@ impl AudioEngine {
         let mut frames_processed = 0usize;
 
         while frames_processed < num_frames {
-            let block_start_pos = current_position;
-            let block_start_beat = converter.samples_to_beats(block_start_pos);
+            let block_start_samp = current_position;
+            let block_start_beat = converter.samples_to_beats(block_start_samp);
 
-            let frames_to_loop_end =
-                if loop_enabled && loop_end > loop_start && block_start_beat < loop_end {
-                    let samples_to_loop_end =
-                        converter.beats_to_samples(loop_end - block_start_beat);
-                    samples_to_loop_end as usize
+            // How many frames remain before loop end? Round up so 0<remain<1 -> 1 frame.
+            let frames_to_loop_end = if loop_active && block_start_samp < loop_end_samp {
+                let remain = loop_end_samp - block_start_samp;
+                if remain <= 0.0 {
+                    0
                 } else {
-                    usize::MAX
-                };
+                    remain.ceil() as usize
+                }
+            } else {
+                usize::MAX
+            };
 
-            let frames_to_process = frames_to_loop_end
-                .min(num_frames - frames_processed)
-                .min(MAX_BUFFER_SIZE);
+            let mut frames_to_process = (num_frames - frames_processed)
+                .min(MAX_BUFFER_SIZE)
+                .min(frames_to_loop_end);
 
-            // Clear sub-block
+            if loop_active && frames_to_process == 0 {
+                current_position = loop_start_samp;
+                for processor in &mut self.track_processors {
+                    processor.active_notes.clear();
+                }
+                continue; // re-evaluate sizing after the jump
+            }
+
+            if frames_to_process == 0 {
+                frames_to_process = 1;
+            }
+
             for i in frames_processed..(frames_processed + frames_to_process) {
                 let out_idx = i * channels;
                 output[out_idx] = 0.0;
@@ -601,7 +621,6 @@ impl AudioEngine {
                 }
 
                 if let Some(processor) = self.track_processors.get_mut(track_idx) {
-                    // Evaluate automation at block start
                     apply_automation(track, processor, block_start_beat);
 
                     // Build per-track buffers (post-clip, pre-plugin)
@@ -610,32 +629,32 @@ impl AudioEngine {
                             track,
                             processor,
                             frames_to_process,
-                            block_start_pos,
+                            block_start_samp,
                             bpm,
                             self.sample_rate,
-                            loop_enabled,
-                            loop_start,
-                            loop_end,
+                            loop_active,
+                            loop_start_beats, // pass beats for MIDI event builder
+                            loop_end_beats,   // pass beats for MIDI event builder
                         );
                     } else {
                         process_audio_track(
                             track,
                             processor,
                             frames_to_process,
-                            block_start_pos,
+                            block_start_samp,
                             bpm,
                             self.sample_rate,
                         );
                     }
 
-                    // note preview
+                    // Note preview (simple synth audition)
                     if let Some(ref preview) = preview_opt {
                         if preview.track_id == track_idx {
                             process_preview_note(
                                 processor,
                                 preview,
                                 frames_to_process,
-                                block_start_pos,
+                                block_start_samp,
                                 self.sample_rate,
                             );
                         }
@@ -661,20 +680,18 @@ impl AudioEngine {
                     }
 
                     // Run plugin chain
-                    // if !processor.plugins.is_empty() {
                     process_track_plugins(
                         track,
                         processor,
                         frames_to_process,
-                        block_start_pos,
+                        block_start_samp, // pass samples for block start
                         bpm,
                         self.sample_rate,
-                        loop_enabled,
-                        loop_start,
-                        loop_end,
+                        loop_active,
+                        loop_start_beats,
+                        loop_end_beats,
                         plugin_time_ms_accum,
                     );
-                    // }
 
                     // Mix into output and compute per-track peaks (post pan/track volume)
                     let (left_gain, right_gain) = effective_gains(track, processor);
@@ -722,10 +739,9 @@ impl AudioEngine {
             current_position += frames_to_process as f64;
             frames_processed += frames_to_process;
 
-            // Handle loop jump
-            let new_beat = converter.samples_to_beats(current_position);
-            if loop_enabled && loop_end > loop_start && new_beat >= loop_end {
-                current_position = converter.beats_to_samples(loop_start);
+            // If we crossed or landed on loop end, jump back for the next sub-iteration
+            if loop_active && current_position >= loop_end_samp {
+                current_position = loop_start_samp;
                 for processor in &mut self.track_processors {
                     processor.active_notes.clear();
                 }
