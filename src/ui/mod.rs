@@ -1,4 +1,5 @@
 mod app;
+mod automation_lane;
 mod dialogs;
 mod menu_bar;
 mod mixer;

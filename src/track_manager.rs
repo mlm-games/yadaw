@@ -258,6 +258,14 @@ impl TrackManager {
             group.collapsed = !group.collapsed;
         }
     }
+
+    pub fn sanitize(&mut self, tracks_len: usize) {
+        for g in &mut self.groups {
+            g.track_ids.retain(|&i| i < tracks_len);
+            g.track_ids.sort_unstable();
+            g.track_ids.dedup();
+        }
+    }
 }
 
 // Helper functions for track operations

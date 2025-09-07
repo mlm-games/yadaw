@@ -1,10 +1,10 @@
 use std::sync::atomic::Ordering;
 
 use super::*;
-use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
 use crate::model::{AudioClip, MidiClip, Track};
+use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
 
 pub struct TimelineView {
     pub zoom_x: f32,
@@ -942,52 +942,92 @@ impl TimelineView {
         &mut self,
         ui: &mut egui::Ui,
         track_rect: egui::Rect,
-        track: &mut Track,
+        track: &mut crate::model::track::Track,
         track_idx: usize,
         app: &mut super::app::YadawApp,
     ) {
-        for (lane_idx, lane) in track.automation_lanes.iter_mut().enumerate() {
-            if !lane.visible {
-                continue;
-            }
+        // Compute total height of visible lanes
+        let mut visible_lanes: Vec<(usize, f32)> = track
+            .automation_lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.visible)
+            .map(|(i, l)| (i, l.height.max(20.0)))
+            .collect();
 
+        if visible_lanes.is_empty() {
+            return;
+        }
+
+        // Start stacking from the bottom of the track
+        let mut y = track_rect.bottom();
+        for (lane_idx, h) in visible_lanes.iter().cloned() {
+            y -= h;
             let lane_rect = egui::Rect::from_min_size(
-                track_rect.min
-                    + egui::vec2(0.0, self.track_height - 30.0 * (lane_idx as f32 + 1.0)),
-                egui::vec2(track_rect.width(), 30.0),
+                egui::pos2(track_rect.left(), y),
+                egui::vec2(track_rect.width(), h),
             );
 
-            // Ensure we have enough widgets
+            // Ensure widget exists
             while self.automation_widgets.len() <= lane_idx {
                 self.automation_widgets
                     .push(AutomationLaneWidget::default());
             }
 
+            // Draw label strip on the left (80 px)
+            let label_w = 80.0_f32.min(track_rect.width() * 0.25);
+            let label_rect = egui::Rect::from_min_size(lane_rect.min, egui::vec2(label_w, h));
+            let lane_name = match &track.automation_lanes[lane_idx].parameter {
+                crate::model::automation::AutomationTarget::TrackVolume => "Volume",
+                crate::model::automation::AutomationTarget::TrackPan => "Pan",
+                crate::model::automation::AutomationTarget::TrackSend(_) => "Send",
+                crate::model::automation::AutomationTarget::PluginParam { param_name, .. } => {
+                    param_name.as_str()
+                }
+            };
+            ui.painter()
+                .rect_filled(label_rect, 0.0, egui::Color32::from_gray(28));
+            ui.painter().text(
+                label_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                lane_name,
+                egui::FontId::default(),
+                egui::Color32::from_gray(200),
+            );
+
+            let curve_rect = egui::Rect::from_min_max(
+                egui::pos2(lane_rect.left() + label_w + 2.0, lane_rect.top()),
+                lane_rect.max,
+            );
+
+            // Widget draws and returns actions
             let actions = self.automation_widgets[lane_idx].ui(
                 ui,
-                lane,
-                lane_rect,
+                &mut track.automation_lanes[lane_idx],
+                curve_rect,
                 self.zoom_x,
                 self.scroll_x,
             );
 
-            // Process automation actions
+            // Dispatch actions
             for action in actions {
                 match action {
                     AutomationAction::AddPoint { beat, value } => {
                         app.push_undo();
-                        let _ = app.command_tx.send(AudioCommand::AddAutomationPoint(
-                            track_idx,
-                            lane.parameter.clone(),
-                            beat,
-                            value,
-                        ));
+                        let target = track.automation_lanes[lane_idx].parameter.clone();
+                        let _ =
+                            app.command_tx
+                                .send(crate::messages::AudioCommand::AddAutomationPoint(
+                                    track_idx, target, beat, value,
+                                ));
                     }
                     AutomationAction::RemovePoint(beat) => {
                         app.push_undo();
-                        let _ = app.command_tx.send(AudioCommand::RemoveAutomationPoint(
-                            track_idx, lane_idx, beat,
-                        ));
+                        let _ = app.command_tx.send(
+                            crate::messages::AudioCommand::RemoveAutomationPoint(
+                                track_idx, lane_idx, beat,
+                            ),
+                        );
                     }
                     AutomationAction::MovePoint {
                         old_beat,
@@ -995,15 +1035,17 @@ impl TimelineView {
                         new_value,
                     } => {
                         app.push_undo();
-                        let _ = app.command_tx.send(AudioCommand::RemoveAutomationPoint(
-                            track_idx, lane_idx, old_beat,
-                        ));
-                        let _ = app.command_tx.send(AudioCommand::AddAutomationPoint(
-                            track_idx,
-                            lane.parameter.clone(),
-                            new_beat,
-                            new_value,
-                        ));
+                        let _ = app.command_tx.send(
+                            crate::messages::AudioCommand::RemoveAutomationPoint(
+                                track_idx, lane_idx, old_beat,
+                            ),
+                        );
+                        let target = track.automation_lanes[lane_idx].parameter.clone();
+                        let _ =
+                            app.command_tx
+                                .send(crate::messages::AudioCommand::AddAutomationPoint(
+                                    track_idx, target, new_beat, new_value,
+                                ));
                     }
                 }
             }

@@ -245,7 +245,9 @@ pub struct DialogManager {
 
     // Utility
     pub progress_bar: Option<ProgressBar>,
-    track_grouping: Option<TrackGroupingDialog>,
+    pub track_grouping: Option<TrackGroupingDialog>,
+    pub track_rename: Option<TrackRenameDialog>,
+
 }
 
 impl DialogManager {
@@ -267,6 +269,7 @@ impl DialogManager {
             message_box: None,
             progress_bar: None,
             track_grouping: None,
+            track_rename: None,
         }
     }
 
@@ -378,6 +381,12 @@ impl DialogManager {
                 self.progress_bar = Some(d);
             }
         }
+        if let Some(mut d) = self.track_rename.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.track_rename = Some(d);
+            }
+        }
     }
 
     pub fn show_project_settings(&mut self) {
@@ -431,6 +440,10 @@ impl DialogManager {
 
     pub fn show_theme_editor(&mut self) {
         self.theme_editor = Some(ThemeEditorDialog::new());
+    }
+
+    pub fn show_rename_track(&mut self, idx: usize, current: String) {
+        self.track_rename = Some(TrackRenameDialog::new(idx, current));
     }
 }
 
@@ -1508,4 +1521,51 @@ impl TrackGroupingDialog {
     pub fn is_closed(&self) -> bool {
         self.closed
     }
+}
+
+pub struct TrackRenameDialog {
+    closed: bool,
+    track_idx: usize,
+    name: String,
+}
+
+impl TrackRenameDialog {
+    pub fn new(track_idx: usize, current: String) -> Self {
+        Self { closed: false, track_idx, name: current }
+    }
+
+    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
+        let mut open = true;
+        egui::Window::new("Rename Track")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.name);
+                });
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        // Apply
+                        {
+                            let mut state = app.state.lock().unwrap();
+                            if let Some(t) = state.tracks.get_mut(self.track_idx) {
+                                t.name = self.name.trim().to_string();
+                            }
+                        }
+                        let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                        self.closed = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.closed = true;
+                    }
+                });
+            });
+        if !open { self.closed = true; }
+    }
+
+    pub fn is_closed(&self) -> bool { self.closed }
 }

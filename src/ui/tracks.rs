@@ -96,67 +96,97 @@ impl TracksPanel {
         let mut track_actions = Vec::new();
         let mut selected_track_changed = None;
 
-        let binding = app.state.clone();
-        let mut state = binding.lock().unwrap();
-        let num_tracks = state.tracks.len();
-
-        for track_idx in 0..num_tracks {
-            let is_selected = track_idx == app.selected_track;
-
-            let row = ui.group(|ui| {
-                // Header, clickable background handled inside
-                let header_resp = self.draw_track_header(
-                    ui,
-                    &state.tracks[track_idx],
-                    track_idx,
-                    is_selected,
-                    &mut track_actions,
-                );
-
-                if header_resp.clicked() {
-                    selected_track_changed = Some((track_idx, state.tracks[track_idx].is_midi));
-                }
-
-                // Body: mixer, automation buttons, plugins, etc. remain fully interactive
-                if self.show_mixer_strip {
-                    self.draw_mixer_strip(
-                        ui,
-                        &mut state.tracks[track_idx],
-                        track_idx,
-                        &mut track_actions,
-                        app,
-                    );
-                }
-
-                if self.show_automation_buttons {
-                    self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx, app);
-                }
-
-                self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
-            });
-
-            row.response.context_menu(|ui| {
-                if ui.button("Duplicate Track").clicked() {
-                    track_actions.push(("duplicate", track_idx));
-                    ui.close();
-                }
-                if ui.button("Delete Track").clicked() {
-                    track_actions.push(("delete", track_idx));
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Add to Group...").clicked() {
-                    track_actions.push(("group", track_idx));
-                    ui.close();
-                }
-                if ui.button("Track Color...").clicked() {
-                    track_actions.push(("color", track_idx));
-                    ui.close();
-                }
-            });
+        {
+            let len = app.state.lock().unwrap().tracks.len();
+            app.track_manager.sanitize(len);
         }
 
-        drop(state);
+        let groups = app.track_manager.get_groups().to_vec();
+        while self.collapsed_groups.len() < groups.len() {
+            self.collapsed_groups.push(false);
+        }
+
+        use std::collections::HashSet;
+        let mut grouped: HashSet<usize> = HashSet::new();
+        for g in &groups {
+            for &i in &g.track_ids {
+                grouped.insert(i);
+            }
+        }
+
+        // Draw groups
+        for (gidx, g) in groups.iter().enumerate() {
+            let mut collapsed = *self.collapsed_groups.get(gidx).unwrap_or(&false);
+
+            self.draw_group_block(
+                ui,
+                app,
+                &g.name,
+                &g.track_ids,
+                &mut collapsed,
+                &mut track_actions,
+                &mut selected_track_changed,
+            );
+
+            if self.collapsed_groups.len() <= gidx {
+                self.collapsed_groups.resize(gidx + 1, false);
+            }
+            self.collapsed_groups[gidx] = collapsed;
+
+            ui.add_space(6.0);
+        }
+
+        // Ungrouped tracks
+        {
+            let binding = app.state.clone();
+            let mut state = binding.lock().unwrap();
+
+            let num_tracks = state.tracks.len();
+            for track_idx in 0..num_tracks {
+                if grouped.contains(&track_idx) {
+                    continue;
+                }
+                let is_selected = track_idx == app.selected_track;
+
+                let row = ui.group(|ui| {
+                    let header_resp = self.draw_track_header(
+                        ui,
+                        &state.tracks[track_idx],
+                        track_idx,
+                        is_selected,
+                        &mut track_actions,
+                    );
+                    if header_resp.clicked() {
+                        selected_track_changed = Some((track_idx, state.tracks[track_idx].is_midi));
+                    }
+
+                    if self.show_mixer_strip {
+                        self.draw_mixer_strip(
+                            ui,
+                            &mut state.tracks[track_idx],
+                            track_idx,
+                            &mut track_actions,
+                            app,
+                        );
+                    }
+                    if self.show_automation_buttons {
+                        self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx, app);
+                    }
+                    self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
+                });
+
+                row.response.context_menu(|ui| {
+                    if ui.button("Duplicate Selected Track").clicked() {
+                        track_actions.push(("duplicate", track_idx));
+                        ui.close();
+                    }
+                    if ui.button("Delete Selected Track").clicked() {
+                        track_actions.push(("delete", track_idx));
+                        ui.close();
+                    }
+                });
+            }
+        }
 
         if let Some((track_idx, is_midi)) = selected_track_changed {
             println!("Track {} clicked, is_midi: {}", track_idx, is_midi);
@@ -202,7 +232,7 @@ impl TracksPanel {
                         ui.label("Track Options");
                         ui.separator();
                         if ui.button("Rename…").clicked() {
-                            // TODO: show rename dialog scoped to idx
+                            actions.push(("rename", idx));
                             ui.close();
                         }
                         if ui.button("Change Color…").clicked() {
@@ -414,8 +444,17 @@ impl TracksPanel {
         track_idx: usize,
     ) {
         let mut state = app.state.lock().unwrap();
-
         match action {
+            "rename" => {
+                let current = state
+                    .tracks
+                    .get(track_idx)
+                    .map(|t| t.name.clone())
+                    .unwrap_or_default();
+                drop(state);
+                app.dialogs.show_rename_track(track_idx, current);
+                return;
+            }
             "mute" => mute_track(&mut state.tracks, track_idx, &app.command_tx),
             "solo" => solo_track(&mut state.tracks, track_idx, &app.command_tx),
             "arm" => arm_track_exclusive(&mut state.tracks, track_idx),
@@ -434,6 +473,86 @@ impl TracksPanel {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn draw_group_block(
+        &mut self,
+        ui: &mut egui::Ui,
+        app: &mut super::app::YadawApp,
+        name: &str,
+        track_ids: &[usize],
+        collapsed: &mut bool,
+        track_actions: &mut Vec<(&str, usize)>,
+        selected_track_changed: &mut Option<(usize, bool)>,
+    ) {
+        // Header
+        let hdr = ui.collapsing(name, |_ui| {});
+        if hdr.header_response.clicked() {
+            *collapsed = !*collapsed;
+        }
+        // Optional header context menu
+        hdr.header_response.context_menu(|ui| {
+            if ui
+                .button(if *collapsed { "Expand" } else { "Collapse" })
+                .clicked()
+            {
+                *collapsed = !*collapsed;
+                ui.close();
+            }
+        });
+
+        if *collapsed {
+            return;
+        }
+
+        // Rows for each track id
+        let binding = app.state.clone();
+        let mut state = binding.lock().unwrap();
+
+        for &track_idx in track_ids {
+            if track_idx >= state.tracks.len() {
+                continue;
+            }
+            let is_selected = track_idx == app.selected_track;
+
+            let row = ui.group(|ui| {
+                let header_resp = self.draw_track_header(
+                    ui,
+                    &state.tracks[track_idx],
+                    track_idx,
+                    is_selected,
+                    track_actions,
+                );
+                if header_resp.clicked() {
+                    *selected_track_changed = Some((track_idx, state.tracks[track_idx].is_midi));
+                }
+
+                if self.show_mixer_strip {
+                    self.draw_mixer_strip(
+                        ui,
+                        &mut state.tracks[track_idx],
+                        track_idx,
+                        track_actions,
+                        app,
+                    );
+                }
+                if self.show_automation_buttons {
+                    self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx, app);
+                }
+                self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
+            });
+
+            row.response.context_menu(|ui| {
+                if ui.button("Duplicate Track").clicked() {
+                    track_actions.push(("duplicate", track_idx));
+                    ui.close();
+                }
+                if ui.button("Delete Track").clicked() {
+                    track_actions.push(("delete", track_idx));
+                    ui.close();
+                }
+            });
         }
     }
 }

@@ -1,6 +1,5 @@
 use super::*;
 use crate::audio_state::AudioState;
-use crate::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::config::Config;
 use crate::constants::{DEFAULT_MIN_PROJECT_BEATS, MAX_BUFFER_SIZE};
 use crate::edit_actions::EditProcessor;
@@ -13,6 +12,7 @@ use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::piano_roll::{PianoRoll, PianoRollAction};
 use crate::project::{AppState, AppStateSnapshot};
 use crate::project_manager::ProjectManager;
+use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
 
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
