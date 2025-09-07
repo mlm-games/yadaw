@@ -3,7 +3,6 @@ pub mod audio_import;
 pub mod audio_snapshot;
 pub mod audio_state;
 pub mod audio_utils;
-pub mod automation;
 pub mod command_processor;
 pub mod config;
 pub mod constants;

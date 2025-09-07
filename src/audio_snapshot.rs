@@ -10,7 +10,7 @@ use crate::{
         RtAutomationLaneSnapshot, RtAutomationPoint, RtAutomationTarget, RtCurveType,
         TrackSnapshot,
     },
-    automation::AutomationPoint,
+    model::automation::AutomationPoint,
     model::{
         automation::{AutomationLane, AutomationTarget},
         clip::{AudioClip, MidiClip, MidiNote},
