@@ -34,6 +34,7 @@ pub(crate) struct AudioEngine {
     mixer: MixerEngine,
     channel_strips: Vec<ChannelStrip>,
     xrun_count: u64,
+    paused_last: bool,
 }
 
 struct TrackProcessor {
@@ -139,6 +140,7 @@ pub fn run_audio_thread(
         mixer: MixerEngine::new(),
         channel_strips: Vec::new(),
         xrun_count: 0,
+        paused_last: false,
     };
 
     // Start recording input thread if available
@@ -153,6 +155,9 @@ pub fn run_audio_thread(
                 let channels = input_config.channels() as usize;
                 let recording_producer = recording_producer.clone();
 
+                let mut last_meter = std::time::Instant::now();
+                let mut peak_acc: f32 = 0.0;
+
                 let input_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     // Always push to the ring for monitoring/recording
                     let mut producer = recording_producer.lock();
@@ -160,8 +165,15 @@ pub fn run_audio_thread(
                         let mono_sample = frame.iter().sum::<f32>() / channels as f32;
                         let _ = producer.push(mono_sample);
 
-                        // Level update (harmless even when not recording)
-                        let level = mono_sample.abs();
+                        // accumulate peak for throttled metering
+                        peak_acc = peak_acc.max(mono_sample.abs());
+                    }
+
+                    let elapsed = last_meter.elapsed();
+                    if elapsed >= std::time::Duration::from_millis(50) {
+                        let level = peak_acc;
+                        peak_acc = 0.0;
+                        last_meter = std::time::Instant::now();
                         let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
                     }
                 };
@@ -186,23 +198,29 @@ pub fn run_audio_thread(
         let num_frames = data.len() / channels;
         let cb_start = Instant::now();
 
-        // Always clear the buffer first so any early return outputs silence
         data.fill(0.0);
 
-        // Drain RT commands at block start (still do this even if paused)
+        let now_playing = engine.audio_state.playing.load(Ordering::Relaxed);
+
+        // Drain RT commands at block start
         while let Ok(cmd) = realtime_commands.try_recv() {
             engine.process_realtime_command(cmd);
         }
 
-        // Pull new input samples into the monitor/recording FIFOs regardless of play state
+        // Pull new input samples into FIFOs (cap monitor queue)
         while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
             engine.recording_state.monitor_queue.push(sample);
             if engine.recording_state.is_recording {
                 engine.recording_state.accumulated_samples.push(sample);
             }
         }
+        // Cap monitor queue to avoid latency ballooning
+        if engine.recording_state.monitor_queue.len() > 2 * MAX_BUFFER_SIZE {
+            let drop_n = engine.recording_state.monitor_queue.len() - 2 * MAX_BUFFER_SIZE;
+            engine.recording_state.monitor_queue.drain(0..drop_n);
+        }
 
-        // If we just transitioned out of recording, finalize clip (unchanged logic)
+        // If we just transitioned out of recording, finalize clip
         if !engine.audio_state.recording.load(Ordering::Relaxed)
             && engine.recording_state.is_recording
         {
@@ -233,14 +251,15 @@ pub fn run_audio_thread(
             }
         }
 
-        // If paused/stopped, keep buffer silent and just push perf metrics; no further processing
-        if !engine.audio_state.playing.load(Ordering::Relaxed) {
-            // Send MIDI/all-notes-off once per pause entry (your midi_panic also safely flushes plugins)
-            engine.midi_panic();
-            for processor in &mut engine.track_processors {
-                processor.last_pattern_position = 0.0;
-                processor.pattern_loop_count = 0;
-                processor.notes_triggered_this_loop.clear();
+        if !now_playing {
+            if !engine.paused_last {
+                engine.midi_panic();
+                engine.paused_last = true;
+                for processor in &mut engine.track_processors {
+                    processor.last_pattern_position = 0.0;
+                    processor.pattern_loop_count = 0;
+                    processor.notes_triggered_this_loop.clear();
+                }
             }
 
             // Telemetry on a silent block
@@ -258,6 +277,8 @@ pub fn run_audio_thread(
                 latency_ms,
             });
             return; // buffer is already zeroed
+        } else {
+            engine.paused_last = false;
         }
 
         // From here on, we’re playing. The buffer is zeroed; processing will add audio to it.
