@@ -1013,7 +1013,6 @@ impl TimelineView {
             for action in actions {
                 match action {
                     AutomationAction::AddPoint { beat, value } => {
-                        app.push_undo();
                         let target = track.automation_lanes[lane_idx].parameter.clone();
                         let _ =
                             app.command_tx
@@ -1022,7 +1021,6 @@ impl TimelineView {
                                 ));
                     }
                     AutomationAction::RemovePoint(beat) => {
-                        app.push_undo();
                         let _ = app.command_tx.send(
                             crate::messages::AudioCommand::RemoveAutomationPoint(
                                 track_idx, lane_idx, beat,
@@ -1034,7 +1032,6 @@ impl TimelineView {
                         new_beat,
                         new_value,
                     } => {
-                        app.push_undo();
                         let _ = app.command_tx.send(
                             crate::messages::AudioCommand::RemoveAutomationPoint(
                                 track_idx, lane_idx, old_beat,
