@@ -455,22 +455,37 @@ impl TracksPanel {
                 app.dialogs.show_rename_track(track_idx, current);
                 return;
             }
-            "mute" => mute_track(&mut state.tracks, track_idx, &app.command_tx),
-            "solo" => solo_track(&mut state.tracks, track_idx, &app.command_tx),
-            "arm" => arm_track_exclusive(&mut state.tracks, track_idx),
+            "mute" => {
+                mute_track(&mut state.tracks, track_idx, &app.command_tx);
+            }
+            "solo" => {
+                solo_track(&mut state.tracks, track_idx, &app.command_tx);
+            }
+            "arm" => {
+                arm_track_exclusive(&mut state.tracks, track_idx);
+                drop(state);
+                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                return;
+            }
             "duplicate" => {
                 if let Some(track) = state.tracks.get(track_idx) {
                     let new_track = track.clone();
                     state.tracks.insert(track_idx + 1, new_track);
                 }
+                drop(state);
+                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                return;
             }
             "delete" => {
                 if state.tracks.len() > 1 {
                     state.tracks.remove(track_idx);
                     if app.selected_track >= state.tracks.len() {
-                        app.selected_track = state.tracks.len() - 1;
+                        app.selected_track = state.tracks.len().saturating_sub(1);
                     }
                 }
+                drop(state);
+                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                return;
             }
             _ => {}
         }

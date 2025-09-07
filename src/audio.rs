@@ -21,6 +21,7 @@ use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 pub(crate) struct AudioEngine {
     tracks: Arc<RwLock<Vec<TrackSnapshot>>>,
@@ -183,7 +184,7 @@ pub fn run_audio_thread(
     // Audio callback
     let audio_callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         let num_frames = data.len() / channels;
-        let cb_start = std::time::Instant::now();
+        let cb_start = Instant::now();
 
         // Always clear the buffer first so any early return outputs silence
         data.fill(0.0);
@@ -1144,13 +1145,10 @@ fn process_track_plugins(
 ) {
     // Build MIDI events for this block if it's a MIDI track
     let mut all_midi_events = Vec::new();
-
     if track.is_midi {
-        // Detect transport jump vs contiguous block
         let contiguous =
             (processor.last_block_end_samples - block_start_samples).abs() <= f64::EPSILON;
         let transport_jump = !contiguous;
-
         for clip in &track.midi_clips {
             let clip_events = build_block_midi_events(
                 clip,
@@ -1172,29 +1170,24 @@ fn process_track_plugins(
     processor.output_buffer_l[..num_frames].fill(0.0);
     processor.output_buffer_r[..num_frames].fill(0.0);
 
-    // Check processor's plugins, not track's plugin_chain
+    // If no plugins, just advance last_block_end_samples and return
     if processor.plugins.is_empty() {
+        processor.last_block_end_samples = block_start_samples + num_frames as f64;
         return;
     }
 
-    // Process chain using processor's actual plugin instances
     let mut first_active_plugin = true;
-
     for (plugin_idx, plugin_processor) in processor.plugins.iter_mut().enumerate() {
         if plugin_processor.bypass {
             continue;
         }
-
         if let Some(instance) = &mut plugin_processor.instance {
-            // Apply automated plugin param values (if any)
             for kv in processor.automated_plugin_params.iter() {
                 let ((p_idx, param_name), value) = (kv.key().clone(), *kv.value());
                 if p_idx == plugin_idx {
                     instance.set_parameter(&param_name, value);
                 }
             }
-
-            // Feed MIDI to the first active plugin on MIDI tracks
             if track.is_midi {
                 if first_active_plugin && !all_midi_events.is_empty() {
                     instance.prepare_midi_raw_events(&all_midi_events);
@@ -1206,8 +1199,7 @@ fn process_track_plugins(
                 instance.clear_midi_events();
             }
 
-            // Run plugin
-            let t0 = std::time::Instant::now();
+            let t0 = Instant::now();
             let res = instance.process(
                 &processor.input_buffer_l[..num_frames],
                 &processor.input_buffer_r[..num_frames],

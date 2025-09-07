@@ -898,6 +898,7 @@ pub struct ProjectSettingsDialog {
     bpm: f32,
     time_signature: (u32, u32),
     sample_rate: f32,
+    initialized: bool,
 }
 
 impl ProjectSettingsDialog {
@@ -907,6 +908,7 @@ impl ProjectSettingsDialog {
             bpm: 120.0,
             time_signature: (4, 4),
             sample_rate: 44100.0,
+            initialized: false
         }
     }
 
@@ -914,8 +916,12 @@ impl ProjectSettingsDialog {
         let mut open = true;
 
         // Load current settings
-        self.bpm = app.audio_state.bpm.load();
-        self.sample_rate = app.audio_state.sample_rate.load();
+        if !self.initialized {
+            self.bpm = app.audio_state.bpm.load();
+            self.sample_rate = app.audio_state.sample_rate.load();
+            self.initialized = true;
+        }
+        
 
         egui::Window::new("Project Settings")
             .open(&mut open)
@@ -961,10 +967,7 @@ impl ProjectSettingsDialog {
 
                 ui.horizontal(|ui| {
                     if ui.button("Apply").clicked() {
-                        app.audio_state.bpm.store(self.bpm);
-                        if let Some(transport) = &mut app.transport_ui.transport {
-                            transport.set_bpm(self.bpm);
-                        }
+                        let _ = app.command_tx.send(AudioCommand::SetBPM(self.bpm));
                         self.closed = true;
                     }
 

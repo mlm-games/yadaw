@@ -1,7 +1,8 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Local;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::constants::PROJECT_EXTENSION;
 use crate::project::{AppState, Project};
@@ -10,7 +11,7 @@ use crate::project::{AppState, Project};
 pub struct ProjectInfo {
     pub path: PathBuf,
     pub name: String,
-    pub modified: std::time::SystemTime,
+    pub modified: SystemTime,
     pub auto_save_path: Option<PathBuf>,
 }
 
@@ -19,8 +20,8 @@ pub struct ProjectManager {
     recent_projects: Vec<PathBuf>,
     max_recent: usize,
     auto_save_enabled: bool,
-    auto_save_interval: std::time::Duration,
-    last_auto_save: std::time::Instant,
+    auto_save_interval: Duration,
+    last_auto_save: Instant,
 }
 
 impl ProjectManager {
@@ -30,8 +31,8 @@ impl ProjectManager {
             recent_projects: Self::load_recent_projects(),
             max_recent: 10,
             auto_save_enabled: false,
-            auto_save_interval: std::time::Duration::from_secs(300), // 5 minutes
-            last_auto_save: std::time::Instant::now(),
+            auto_save_interval: Duration::from_secs(300), // 5 minutes
+            last_auto_save: Instant::now(),
         }
     }
 
@@ -55,7 +56,7 @@ impl ProjectManager {
                 .and_then(|s| s.to_str())
                 .unwrap_or("Untitled")
                 .to_string(),
-            modified: std::time::SystemTime::now(),
+            modified: SystemTime::now(),
             auto_save_path: None,
         });
 
@@ -106,7 +107,7 @@ impl ProjectManager {
             info.auto_save_path = Some(auto_save_path);
         }
 
-        self.last_auto_save = std::time::Instant::now();
+        self.last_auto_save = Instant::now();
         Ok(())
     }
 

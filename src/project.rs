@@ -169,14 +169,12 @@ impl AppState {
     }
 
     pub fn ensure_ids(&mut self) {
-        // Pass 1: find max existing id
-        let mut max_id = 0u64;
+        // Normalize MIDI clip loop fields
         for t in &mut self.tracks {
             for c in &mut t.midi_clips {
                 if c.content_len_beats <= 0.0 {
                     c.content_len_beats = c.length_beats.max(0.000001);
                 }
-                // clamp/wrap any garbage offsets
                 if c.content_offset_beats.is_nan() {
                     c.content_offset_beats = 0.0;
                 }
@@ -187,13 +185,29 @@ impl AppState {
             }
         }
 
-        let mut next = if self.next_id == 0 {
-            max_id.saturating_add(1).max(1)
-        } else {
-            self.next_id.max(max_id.saturating_add(1).max(1))
-        };
+        // Find max existing id across all objects
+        let mut max_id = 0u64;
+        for t in &self.tracks {
+            for c in &t.audio_clips {
+                max_id = max_id.max(c.id);
+            }
+            for c in &t.midi_clips {
+                max_id = max_id.max(c.id);
+                for n in &c.notes {
+                    max_id = max_id.max(n.id);
+                }
+            }
+        }
 
-        // Pass 2: assign missing ids without calling &mut self recursively
+        // Seed next_id from max if needed
+        if self.next_id == 0 {
+            self.next_id = max_id.saturating_add(1).max(1);
+        } else {
+            self.next_id = self.next_id.max(max_id.saturating_add(1).max(1));
+        }
+
+        // Assign missing ids
+        let mut next = self.next_id;
         for t in &mut self.tracks {
             for c in &mut t.audio_clips {
                 if c.id == 0 {
@@ -214,7 +228,6 @@ impl AppState {
                 }
             }
         }
-
         self.next_id = next;
     }
 

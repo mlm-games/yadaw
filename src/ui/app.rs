@@ -21,7 +21,7 @@ use eframe::egui;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub enum ActiveEditTarget {
     Clips,
@@ -78,13 +78,14 @@ pub struct YadawApp {
     pub(super) note_clipboard: Option<Vec<MidiNote>>,
     pub(super) active_edit_target: ActiveEditTarget,
     pub(crate) reserved_note_ids: Vec<u64>,
+    pub(crate) last_real_metrics_at: Option<Instant>,
 }
 
 struct TouchState {
     last_touch_pos: Option<egui::Pos2>,
     pinch_distance: Option<f32>,
-    gesture_start_time: Option<std::time::Instant>,
-    tap_times: Vec<std::time::Instant>,
+    gesture_start_time: Option<Instant>,
+    tap_times: Vec<Instant>,
 }
 
 impl YadawApp {
@@ -147,6 +148,7 @@ impl YadawApp {
                 gesture_start_time: None,
                 tap_times: Vec::new(),
             },
+            last_real_metrics_at: None,
         }
     }
 
@@ -615,7 +617,7 @@ impl YadawApp {
     }
 
     pub fn tap_tempo(&mut self) {
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let taps = &mut self.touch_state.tap_times;
 
         // Keep only taps within the last 2 seconds
@@ -775,13 +777,12 @@ impl YadawApp {
                     memory_usage: self.estimate_memory_usage(),
                     disk_streaming_rate: 0.0,
                     audio_buffer_health: buffer_fill,
-                    plugin_processing_time: std::time::Duration::from_secs_f32(
-                        plugin_time_ms / 1000.0,
-                    ),
+                    plugin_processing_time: Duration::from_secs_f32(plugin_time_ms / 1000.0),
                     xruns: xruns as usize,
                     latency_ms,
                 };
                 self.performance_monitor.update_metrics(metrics);
+                self.last_real_metrics_at = Some(Instant::now());
             }
             UIUpdate::ReservedNoteIds(ids) => {
                 self.reserved_note_ids.extend(ids);
@@ -986,7 +987,7 @@ impl YadawApp {
                     match phase {
                         egui::TouchPhase::Start => {
                             self.touch_state.last_touch_pos = Some(*pos);
-                            self.touch_state.gesture_start_time = Some(std::time::Instant::now());
+                            self.touch_state.gesture_start_time = Some(Instant::now());
                         }
                         egui::TouchPhase::Move => {
                             if let Some(last_pos) = self.touch_state.last_touch_pos {
@@ -1004,7 +1005,7 @@ impl YadawApp {
                         egui::TouchPhase::End => {
                             // Check for tap vs long press
                             if let Some(start_time) = self.touch_state.gesture_start_time {
-                                let duration = std::time::Instant::now().duration_since(start_time);
+                                let duration = Instant::now().duration_since(start_time);
 
                                 if duration.as_millis() < 200 {
                                     // Tap - treat as click
@@ -1109,6 +1110,13 @@ impl YadawApp {
     }
 
     fn update_performance_metrics(&mut self) {
+        let stale = self
+            .last_real_metrics_at
+            .map(|t| t.elapsed() >= std::time::Duration::from_millis(200))
+            .unwrap_or(true);
+        if !stale {
+            return;
+        }
         // Calculate current metrics
         let cpu_usage = self.estimate_cpu_usage();
         let memory_usage = self.estimate_memory_usage();

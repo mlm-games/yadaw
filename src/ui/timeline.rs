@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
@@ -1027,12 +1028,10 @@ impl TimelineView {
                             // Throttle sends like you do elsewhere (30 ms)
                             let mem_root = egui::Id::new(("slip", *track_id, *clip_id));
                             let due = {
-                                let last = ui
-                                    .ctx()
-                                    .memory(|m| m.data.get_temp::<std::time::Instant>(mem_root));
+                                let last =
+                                    ui.ctx().memory(|m| m.data.get_temp::<Instant>(mem_root));
                                 last.map_or(true, |t| {
-                                    std::time::Instant::now().duration_since(t)
-                                        >= std::time::Duration::from_millis(30)
+                                    Instant::now().duration_since(t) >= Duration::from_millis(30)
                                 })
                             };
                             if due {
@@ -1043,9 +1042,8 @@ impl TimelineView {
                                         *track_id, *clip_id, new_off,
                                     ),
                                 );
-                                ui.ctx().memory_mut(|m| {
-                                    m.data.insert_temp(mem_root, std::time::Instant::now())
-                                });
+                                ui.ctx()
+                                    .memory_mut(|m| m.data.insert_temp(mem_root, Instant::now()));
                             }
                         }
                     }
