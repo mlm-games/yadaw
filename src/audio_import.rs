@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::path::Path;
 
 use crate::model::clip::AudioClip;
@@ -38,31 +38,49 @@ fn import_wav(path: &Path, bpm: f32) -> Result<AudioClip> {
     let mut reader = hound::WavReader::open(path)?;
     let spec = reader.spec();
 
-    // Convert to f32
     let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<Vec<_>, _>>()?,
         hound::SampleFormat::Int => {
-            let bits = spec.bits_per_sample;
-            let max_val = (1 << (bits - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|s| s as f32 / max_val))
-                .collect::<Result<Vec<_>, _>>()?
+            match spec.bits_per_sample {
+                8 => {
+                    // 8-bit PCM is typically unsigned
+                    reader
+                        .samples::<i8>() // hound doesn't provide u8; i8 reads centered -128..127
+                        .map(|s| s.map(|v| (v as f32) / 128.0))
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+                16 => reader
+                    .samples::<i16>()
+                    .map(|s| s.map(|v| (v as f32) / 32768.0))
+                    .collect::<Result<Vec<_>, _>>()?,
+                24 => {
+                    // Packed 24-bit in i32 container; shift to MSB and normalize by 2^23
+                    reader
+                        .samples::<i32>()
+                        .map(|s| s.map(|v| ((v >> 8) as f32) / 8_388_608.0))
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+                32 => reader
+                    .samples::<i32>()
+                    .map(|s| s.map(|v| (v as f32) / 2_147_483_648.0))
+                    .collect::<Result<Vec<_>, _>>()?,
+                bits => return Err(anyhow!("Unsupported PCM bit depth: {}", bits)),
+            }
         }
     };
 
-    // Convert to mono if stereo
-    let mono_samples = if spec.channels == 2 {
+    // Downmix to mono if stereo; other channel counts -> average
+    let channels = spec.channels.max(1) as usize;
+    let mono_samples: Vec<f32> = if channels == 1 {
         samples
-            .chunks(2)
-            .map(|chunk| (chunk[0] + chunk.get(1).copied().unwrap_or(0.0)) / 2.0)
-            .collect()
     } else {
         samples
+            .chunks(channels)
+            .map(|ch| ch.iter().copied().sum::<f32>() / channels as f32)
+            .collect()
     };
 
-    // Trim silence from the end
-    let trimmed_samples = trim_silence_end(&mono_samples, 0.001); // -60 dB
+    let trimmed_samples = trim_silence_end(&mono_samples, 0.001);
 
     let duration_seconds = trimmed_samples.len() as f64 / spec.sample_rate as f64;
     let duration_beats = duration_seconds * (bpm as f64 / 60.0);
@@ -145,7 +163,7 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
             Err(symphonia::core::errors::Error::IoError(e))
                 if e.kind() == std::io::ErrorKind::UnexpectedEof =>
             {
-                break
+                break;
             }
             Err(symphonia::core::errors::Error::ResetRequired) => break,
             Err(e) => return Err(e.into()),

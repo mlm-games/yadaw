@@ -144,21 +144,23 @@ impl EditProcessor {
         Some((first, second))
     }
 
-    pub fn apply_fade_in(clip: &mut AudioClip, duration_beats: f64) {
-        let fade_samples = ((duration_beats * 60.0 / 120.0) * clip.sample_rate as f64) as usize;
-        let fade_samples = fade_samples.min(clip.samples.len());
+    pub fn apply_fade_in(clip: &mut AudioClip, duration_beats: f64, bpm: f32) {
+        let fade_samples = ((duration_beats * 60.0 / bpm as f64) * clip.sample_rate as f64)
+            .round()
+            .clamp(0.0, clip.samples.len() as f64) as usize;
         for i in 0..fade_samples {
-            let f = i as f32 / fade_samples as f32;
+            let f = i as f32 / fade_samples.max(1) as f32;
             clip.samples[i] *= f;
         }
     }
 
-    pub fn apply_fade_out(clip: &mut AudioClip, duration_beats: f64) {
-        let fade_samples = ((duration_beats * 60.0 / 120.0) * clip.sample_rate as f64) as usize;
-        let fade_samples = fade_samples.min(clip.samples.len());
-        let start = clip.samples.len() - fade_samples;
+    pub fn apply_fade_out(clip: &mut AudioClip, duration_beats: f64, bpm: f32) {
+        let fade_samples = ((duration_beats * 60.0 / bpm as f64) * clip.sample_rate as f64)
+            .round()
+            .clamp(0.0, clip.samples.len() as f64) as usize;
+        let start = clip.samples.len().saturating_sub(fade_samples);
         for i in 0..fade_samples {
-            let f = 1.0 - (i as f32 / fade_samples as f32);
+            let f = 1.0 - (i as f32 / fade_samples.max(1) as f32);
             clip.samples[start + i] *= f;
         }
     }

@@ -127,16 +127,13 @@ impl Dialog for MessageContent {
     fn draw_content(&mut self, ui: &mut egui::Ui, _app: &mut super::app::YadawApp) -> bool {
         ui.label(&self.message);
         ui.separator();
-
+        let mut close = false;
         ui.horizontal(|ui| {
             if ui.button("OK").clicked() {
-                return true; // Close dialog
-            } else {
-                false
+                close = true;
             }
         });
-
-        false
+        close
     }
 
     fn is_closed(&self) -> bool {
@@ -171,13 +168,10 @@ impl Dialog for QuantizeContent {
     fn draw_content(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) -> bool {
         ui.horizontal(|ui| {
             ui.label("Strength:");
-            ui.add(
-                egui::Slider::new(&mut self.strength, 0.0..=1.0)
-                    .suffix("%")
-                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
-            );
+            ui.add(egui::Slider::new(&mut self.strength, 0.0..=1.0)
+                .suffix("%")
+                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)));
         });
-
         ui.horizontal(|ui| {
             ui.label("Grid:");
             egui::ComboBox::from_id_salt("quantize_grid")
@@ -191,28 +185,22 @@ impl Dialog for QuantizeContent {
                     ui.selectable_value(&mut self.grid_size, 0.03125, "1/32");
                 });
         });
-
         ui.horizontal(|ui| {
             ui.label("Swing:");
             ui.add(egui::Slider::new(&mut self.swing, -50.0..=50.0).suffix("%"));
         });
-
         ui.separator();
-
+        let mut close = false;
         ui.horizontal(|ui| {
             if ui.button("Apply").clicked() {
                 app.quantize_selected_notes_with_params(self.strength, self.grid_size, self.swing);
-                return true; // Close dialog
+                close = true;
             }
-
             if ui.button("Cancel").clicked() {
-                return true; // Close dialog
-            } else {
-                false
+                close = true;
             }
         });
-
-        false
+        close
     }
 
     fn is_closed(&self) -> bool {

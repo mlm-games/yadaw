@@ -426,41 +426,31 @@ impl YadawApp {
         if self.selected_clips.is_empty() {
             return;
         }
-
         self.push_undo();
-
         let mut state = self.state.lock().unwrap();
-
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    // Find peak
-                    let peak = clip
-                        .samples
-                        .iter()
-                        .map(|s| s.abs())
-                        .fold(0.0f32, |a, b| a.max(b));
-
+                    let peak = clip.samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                     if peak > 0.0 {
-                        let gain = 0.989 / peak; // Normalize to -0.1 dB
-                        for sample in &mut clip.samples {
-                            *sample *= gain;
+                        let gain = crate::constants::NORMALIZE_TARGET_LINEAR / peak;
+                        for s in &mut clip.samples {
+                            *s *= gain;
                         }
                     }
                 }
             }
         }
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     pub fn reverse_selected(&mut self) {
         if self.selected_clips.is_empty() {
             return;
         }
-
         self.push_undo();
-
         let mut state = self.state.lock().unwrap();
-
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
@@ -468,61 +458,59 @@ impl YadawApp {
                 }
             }
         }
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     pub fn apply_fade_in(&mut self) {
         if self.selected_clips.is_empty() {
             return;
         }
-
         self.push_undo();
-
         let mut state = self.state.lock().unwrap();
-
+        let bpm = state.bpm;
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    EditProcessor::apply_fade_in(clip, 0.25);
+                    EditProcessor::apply_fade_in(clip, 0.25, bpm);
                 }
             }
         }
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     pub fn apply_fade_out(&mut self) {
         if self.selected_clips.is_empty() {
             return;
         }
-
         self.push_undo();
-
         let mut state = self.state.lock().unwrap();
-
+        let bpm = state.bpm;
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    EditProcessor::apply_fade_out(clip, 0.25);
+                    EditProcessor::apply_fade_out(clip, 0.25, bpm);
                 }
             }
         }
+        drop(state);
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     pub fn split_selected_at_playhead(&mut self) {
         if self.selected_clips.is_empty() {
             return;
         }
-
         self.push_undo();
-
         let current_beat = {
             let position = self.audio_state.get_position();
             let sample_rate = self.audio_state.sample_rate.load();
             let bpm = self.audio_state.bpm.load();
             (position / sample_rate as f64) * (bpm as f64 / 60.0)
         };
-
         let mut state = self.state.lock().unwrap();
         let bpm = state.bpm;
-
         let selected_clips = self.selected_clips.clone();
         for (track_id, clip_id) in selected_clips {
             if let Some(track) = state.tracks.get_mut(track_id) {
@@ -536,8 +524,9 @@ impl YadawApp {
                 }
             }
         }
-
+        drop(state);
         self.selected_clips.clear();
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     // MIDI operations
