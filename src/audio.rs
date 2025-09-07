@@ -548,7 +548,9 @@ impl AudioEngine {
         mut current_position: f64,
         plugin_time_ms_accum: &mut f32,
     ) -> f64 {
-        let tracks = self.tracks.read().clone();
+        let tracks_guard = self.tracks.read();
+        let tracks: &Vec<TrackSnapshot> = &*tracks_guard;
+
         let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
 
