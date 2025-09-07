@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::read_to_string;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -10,7 +11,7 @@ use crate::piano_roll::{PianoRoll, PianoRollAction};
 
 pub struct PianoRollView {
     pub(crate) piano_roll: PianoRoll,
-    selected_clip: Option<usize>,
+    pub(crate) selected_clip: Option<usize>,
     pub(crate) editing_notes: Vec<MidiNote>,
 
     // View settings
@@ -560,6 +561,36 @@ impl PianoRollView {
                 ui.label("Select or create a MIDI clip to edit");
             });
             return;
+        }
+
+        if let Some(clip_idx) = self.selected_clip {
+            let model_notes = {
+                let state = app.state.lock().unwrap();
+                state
+                    .tracks
+                    .get(app.selected_track)
+                    .and_then(|t| t.midi_clips.get(clip_idx))
+                    .map(|c| c.notes.clone())
+            };
+            if let Some(model_notes) = model_notes {
+                // Only overwrite if you're not currently pushing edits
+                let mid_edit = self.undo_armed || ui.input(|i| i.pointer.any_down());
+                if !mid_edit && model_notes != self.editing_notes {
+                    self.editing_notes = model_notes;
+
+                    // Clean up selection to only contain ids that still exist
+                    let ids: HashSet<u64> = self.editing_notes.iter().map(|n| n.id).collect();
+                    self.piano_roll
+                        .selected_note_ids
+                        .retain(|id| ids.contains(id));
+                    self.piano_roll.temp_selected_indices.clear();
+                }
+            } else {
+                self.selected_clip = None;
+                self.editing_notes.clear();
+                self.piano_roll.selected_note_ids.clear();
+                self.piano_roll.temp_selected_indices.clear();
+            }
         }
 
         // Prefetch a pool of note IDs for immediate assignment

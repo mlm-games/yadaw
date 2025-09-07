@@ -168,6 +168,8 @@ impl YadawApp {
             self.redo_stack.push(current);
             state.restore(snapshot);
             drop(state);
+
+            self.sync_views_after_model_change();
             let _ = self.command_tx.send(AudioCommand::UpdateTracks);
         }
     }
@@ -179,6 +181,8 @@ impl YadawApp {
             self.undo_stack.push(current);
             state.restore(snapshot);
             drop(state);
+
+            self.sync_views_after_model_change();
             let _ = self.command_tx.send(AudioCommand::UpdateTracks);
         }
     }
@@ -1131,6 +1135,63 @@ impl YadawApp {
         };
 
         self.performance_monitor.update_metrics(metrics);
+    }
+
+    fn sync_views_after_model_change(&mut self) {
+        // Clamp selected_track
+        let tracks_len = self.state.lock().unwrap().tracks.len();
+        if tracks_len == 0 {
+            self.selected_track = 0;
+            self.piano_roll_view.selected_clip = None;
+            self.piano_roll_view.editing_notes.clear();
+            return;
+        }
+        if self.selected_track >= tracks_len {
+            self.selected_track = tracks_len - 1;
+        }
+
+        // Refresh piano roll notes if a clip is selected
+        if let Some(clip_idx) = self.piano_roll_view.selected_clip {
+            let notes_opt = {
+                let state = self.state.lock().unwrap();
+                state
+                    .tracks
+                    .get(self.selected_track)
+                    .and_then(|t| t.midi_clips.get(clip_idx))
+                    .map(|c| c.notes.clone())
+            };
+            match notes_opt {
+                Some(notes) => {
+                    self.piano_roll_view.editing_notes = notes;
+                    // Clean selection
+                    use std::collections::HashSet;
+                    let ids: HashSet<u64> = self
+                        .piano_roll_view
+                        .editing_notes
+                        .iter()
+                        .map(|n| n.id)
+                        .collect();
+                    self.piano_roll_view
+                        .piano_roll
+                        .selected_note_ids
+                        .retain(|id| ids.contains(id));
+                    self.piano_roll_view
+                        .piano_roll
+                        .temp_selected_indices
+                        .clear();
+                }
+                None => {
+                    // Clip disappeared or index changed
+                    self.piano_roll_view.selected_clip = None;
+                    self.piano_roll_view.editing_notes.clear();
+                    self.piano_roll_view.piano_roll.selected_note_ids.clear();
+                    self.piano_roll_view
+                        .piano_roll
+                        .temp_selected_indices
+                        .clear();
+                }
+            }
+        }
     }
 
     fn ctx(&self) -> &egui::Context {

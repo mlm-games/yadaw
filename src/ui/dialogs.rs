@@ -713,7 +713,7 @@ simple_dialog!(
     "Audio Setup",
     |ui: &mut egui::Ui, _app: &mut super::app::YadawApp, closed: &mut bool| {
         ui.label("Audio configuration would be shown here");
-        ui.label("(Not implemented in this example)");
+        ui.label("(Not implemented yet)");
         ui.separator();
         if ui.button("Close").clicked() {
             *closed = true;
