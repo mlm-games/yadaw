@@ -96,64 +96,67 @@ impl TracksPanel {
         let mut track_actions = Vec::new();
         let mut selected_track_changed = None;
 
-        {
-            let binding = app.state.clone();
-            let mut state = binding.lock().unwrap();
-            let num_tracks = state.tracks.len();
+        let binding = app.state.clone();
+        let mut state = binding.lock().unwrap();
+        let num_tracks = state.tracks.len();
 
-            for track_idx in 0..num_tracks {
-                let is_selected = track_idx == app.selected_track;
+        for track_idx in 0..num_tracks {
+            let is_selected = track_idx == app.selected_track;
 
-                let response = ui.group(|ui| {
-                    self.draw_track_header(
-                        ui,
-                        &mut state.tracks[track_idx],
-                        track_idx,
-                        is_selected,
-                    );
+            let row = ui.group(|ui| {
+                // Header, clickable background handled inside
+                let header_resp = self.draw_track_header(
+                    ui,
+                    &state.tracks[track_idx],
+                    track_idx,
+                    is_selected,
+                    &mut track_actions,
+                );
 
-                    if self.show_mixer_strip {
-                        self.draw_mixer_strip(
-                            ui,
-                            &mut state.tracks[track_idx],
-                            track_idx,
-                            &mut track_actions,
-                            app,
-                        );
-                    }
-
-                    if self.show_automation_buttons {
-                        self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx, app);
-                    }
-
-                    self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
-                });
-
-                if response.response.clicked() {
+                if header_resp.clicked() {
                     selected_track_changed = Some((track_idx, state.tracks[track_idx].is_midi));
                 }
 
-                response.response.context_menu(|ui| {
-                    if ui.button("Duplicate Track").clicked() {
-                        track_actions.push(("duplicate", track_idx));
-                        ui.close();
-                    }
-                    if ui.button("Delete Track").clicked() {
-                        track_actions.push(("delete", track_idx));
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Add to Group...").clicked() {
-                        track_actions.push(("group", track_idx));
-                        ui.close();
-                    }
-                    if ui.button("Track Color...").clicked() {
-                        track_actions.push(("color", track_idx));
-                        ui.close();
-                    }
-                });
-            }
+                // Body: mixer, automation buttons, plugins, etc. remain fully interactive
+                if self.show_mixer_strip {
+                    self.draw_mixer_strip(
+                        ui,
+                        &mut state.tracks[track_idx],
+                        track_idx,
+                        &mut track_actions,
+                        app,
+                    );
+                }
+
+                if self.show_automation_buttons {
+                    self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx, app);
+                }
+
+                self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
+            });
+
+            row.response.context_menu(|ui| {
+                if ui.button("Duplicate Track").clicked() {
+                    track_actions.push(("duplicate", track_idx));
+                    ui.close();
+                }
+                if ui.button("Delete Track").clicked() {
+                    track_actions.push(("delete", track_idx));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Add to Group...").clicked() {
+                    track_actions.push(("group", track_idx));
+                    ui.close();
+                }
+                if ui.button("Track Color...").clicked() {
+                    track_actions.push(("color", track_idx));
+                    ui.close();
+                }
+            });
         }
+
+        drop(state);
 
         if let Some((track_idx, is_midi)) = selected_track_changed {
             println!("Track {} clicked, is_midi: {}", track_idx, is_midi);
@@ -165,17 +168,66 @@ impl TracksPanel {
         }
     }
 
-    fn draw_track_header(&self, ui: &mut egui::Ui, track: &Track, idx: usize, is_selected: bool) {
-        ui.horizontal(|ui| {
-            if is_selected {
-                ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "▶");
-            } else {
-                ui.label(" ");
-            }
-            ui.label(&track.name);
-            ui.label(if track.is_midi { "🎹" } else { "🎵" });
-            ui.weak(format!("#{}", idx + 1));
+    fn draw_track_header(
+        &self,
+        ui: &mut egui::Ui,
+        track: &Track,
+        idx: usize,
+        is_selected: bool,
+        actions: &mut Vec<(&str, usize)>,
+    ) -> egui::Response {
+        const HEADER_H: f32 = 24.0;
+
+        let desired = egui::vec2(ui.available_width(), HEADER_H);
+        let (rect, bg_resp) = ui.allocate_exact_size(desired, egui::Sense::click());
+
+        if is_selected {
+            ui.painter()
+                .rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 60, 100));
+        }
+
+        ui.allocate_ui_at_rect(rect, |ui| {
+            ui.horizontal(|ui| {
+                if is_selected {
+                    ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "▶");
+                } else {
+                    ui.label(" ");
+                }
+                ui.label(&track.name);
+                ui.label(if track.is_midi { "🎹" } else { "🎵" });
+                ui.weak(format!("#{}", idx + 1));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button("⚙", |ui| {
+                        ui.label("Track Options");
+                        ui.separator();
+                        if ui.button("Rename…").clicked() {
+                            // TODO: show rename dialog scoped to idx
+                            ui.close();
+                        }
+                        if ui.button("Change Color…").clicked() {
+                            actions.push(("color", idx));
+                            ui.close();
+                        }
+                        if ui.button("Freeze Track").clicked() {
+                            actions.push(("freeze", idx));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Duplicate").clicked() {
+                            actions.push(("duplicate", idx));
+                            ui.close();
+                        }
+                        if ui.button("Delete").clicked() {
+                            actions.push(("delete", idx));
+                            ui.close();
+                        }
+                    });
+                });
+            });
         });
+
+        bg_resp
     }
 
     fn draw_mixer_strip(
