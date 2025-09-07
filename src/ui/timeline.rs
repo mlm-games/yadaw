@@ -29,6 +29,7 @@ pub struct TimelineView {
     max_track_height: f32,
 
     last_view_width: f32,
+    pending_clip_undo: bool,
 }
 
 #[derive(Clone)]
@@ -83,6 +84,7 @@ impl TimelineView {
             min_track_height: 40.0,
             max_track_height: 200.0,
             last_view_width: 800.0,
+            pending_clip_undo: false,
         }
     }
 
@@ -191,7 +193,6 @@ impl TimelineView {
 
         // Grid and loop region
         self.draw_grid(&painter, rect, app.state.lock().unwrap().bpm);
-        self.draw_loop_region(&painter, rect, app);
 
         // Tracks
         {
@@ -213,6 +214,8 @@ impl TimelineView {
             }
         }
 
+        self.draw_loop_region(&painter, rect, app);
+
         // Playhead overlay
         {
             let position = app.audio_state.get_position();
@@ -228,6 +231,11 @@ impl TimelineView {
                     );
                 }
             }
+        }
+
+        if self.pending_clip_undo {
+            app.push_undo();
+            self.pending_clip_undo = false;
         }
 
         // Interactions
@@ -468,12 +476,9 @@ impl TimelineView {
 
         // Draw MIDI notes preview
         for note in &clip.notes {
-            let note_x = clip_rect.left()
-                + (note.start as f32 * self.zoom_x / clip.length_beats as f32 * clip_width);
-            let note_y = clip_rect.bottom() - ((note.pitch as f32 / 127.0) * clip_rect.height());
-            let note_width = (note.duration as f32 * self.zoom_x / clip.length_beats as f32
-                * clip_width)
-                .max(2.0);
+            let note_x = clip_rect.left() + note.start as f32 * self.zoom_x;
+            let note_y = clip_rect.bottom() - ((note.pitch as f32 / 153.0) * clip_rect.height());
+            let note_width = (note.duration as f32 * self.zoom_x).max(2.0);
 
             painter.rect_filled(
                 egui::Rect::from_min_size(
@@ -562,7 +567,7 @@ impl TimelineView {
 
         // Begin drag/resize
         if response.drag_started() && self.timeline_interaction.is_none() {
-            app.push_undo();
+            self.pending_clip_undo = true;
 
             // Access clip timing
             let state = app.state.lock().unwrap();
