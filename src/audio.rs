@@ -1009,69 +1009,116 @@ fn build_block_midi_events(
     loop_end: f64,
     transport_jump: bool,
 ) -> Vec<(u8, u8, u8, i64)> {
-    let converter = TimeConverter::new(sample_rate as f32, bpm);
+    let conv = TimeConverter::new(sample_rate as f32, bpm);
 
-    let block_start_beat = converter.samples_to_beats(block_start_samples);
-    let block_end_beat = converter.samples_to_beats(block_start_samples + frames as f64);
+    let block_start_beat = conv.samples_to_beats(block_start_samples);
+    let block_end_beat = conv.samples_to_beats(block_start_samples + frames as f64);
 
-    // Loop-adjusted beats for this block (effective timeline)
-    let effective_start_beat =
-        if loop_enabled && loop_end > loop_start && block_start_beat >= loop_end {
-            let loop_length = loop_end - loop_start;
-            loop_start + ((block_start_beat - loop_start) % loop_length)
-        } else {
-            block_start_beat
-        };
-
-    let effective_end_beat = if loop_enabled && loop_end > loop_start && block_end_beat >= loop_end
-    {
-        let loop_length = loop_end - loop_start;
-        loop_start + ((block_end_beat - loop_start) % loop_length)
+    // Effective start/end with loop range (project loop)
+    let eff_start = if loop_enabled && loop_end > loop_start && block_start_beat >= loop_end {
+        let len = loop_end - loop_start;
+        loop_start + ((block_start_beat - loop_start) % len)
+    } else {
+        block_start_beat
+    };
+    let eff_end = if loop_enabled && loop_end > loop_start && block_end_beat >= loop_end {
+        let len = loop_end - loop_start;
+        loop_start + ((block_end_beat - loop_start) % len)
     } else {
         block_end_beat
     };
 
-    let mut events = Vec::new();
+    // Clip instance window
+    let clip_start = clip.start_beat;
+    let clip_end = clip.start_beat + clip.length_beats.max(0.0);
 
-    // Clip window check vs the effective block
-    let clip_end = clip.start_beat + clip.length_beats;
-    if effective_start_beat < clip_end && effective_end_beat > clip.start_beat {
-        // A) Only when transport jumps (seek/loop wrap/start),
-        //    if we land inside a note at the block start, send a Note On at t=0.
-        //    This avoids re-triggering on every contiguous block.
-        if transport_jump {
-            for note in &clip.notes {
-                let s = clip.start_beat + note.start;
-                let e = s + note.duration;
-                if s < effective_start_beat && effective_start_beat < e {
-                    events.push((0x90, note.pitch, note.velocity, 0));
-                }
+    // Fast reject vs block
+    if eff_end <= clip_start || eff_start >= clip_end {
+        return Vec::new();
+    }
+
+    // Number of repeats that can fit into instance length
+    let content_len = clip.content_len_beats.max(0.000001);
+    let repeats = if clip.loop_enabled {
+        (clip.length_beats / content_len).ceil().max(1.0) as i32
+    } else {
+        1
+    };
+
+    // Helper: quantize a beat non-destructively
+    let quantize = |beat: f64| -> f64 {
+        if !clip.quantize_enabled || clip.quantize_grid <= 0.0 {
+            return beat;
+        }
+        let g = clip.quantize_grid as f64;
+        let q = (beat / g).round() * g;
+
+        // swing: shift odd subdivisions by +/- swing*0.5*g
+        let mut q_swing = q;
+        if clip.swing.abs() > 0.0001 {
+            let idx = (q_swing / (g * 0.5)).round() as i64;
+            if idx % 2 != 0 {
+                q_swing += (clip.swing as f64) * 0.5 * g;
             }
         }
 
-        // B) Starts strictly after the (effective) block start and before block end.
-        //    Use offsets relative to effective_start_beat to get correct frame.
-        for note in &clip.notes {
-            let s = clip.start_beat + note.start;
-            if s > effective_start_beat && s < effective_end_beat {
-                let beat_off = s - effective_start_beat; // NOTE: effective, not raw block start
-                let frame = converter.beats_to_samples(beat_off).round() as i64;
-                if (0..frames as i64).contains(&frame) {
-                    events.push((0x90, note.pitch, note.velocity, frame));
-                }
-            }
+        // strength blend
+        beat + (q_swing - beat) * (clip.quantize_strength as f64).clamp(0.0, 1.0)
+    };
+
+    // Build events
+    let mut events: Vec<(u8, u8, u8, i64)> = Vec::new();
+    for k in 0..repeats {
+        let rep_off = clip_start + (k as f64 * content_len);
+
+        // End of this repeat in project beats (clamped to instance end)
+        let rep_end = (rep_off + content_len).min(clip_end);
+
+        // Skip if outside block
+        if rep_end <= eff_start || rep_off >= eff_end {
+            continue;
         }
 
-        // C) Ends at or after the (effective) block start and at/before block end.
-        //    If the end coincides with block start, we send Note Off at frame 0 once.
-        for note in &clip.notes {
-            let s = clip.start_beat + note.start;
-            let e = s + note.duration;
-            if e >= effective_start_beat && e <= effective_end_beat {
-                let beat_off = e - effective_start_beat;
-                let frame = converter.beats_to_samples(beat_off).round() as i64;
-                if (0..frames as i64).contains(&frame) {
-                    events.push((0x80, note.pitch, 0, frame));
+        let offset = clip.content_offset_beats.rem_euclid(content_len);
+        for n in &clip.notes {
+            // local start/end with offset, modulo content_len
+            let s_loc = (n.start as f64 + offset).rem_euclid(content_len);
+            let e_loc_raw = s_loc + n.duration as f64;
+
+            let mut segs: smallvec::SmallVec<[(f64, f64); 2]> = smallvec::smallvec![];
+            if e_loc_raw <= content_len {
+                segs.push((s_loc, e_loc_raw));
+            } else {
+                segs.push((s_loc, content_len));
+                segs.push((0.0, e_loc_raw - content_len));
+            }
+
+            for (s_local, e_local) in segs {
+                let s_raw = rep_off + s_local;
+                let e_raw = (rep_off + e_local).min(rep_end);
+
+                // Global transforms
+                let mut pitch = (n.pitch as i16 + clip.transpose as i16).clamp(0, 127) as u8;
+                let mut vel = (n.velocity as i16 + clip.velocity_offset as i16).clamp(1, 127) as u8;
+
+                // Quantize start/end (separately)
+                let s_q = quantize(s_raw);
+                let e_q = quantize(e_raw).max(s_q + 1e-6);
+
+                // Convert to frames inside this audio block
+                let start_frame = conv.beats_to_samples(s_q - eff_start).round() as i64;
+                let end_frame = conv.beats_to_samples(e_q - eff_start).round() as i64;
+
+                // Note chase on transport jump (send Note On at t=0 if block lands inside a sustaining note)
+                if transport_jump && s_q < eff_start && e_q > eff_start {
+                    events.push((0x90, pitch, vel, 0));
+                }
+
+                if (0..frames as i64).contains(&start_frame) {
+                    events.push((0x90, pitch, vel, start_frame));
+                }
+                if (0..frames as i64).contains(&end_frame) {
+                    events.push((0x80, pitch, 0, end_frame));
                 }
             }
         }

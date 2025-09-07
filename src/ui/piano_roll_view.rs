@@ -27,6 +27,7 @@ pub struct PianoRollView {
     midi_octave_offset: i32,
 
     undo_armed: bool,
+    write_to_all_selected: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -54,6 +55,7 @@ impl PianoRollView {
             selected_clip: None,
             editing_notes: vec![],
             undo_armed: false,
+            write_to_all_selected: false,
         }
     }
 
@@ -439,6 +441,12 @@ impl PianoRollView {
                         }
                     }
                 }
+
+                ui.checkbox(
+                    &mut self.write_to_all_selected,
+                    "Write to all selected clips",
+                )
+                .on_hover_text("Apply edits to all selected MIDI clips (in addition to aliases).");
             }
             drop(state);
 
@@ -635,6 +643,40 @@ impl PianoRollView {
             }
         }
 
+        {
+            let state = app.state.lock().unwrap();
+            if let Some(primary_idx) = self.selected_clip {
+                if let Some(track) = state.tracks.get(app.selected_track) {
+                    // Collect “other” clips: either from selected_clips or those overlapping the editor range
+                    let others: Vec<&crate::model::clip::MidiClip> = app
+                        .selected_clips
+                        .iter()
+                        .filter(|(t, c)| *t == app.selected_track && *c != primary_idx)
+                        .filter_map(|(_, c)| track.midi_clips.get(*c))
+                        .collect();
+
+                    // Draw
+                    let grid_left = ui.min_rect().left() + crate::constants::PIANO_KEY_WIDTH;
+                    for oc in others {
+                        let color = egui::Color32::from_rgba_premultiplied(255, 255, 255, 40);
+                        for n in &oc.notes {
+                            let x = grid_left
+                                + (n.start as f32 * self.piano_roll.zoom_x
+                                    - self.piano_roll.scroll_x);
+                            let w = (n.duration as f32 * self.piano_roll.zoom_x).max(2.0);
+                            let y = ui.min_rect().bottom()
+                                - ((n.pitch as f32 / 127.0) * (ui.min_rect().height() - 0.0));
+                            let r = egui::Rect::from_min_size(
+                                egui::pos2(x, y - 2.0),
+                                egui::vec2(w, 2.0),
+                            );
+                            ui.painter().rect_filled(r, 1.0, color);
+                        }
+                    }
+                }
+            }
+        }
+
         let actions = self.piano_roll.ui(ui, &mut temp_clip);
 
         // Apply actions (assign IDs on AddNote immediately if possible)
@@ -722,6 +764,43 @@ impl PianoRollView {
                         ));
                     last_send = Some(now);
                     dirty = false;
+                }
+
+                if self.write_to_all_selected {
+                    // Build target list = selected clips excluding the primary (and excluding those that share pattern_id with primary to avoid redundant updates)
+                    let targets: Vec<(usize, usize)> = {
+                        let st = app.state.lock().unwrap();
+                        let mut v = Vec::new();
+                        let primary_pid = st
+                            .tracks
+                            .get(app.selected_track)
+                            .and_then(|t| self.selected_clip.and_then(|cid| t.midi_clips.get(cid)))
+                            .and_then(|c| c.pattern_id);
+                        for (t, c) in app.selected_clips.iter().copied() {
+                            if t == app.selected_track && Some(c) == self.selected_clip {
+                                continue;
+                            }
+                            if let Some(track) = st.tracks.get(t) {
+                                if track.is_midi && track.midi_clips.get(c).is_some() {
+                                    // skip aliases of the primary to avoid redundant write (they’ll mirror anyway)
+                                    let is_alias_of_primary = primary_pid.is_some()
+                                        && track.midi_clips[c].pattern_id == primary_pid;
+                                    if !is_alias_of_primary {
+                                        v.push((t, c));
+                                    }
+                                }
+                            }
+                        }
+                        v
+                    };
+                    if !targets.is_empty() {
+                        let _ = app.command_tx.send(
+                            crate::messages::AudioCommand::UpdateMidiClipsSameNotes {
+                                targets,
+                                notes: self.editing_notes.clone(),
+                            },
+                        );
+                    }
                 }
             }
 

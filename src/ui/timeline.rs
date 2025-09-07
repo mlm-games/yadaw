@@ -5,6 +5,7 @@ use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
 use crate::model::{AudioClip, MidiClip, Track};
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
+use smallvec::SmallVec;
 
 pub struct TimelineView {
     pub zoom_x: f32,
@@ -61,6 +62,12 @@ enum TimelineInteraction {
     LoopCreate {
         anchor_beat: f64,
     }, // click-drag to create/replace loop
+    SlipContent {
+        track_id: usize,
+        clip_id: usize,
+        start_offset: f64,
+        start_mouse_beat: f64,
+    },
 }
 
 impl TimelineView {
@@ -394,7 +401,7 @@ impl TimelineView {
             egui::Sense::click_and_drag(),
         );
 
-        self.handle_clip_interaction(response, track_idx, clip_idx, clip_rect, app);
+        self.handle_clip_interaction(response, track_idx, ui, clip_idx, clip_rect, app);
     }
 
     fn draw_loop_region(
@@ -475,19 +482,101 @@ impl TimelineView {
         painter.rect_filled(clip_rect, 4.0, color);
 
         // Draw MIDI notes preview
-        for note in &clip.notes {
-            let note_x = clip_rect.left() + note.start as f32 * self.zoom_x;
-            let note_y = clip_rect.bottom() - ((note.pitch as f32 / 153.0) * clip_rect.height());
-            let note_width = (note.duration as f32 * self.zoom_x).max(2.0);
+        let content_len = clip.content_len_beats.max(0.000001);
+        let inst_len = clip.length_beats.max(0.0);
+        let clip_left = clip_rect.left();
 
-            painter.rect_filled(
-                egui::Rect::from_min_size(
-                    egui::pos2(note_x, note_y - 2.0),
-                    egui::vec2(note_width, 2.0),
-                ),
-                0.0,
-                egui::Color32::from_rgba_premultiplied(255, 255, 255, 100),
-            );
+        // Visible window in beats relative to clip start
+        let vis_start_rel: f64 =
+            ((track_rect.left() - clip_left) as f64 + self.scroll_x as f64) / self.zoom_x as f64;
+        let vis_end_rel: f64 =
+            ((track_rect.right() - clip_left) as f64 + self.scroll_x as f64) / self.zoom_x as f64;
+
+        let content_len = clip.content_len_beats.max(0.000001);
+
+        // Compute repeat range that intersects the visible window
+        let first_rep: i32 = if clip.loop_enabled {
+            (vis_start_rel / content_len).floor().max(0.0) as i32
+        } else {
+            0
+        };
+        let last_rep: i32 = if clip.loop_enabled {
+            (vis_end_rel / content_len).ceil().max(0.0) as i32
+        } else {
+            0
+        };
+
+        let color = if let Some((r, g, b)) = clip.color {
+            egui::Color32::from_rgb(r, g, b)
+        } else {
+            egui::Color32::from_rgb(100, 150, 200)
+        };
+        painter.rect_filled(clip_rect, 4.0, color);
+
+        // Optional: draw content segment dividers when looping
+        if clip.loop_enabled {
+            let reps = (inst_len / content_len).ceil() as i32;
+            for k in 1..reps {
+                let x = clip_rect.left() + (k as f32 * content_len as f32 * self.zoom_x);
+                if x >= track_rect.left() && x <= track_rect.right() {
+                    painter.line_segment(
+                        [
+                            egui::pos2(x, clip_rect.top()),
+                            egui::pos2(x, clip_rect.bottom()),
+                        ],
+                        egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgba_premultiplied(255, 255, 255, 40),
+                        ),
+                    );
+                }
+            }
+        }
+
+        let offset = clip
+            .content_offset_beats
+            .rem_euclid(clip.content_len_beats.max(0.000001));
+        for k in first_rep..=last_rep {
+            let rep_start = k as f64 * content_len;
+            if rep_start >= inst_len {
+                break;
+            }
+
+            for note in &clip.notes {
+                let s_loc = (note.start + offset as f64).rem_euclid(content_len);
+                let e_loc_raw = s_loc + note.duration;
+                let mut segs: smallvec::SmallVec<[(f64, f64); 2]> = smallvec::smallvec![];
+                if e_loc_raw <= content_len {
+                    segs.push((s_loc, e_loc_raw));
+                } else {
+                    segs.push((s_loc, content_len));
+                    segs.push((0.0, e_loc_raw - content_len));
+                }
+
+                for (s_local, e_local) in segs {
+                    let s = rep_start + s_local;
+                    if s >= inst_len {
+                        continue;
+                    }
+                    let e = (rep_start + e_local).min(inst_len);
+                    let seg_left = clip_rect.left() + (s as f32 * self.zoom_x);
+                    let seg_right = clip_rect.left() + (e as f32 * self.zoom_x);
+                    if seg_right < track_rect.left() || seg_left > track_rect.right() {
+                        continue;
+                    }
+
+                    let note_y =
+                        clip_rect.bottom() - ((note.pitch as f32 / 127.0) * clip_rect.height());
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(seg_left, note_y - 2.0),
+                            egui::vec2((seg_right - seg_left).max(2.0), 2.0),
+                        ),
+                        0.0,
+                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 100),
+                    );
+                }
+            }
         }
 
         // Clip name
@@ -513,13 +602,14 @@ impl TimelineView {
         }
 
         // MIDI clips' selection/drag/resize/delete
-        self.handle_clip_interaction(response, track_idx, clip_idx, clip_rect, app);
+        self.handle_clip_interaction(response, track_idx, ui, clip_idx, clip_rect, app);
     }
 
     fn handle_clip_interaction(
         &mut self,
         response: egui::Response,
         track_idx: usize,
+        ui: &mut egui::Ui,
         clip_idx: usize,
         clip_rect: egui::Rect,
         app: &mut super::app::YadawApp,
@@ -600,6 +690,38 @@ impl TimelineView {
                 .interact_pointer_pos()
                 .map(|pos| beat_at(pos.x, response.rect.left(), self.scroll_x, self.zoom_x))
                 .unwrap_or(clip_start);
+
+            let alt = ui.input(|i| i.modifiers.alt);
+            if alt && !hover_left && !hover_right {
+                // Slip content (Alt+drag)
+                // Read current offset/content_len once
+                let (start_offset, content_len) = {
+                    let state = app.state.lock().unwrap();
+                    if let Some(t) = state.tracks.get(track_idx) {
+                        if let Some(c) = t.midi_clips.get(clip_idx) {
+                            (c.content_offset_beats, c.content_len_beats.max(0.000001))
+                        } else {
+                            (0.0, 1.0)
+                        }
+                    } else {
+                        (0.0, 1.0)
+                    }
+                };
+                let start_mouse_beat = response
+                    .interact_pointer_pos()
+                    .map(|pos| {
+                        let rel = (pos.x - response.rect.left()) + self.scroll_x;
+                        (rel / self.zoom_x) as f64
+                    })
+                    .unwrap_or(0.0);
+                self.timeline_interaction = Some(TimelineInteraction::SlipContent {
+                    track_id: track_idx,
+                    clip_id: clip_idx,
+                    start_offset: start_offset.rem_euclid(content_len),
+                    start_mouse_beat,
+                });
+                return;
+            }
 
             if hover_left {
                 // Start resizing left edge
@@ -892,6 +1014,41 @@ impl TimelineView {
                             ));
                         }
                     }
+                    Some(TimelineInteraction::SlipContent {
+                        track_id,
+                        clip_id,
+                        start_offset,
+                        start_mouse_beat,
+                    }) => {
+                        if let Some(pos) = response.hover_pos() {
+                            let cur =
+                                ((pos.x - response.rect.left()) + self.scroll_x) / self.zoom_x;
+                            let delta = (cur as f64) - *start_mouse_beat;
+                            // Throttle sends like you do elsewhere (30 ms)
+                            let mem_root = egui::Id::new(("slip", *track_id, *clip_id));
+                            let due = {
+                                let last = ui
+                                    .ctx()
+                                    .memory(|m| m.data.get_temp::<std::time::Instant>(mem_root));
+                                last.map_or(true, |t| {
+                                    std::time::Instant::now().duration_since(t)
+                                        >= std::time::Duration::from_millis(30)
+                                })
+                            };
+                            if due {
+                                // Get content_len once to wrap server-side too, but send raw desired
+                                let new_off = *start_offset + delta;
+                                let _ = app.command_tx.send(
+                                    crate::messages::AudioCommand::SetClipContentOffset(
+                                        *track_id, *clip_id, new_off,
+                                    ),
+                                );
+                                ui.ctx().memory_mut(|m| {
+                                    m.data.insert_temp(mem_root, std::time::Instant::now())
+                                });
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1129,6 +1286,125 @@ impl TimelineView {
 
                         if ui.button("Fade Out").clicked() {
                             app.apply_fade_out();
+                            close_menu = true;
+                        }
+
+                        if ui.button("Toggle Loop").clicked() {
+                            if let Some((t, c)) = app.selected_clips.first().copied() {
+                                let state = app.state.lock().unwrap();
+                                let enabled = state
+                                    .tracks
+                                    .get(t)
+                                    .and_then(|tr| tr.midi_clips.get(c))
+                                    .map(|cl| !cl.loop_enabled)
+                                    .unwrap_or(true);
+                                drop(state);
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::ToggleClipLoop(t, c, enabled));
+                            }
+                            close_menu = true;
+                        }
+
+                        ui.separator();
+
+                        // Find the primary selected clip (first entry)
+                        let primary = app.selected_clips.first().copied();
+
+                        // Peek alias state once (no long locks)
+                        let (is_alias, track_id, clip_id) = if let Some((t, c)) = primary {
+                            let st = app.state.lock().unwrap();
+                            let is_alias = st
+                                .tracks
+                                .get(t)
+                                .and_then(|tr| tr.midi_clips.get(c))
+                                .and_then(|cl| cl.pattern_id)
+                                .is_some();
+                            (is_alias, Some(t), Some(c))
+                        } else {
+                            (false, None, None)
+                        };
+
+                        // Duplicate (independent)
+                        if ui.button("Duplicate (independent)").clicked() {
+                            if let (Some(t), Some(c)) = (track_id, clip_id) {
+                                let _ = app
+                                    .command_tx
+                                    .send(crate::messages::AudioCommand::DuplicateMidiClip(t, c));
+                            }
+                            close_menu = true;
+                        }
+
+                        // Duplicate as Alias (creates alias id if needed, duplicates as alias)
+                        if ui.button("Duplicate as Alias").clicked() {
+                            if let (Some(t), Some(c)) = (track_id, clip_id) {
+                                let _ = app.command_tx.send(
+                                    crate::messages::AudioCommand::DuplicateMidiClipAsAlias(t, c),
+                                );
+                            }
+                            close_menu = true;
+                        }
+
+                        // Make Unique (only enabled if this clip is currently an alias)
+                        let mut make_unique_btn = egui::Button::new("Make Unique");
+                        if ui.add_enabled(is_alias, make_unique_btn).clicked() {
+                            if let (Some(t), Some(c)) = (track_id, clip_id) {
+                                let _ = app
+                                    .command_tx
+                                    .send(crate::messages::AudioCommand::MakeClipUnique(t, c));
+                            }
+                            close_menu = true;
+                        }
+
+                        ui.separator();
+                        ui.label("Quantize");
+                        static GRIDS: [(&str, f32); 6] = [
+                            ("1/1", 1.0),
+                            ("1/2", 0.5),
+                            ("1/4", 0.25),
+                            ("1/8", 0.125),
+                            ("1/16", 0.0625),
+                            ("1/32", 0.03125),
+                        ];
+                        let (mut grid, mut strength, mut swing, mut enabled) = {
+                            let st = app.state.lock().unwrap();
+                            if let Some((t, c)) = app.selected_clips.first().copied() {
+                                if let Some(clip) =
+                                    st.tracks.get(t).and_then(|tr| tr.midi_clips.get(c))
+                                {
+                                    (
+                                        clip.quantize_grid,
+                                        clip.quantize_strength,
+                                        clip.swing,
+                                        clip.quantize_enabled,
+                                    )
+                                } else {
+                                    (0.25, 1.0, 0.0, false)
+                                }
+                            } else {
+                                (0.25, 1.0, 0.0, false)
+                            }
+                        };
+                        for (label, g) in GRIDS {
+                            if ui
+                                .selectable_label((grid - g).abs() < 1e-6, label)
+                                .clicked()
+                            {
+                                grid = g;
+                            }
+                        }
+                        ui.add(egui::Slider::new(&mut strength, 0.0..=1.0).text("Strength"));
+                        ui.add(egui::Slider::new(&mut swing, -0.5..=0.5).text("Swing"));
+                        let mut en = enabled;
+                        if ui.checkbox(&mut en, "Enabled").changed() {
+                            enabled = en;
+                        }
+                        if ui.button("Apply Quantize").clicked() {
+                            if let Some((t, c)) = app.selected_clips.first().copied() {
+                                let _ = app.command_tx.send(AudioCommand::SetClipQuantize(
+                                    t, c, grid, strength, swing, enabled,
+                                ));
+                            }
                             close_menu = true;
                         }
                     });

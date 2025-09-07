@@ -7,6 +7,21 @@ fn zero_u64() -> u64 {
     0
 }
 
+#[inline]
+fn default_zero_f64() -> f64 {
+    0.0
+}
+
+#[inline]
+fn default_quantize_grid() -> f32 {
+    0.25
+} // 1/4 beat = 16th notes
+
+#[inline]
+fn default_false() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MidiNote {
     #[serde(default = "zero_u64")]
@@ -23,36 +38,61 @@ pub struct MidiClip {
     pub id: u64,
     pub name: String,
     pub start_beat: f64,
-    pub length_beats: f64,
+    pub length_beats: f64, // instance length (can extend when looping)
     pub notes: Vec<MidiNote>,
     pub color: Option<(u8, u8, u8)>,
     pub velocity_offset: i8,
     pub transpose: i8,
+    #[serde(default = "default_false")]
     pub loop_enabled: bool,
+
+    #[serde(default)]
+    pub content_len_beats: f64,
+
+    #[serde(default)]
+    pub pattern_id: Option<u64>,
+
+    #[serde(default = "default_quantize_grid")]
+    pub quantize_grid: f32,
+    #[serde(default)]
+    pub quantize_strength: f32, // 0..1
+    #[serde(default = "default_false")]
+    pub quantize_enabled: bool,
+
     pub muted: bool,
     pub locked: bool,
     pub groove: Option<String>,
     pub swing: f32,
     pub humanize: f32,
+
+    #[serde(default = "default_zero_f64")]
+    pub content_offset_beats: f64,
 }
 
 impl Default for MidiClip {
     fn default() -> Self {
+        let length = DEFAULT_MIN_PROJECT_BEATS;
         Self {
             id: 0,
             name: "MIDI Clip".to_string(),
             start_beat: 0.0,
-            length_beats: DEFAULT_MIN_PROJECT_BEATS,
+            length_beats: length,
             notes: Vec::new(),
             color: Some((100, 150, 200)),
             velocity_offset: 0,
             transpose: 0,
             loop_enabled: false,
+            content_len_beats: length,
+            pattern_id: None,
+            quantize_grid: default_quantize_grid(),
+            quantize_strength: 1.0,
+            quantize_enabled: false,
             muted: false,
             locked: false,
             groove: None,
             swing: 0.0,
             humanize: 0.0,
+            content_offset_beats: 0.0,
         }
     }
 }

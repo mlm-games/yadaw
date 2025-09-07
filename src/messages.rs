@@ -106,6 +106,16 @@ pub enum AudioCommand {
     },
 
     ReserveNoteIds(usize),
+    ToggleClipLoop(usize, usize, bool), // track_id, clip_id, enabled
+    MakeClipAlias(usize, usize),        // assign pattern_id, mirror edits
+    MakeClipUnique(usize, usize),       // remove pattern_id
+    SetClipQuantize(usize, usize, f32, f32, f32, bool), // grid, strength, swing, enabled
+    DuplicateMidiClipAsAlias(usize, usize), // track_id, clip_id
+    SetClipContentOffset(usize, usize, f64),
+    UpdateMidiClipsSameNotes {
+        targets: Vec<(usize, usize)>, // (track_id, clip_id)
+        notes: Vec<MidiNote>,
+    },
 }
 
 #[derive(Debug, Clone)]

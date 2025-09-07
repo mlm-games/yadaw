@@ -62,8 +62,27 @@ fn midi_clip_to_snapshot(c: &MidiClip) -> MidiClipSnapshot {
         name: c.name.clone(),
         start_beat: c.start_beat,
         length_beats: c.length_beats,
+        content_len_beats: if c.content_len_beats > 0.0 {
+            c.content_len_beats
+        } else {
+            c.length_beats.max(0.000001)
+        },
+        loop_enabled: c.loop_enabled,
         notes: c.notes.iter().map(midi_note_to_snapshot).collect(),
         color: c.color,
+        transpose: c.transpose,
+        velocity_offset: c.velocity_offset,
+        quantize_enabled: c.quantize_enabled,
+        quantize_grid: c.quantize_grid.max(0.0),
+        quantize_strength: c.quantize_strength.clamp(0.0, 1.0),
+        swing: c.swing,
+        humanize: c.humanize,
+        content_offset_beats: if c.content_len_beats > 0.0 {
+            ((c.content_offset_beats % c.content_len_beats) + c.content_len_beats)
+                % c.content_len_beats
+        } else {
+            0.0
+        },
     }
 }
 

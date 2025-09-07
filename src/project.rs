@@ -171,14 +171,18 @@ impl AppState {
     pub fn ensure_ids(&mut self) {
         // Pass 1: find max existing id
         let mut max_id = 0u64;
-        for t in &self.tracks {
-            for c in &t.audio_clips {
-                max_id = max_id.max(c.id);
-            }
-            for c in &t.midi_clips {
-                max_id = max_id.max(c.id);
-                for n in &c.notes {
-                    max_id = max_id.max(n.id);
+        for t in &mut self.tracks {
+            for c in &mut t.midi_clips {
+                if c.content_len_beats <= 0.0 {
+                    c.content_len_beats = c.length_beats.max(0.000001);
+                }
+                // clamp/wrap any garbage offsets
+                if c.content_offset_beats.is_nan() {
+                    c.content_offset_beats = 0.0;
+                }
+                if c.content_len_beats > 0.0 {
+                    let len = c.content_len_beats;
+                    c.content_offset_beats = ((c.content_offset_beats % len) + len) % len;
                 }
             }
         }

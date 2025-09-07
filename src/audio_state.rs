@@ -101,8 +101,21 @@ pub struct MidiClipSnapshot {
     pub name: String,
     pub start_beat: f64,
     pub length_beats: f64,
+    pub content_len_beats: f64, // loop source length
+    pub loop_enabled: bool,
     pub notes: Vec<MidiNoteSnapshot>,
     pub color: Option<(u8, u8, u8)>,
+
+    pub transpose: i8,
+    pub velocity_offset: i8,
+
+    pub quantize_enabled: bool,
+    pub quantize_grid: f32,
+    pub quantize_strength: f32,
+    pub swing: f32,
+    pub humanize: f32,
+
+    pub content_offset_beats: f64,
 }
 
 #[derive(Debug, Clone)]
