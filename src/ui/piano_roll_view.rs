@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -589,11 +589,43 @@ impl PianoRollView {
                     self.editing_notes = model_notes;
 
                     // Clean up selection to only contain ids that still exist
-                    let ids: HashSet<u64> = self.editing_notes.iter().map(|n| n.id).collect();
-                    self.piano_roll
-                        .selected_note_ids
-                        .retain(|id| ids.contains(id));
-                    self.piano_roll.temp_selected_indices.clear();
+                    {
+                        // Build a quick map from (pitch,start,duration) to id for the refreshed notes
+                        let mut sig_to_id: HashMap<(u8, i64, i64), u64> = HashMap::new();
+                        for n in &self.editing_notes {
+                            // Use integer signature to avoid fp jitter
+                            let s = (
+                                (n.start * 1_000_000.0).round() as i64,
+                                (n.duration * 1_000_000.0).round() as i64,
+                            );
+                            sig_to_id.insert((n.pitch, s.0, s.1), n.id);
+                        }
+
+                        // Promote any temp-selected indices to ids
+                        for &idx in &self.piano_roll.temp_selected_indices {
+                            if let Some(n) = self.editing_notes.get(idx) {
+                                let s = (
+                                    (n.start * 1_000_000.0).round() as i64,
+                                    (n.duration * 1_000_000.0).round() as i64,
+                                );
+                                if let Some(id) = sig_to_id.get(&(n.pitch, s.0, s.1)).copied() {
+                                    if id != 0 && !self.piano_roll.selected_note_ids.contains(&id) {
+                                        self.piano_roll.selected_note_ids.push(id);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Now prune ids that disappeared
+                        let ids_now: std::collections::HashSet<u64> =
+                            self.editing_notes.iter().map(|n| n.id).collect();
+                        self.piano_roll
+                            .selected_note_ids
+                            .retain(|id| *id != 0 && ids_now.contains(id));
+
+                        // Finally clear temp indices
+                        self.piano_roll.temp_selected_indices.clear();
+                    }
                 }
             } else {
                 self.selected_clip = None;
@@ -687,13 +719,63 @@ impl PianoRollView {
             match a {
                 crate::piano_roll::PianoRollAction::AddNote(n) => {
                     let mut nn = *n;
+
+                    // Snap epsilon to treat same-cell adds as duplicates
+                    const EPS: f64 = 1e-6;
+
+                    // Duplicate check: same pitch, same snapped start
+                    if let Some(existing_idx) = self
+                        .editing_notes
+                        .iter()
+                        .position(|x| x.pitch == nn.pitch && (x.start - nn.start).abs() < EPS)
+                    {
+                        // Select the existing note instead of adding a duplicate
+                        let additive = ui.input(|i| i.modifiers.shift || i.modifiers.ctrl);
+
+                        if !additive {
+                            self.piano_roll.selected_note_ids.clear();
+                            self.piano_roll.temp_selected_indices.clear();
+                        }
+                        let existing = self.editing_notes[existing_idx];
+                        if existing.id != 0 {
+                            if !self.piano_roll.selected_note_ids.contains(&existing.id) {
+                                self.piano_roll.selected_note_ids.push(existing.id);
+                            }
+                        } else if !self
+                            .piano_roll
+                            .temp_selected_indices
+                            .contains(&existing_idx)
+                        {
+                            self.piano_roll.temp_selected_indices.push(existing_idx);
+                        }
+                        // No change to notes; don’t mark action_changed
+                        continue;
+                    }
+
+                    // Assign an id if we have a reserved one (helps keep selection stable later)
                     if nn.id == 0 {
                         if let Some(id) = app.reserved_note_ids.pop() {
                             nn.id = id;
                         }
                     }
+
+                    // Add note
+                    let new_index = self.editing_notes.len();
                     self.editing_notes.push(nn);
                     action_changed = true;
+
+                    // Select the newly added note (additive with Shift/Ctrl)
+                    let additive = ui.input(|i| i.modifiers.shift || i.modifiers.ctrl);
+                    if !additive {
+                        self.piano_roll.selected_note_ids.clear();
+                        self.piano_roll.temp_selected_indices.clear();
+                    }
+                    let just = self.editing_notes[new_index];
+                    if just.id != 0 {
+                        self.piano_roll.selected_note_ids.push(just.id);
+                    } else {
+                        self.piano_roll.temp_selected_indices.push(new_index);
+                    }
                 }
                 crate::piano_roll::PianoRollAction::RemoveNote(idx) => {
                     if *idx < self.editing_notes.len() {
