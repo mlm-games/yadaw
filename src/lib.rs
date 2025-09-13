@@ -44,7 +44,7 @@ fn android_main(app: android_activity::AndroidApp) {
     log::info!("Starting YADAW on Android...");
 
     // Start your app. If it errors, log it rather than abort.
-    if let Err(e) = crate::entry::run_app() {
+    if let Err(e) = crate::entry::run_app_android(app) {
         log::error!("android_main error: {e}");
     }
 }

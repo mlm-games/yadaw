@@ -10,6 +10,10 @@ use crate::{
 };
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_os = "android")]
+use android_activity::AndroidApp;
+
+#[cfg(not(target_os = "android"))]
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Logging
     #[cfg(not(target_os = "android"))]
@@ -79,6 +83,98 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     // UI
     let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 720.0])
+            .with_min_inner_size([800.0, 600.0]),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "YADAW - Yet Another DAW",
+        native_options,
+        Box::new(move |_cc| {
+            Ok(Box::new(ui::YadawApp::new(
+                app_state.clone(),
+                audio_state.clone(),
+                command_tx.clone(),
+                ui_rx,
+                available_plugins,
+                config,
+            )))
+        }),
+    )?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
+    use eframe::wgpu;
+
+    // Initialize logging
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("yadaw"),
+    );
+
+    log::info!("Starting YADAW...");
+
+    // Load configuration
+    let config = Config::load().unwrap_or_default();
+
+    // Initialize state
+    let app_state = Arc::new(Mutex::new(crate::project::AppState::default()));
+    let audio_state = Arc::new(AudioState::new());
+
+    // Create channels
+    let (command_tx, command_rx) = crossbeam_channel::unbounded::<AudioCommand>();
+    let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
+    let (ui_tx, ui_rx) = crossbeam_channel::unbounded::<UIUpdate>();
+
+    // Initialize plugin host
+    plugin_host::init(
+        audio_state.sample_rate.load() as f64,
+        constants::MAX_BUFFER_SIZE,
+    )?;
+
+    log::info!("Scanning for plugins...");
+    let mut plugin_scanner = PluginScanner::new();
+    plugin_scanner.discover_plugins();
+    let available_plugins = plugin_scanner.get_plugins();
+    log::info!("Found {} LV2 plugins", available_plugins.len());
+
+    // Start audio thread
+    {
+        let audio_state_clone = audio_state.clone();
+        let ui_tx_audio = ui_tx.clone();
+        std::thread::spawn(move || {
+            audio::run_audio_thread(audio_state_clone, realtime_rx, ui_tx_audio);
+        });
+    }
+
+    // Start command processor
+    {
+        let app_state_clone = app_state.clone();
+        let audio_state_clone = audio_state.clone();
+        let ui_tx_clone = ui_tx.clone();
+        std::thread::spawn(move || {
+            run_command_processor(
+                app_state_clone,
+                audio_state_clone,
+                command_rx,
+                realtime_tx,
+                ui_tx_clone,
+            );
+        });
+    }
+
+    // Prime audio graph
+    let _ = command_tx.send(AudioCommand::UpdateTracks);
+
+    // Android-specific eframe options
+    let native_options = eframe::NativeOptions {
+        android_app: Some(app), // Pass the Android app here!
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
             .with_min_inner_size([800.0, 600.0]),

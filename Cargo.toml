@@ -19,7 +19,7 @@ cpal = "0.16.0"
 chrono = { version = "0.4", features = ["serde"] }
 
 egui = "0.32.1"
-eframe = "0.32.1"
+eframe = { version = "0.32.1", features = ["wgpu"] }
 egui-file-dialog = "0.11"
 
 # Utilities
