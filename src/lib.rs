@@ -1,3 +1,6 @@
+#[cfg(target_os = "android")]
+use android_activity::WindowManagerFlags;
+
 pub mod audio;
 pub mod audio_import;
 pub mod audio_snapshot;
@@ -33,6 +36,11 @@ pub mod waveform;
 #[unsafe(no_mangle)]
 fn android_main(app: android_activity::AndroidApp) {
     use android_activity::AndroidApp;
+
+    app.set_window_flags(
+        WindowManagerFlags::FULLSCREEN | WindowManagerFlags::LAYOUT_NO_LIMITS,
+        WindowManagerFlags::empty(),
+    );
 
     // Initialize Android logging
     android_logger::init_once(
