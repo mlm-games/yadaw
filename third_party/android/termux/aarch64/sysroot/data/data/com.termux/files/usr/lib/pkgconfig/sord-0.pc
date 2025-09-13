@@ -1,0 +1,12 @@
+prefix=/data/data/com.termux/files/usr
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: Sord
+Description: Lightweight C library for storing RDF in memory
+Version: 0.16.18
+Requires: serd-0 >=  0.30.10
+Requires.private: zix-0 >=  0.4.0
+Libs: -L${libdir} -lsord-0
+Libs.private: -lm
+Cflags: -I${includedir}/sord-0

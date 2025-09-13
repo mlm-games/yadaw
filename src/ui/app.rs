@@ -18,6 +18,7 @@ use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
+use egui_file_dialog::FileDialog;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -79,6 +80,20 @@ pub struct YadawApp {
     pub(super) active_edit_target: ActiveEditTarget,
     pub(crate) reserved_note_ids: Vec<u64>,
     pub(crate) last_real_metrics_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileDialogPurpose {
+    None,
+    OpenProject,
+    SaveProject,
+    ImportAudio,
+    ExportAudio,
+    BrowsePluginPath,
+    SaveTheme,
+    LoadTheme,
+    LoadLayout,
+    SaveLayout,
 }
 
 struct TouchState {
@@ -645,32 +660,7 @@ impl YadawApp {
     }
 
     pub fn import_audio_dialog(&mut self) {
-        let bpm = self.audio_state.bpm.load();
-
-        if let Some(paths) = rfd::FileDialog::new()
-            .add_filter("Audio Files", &["wav", "mp3", "flac", "ogg"])
-            .add_filter("All Files", &["*"])
-            .pick_files()
-        {
-            self.push_undo();
-
-            for path in paths {
-                crate::audio_import::import_audio_file(&path, bpm)
-                    .map_err(|e| common::audio_import_failed(&path, e))
-                    .map(|clip| {
-                        let mut state = self.state.lock().unwrap();
-                        if let Some(track) = state.tracks.get_mut(self.selected_track) {
-                            if !track.is_midi {
-                                track.audio_clips.push(clip);
-                            } else {
-                                self.dialogs
-                                    .show_warning("Cannot import audio to MIDI track");
-                            }
-                        }
-                    })
-                    .notify_user(&mut self.dialogs);
-            }
-        }
+        self.dialogs.open_import_audio();
     }
 
     pub fn export_audio_dialog(&mut self) {

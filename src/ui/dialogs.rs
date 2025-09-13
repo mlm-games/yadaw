@@ -1,8 +1,13 @@
+use std::path::PathBuf;
+
+use egui_file_dialog::FileDialog;
+
 use super::*;
 use crate::edit_actions::EditProcessor;
-use crate::error::UserNotification;
+use crate::error::{common, ResultExt, UserNotification};
 use crate::plugin::categorize_plugin;
 use crate::messages::AudioCommand;
+use crate::ui::app::FileDialogPurpose;
 use crate::ui::theme;
 
 macro_rules! simple_dialog {
@@ -235,7 +240,7 @@ pub struct DialogManager {
     pub progress_bar: Option<ProgressBar>,
     pub track_grouping: Option<TrackGroupingDialog>,
     pub track_rename: Option<TrackRenameDialog>,
-
+    pub import_audio: Option<ImportAudioDialog>,
 }
 
 impl DialogManager {
@@ -258,7 +263,14 @@ impl DialogManager {
             progress_bar: None,
             track_grouping: None,
             track_rename: None,
+            import_audio: None,
         }
+    }
+
+    pub fn open_import_audio(&mut self) {
+        let mut dlg = ImportAudioDialog::new();
+        dlg.open();
+        self.import_audio = Some(dlg);
     }
 
     pub fn show_all(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
@@ -375,6 +387,10 @@ impl DialogManager {
                 self.track_rename = Some(d);
             }
         }
+        if let Some(d) = self.import_audio.as_mut() { d.show(ctx, app); }
+        if let Some(d) = &self.import_audio {
+            if !d.is_open() { self.import_audio = None; }
+        }
     }
 
     pub fn show_project_settings(&mut self) {
@@ -438,23 +454,29 @@ impl DialogManager {
 // Individual dialog implementations
 pub struct OpenDialog {
     closed: bool,
+    fd: FileDialog,
+    opened: bool,
 }
 
 impl OpenDialog {
     pub fn new() -> Self {
-        Self { closed: false }
+        let fd = FileDialog::new()
+            .title("Open Project")
+            .add_file_filter_extensions("YADAW Project", (&["yadaw", "ydw"]).to_vec())
+            .add_file_filter_extensions("All Files", (&["*"]).to_vec());
+        Self { closed: false, fd, opened: false }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        // Use native file dialog
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("YADAW Project", &["yadaw"])
-            .add_filter("All Files", &["*"])
-            .pick_file()
-        {
-            app.load_project_from_path(&path);
+        if !self.opened {
+            self.fd.pick_file();
+            self.opened = true;
         }
-        self.closed = true;
+        self.fd.update(ctx);
+        if let Some(path) = self.fd.take_picked() {
+            app.load_project_from_path(&path);
+            self.closed = true;
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -464,23 +486,30 @@ impl OpenDialog {
 
 pub struct SaveDialog {
     closed: bool,
+    fd: FileDialog,
+    opened: bool,
 }
 
 impl SaveDialog {
     pub fn new() -> Self {
-        Self { closed: false }
+        let fd = FileDialog::new()
+            .title("Save Project")
+            .default_file_name("untitled.yadaw")
+            .add_file_filter_extensions("YADAW Project", (&["yadaw"]).to_vec())
+            .allow_file_overwrite(true);
+        Self { closed: false, fd, opened: false }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        // Use native file dialog
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("YADAW Project", &["yadaw"])
-            .set_file_name("untitled.yadaw")
-            .save_file()
-        {
-            app.save_project_to_path(&path);
+        if !self.opened {
+            self.fd.save_file();
+            self.opened = true;
         }
-        self.closed = true;
+        self.fd.update(ctx);
+        if let Some(path) = self.fd.take_picked() {
+            app.save_project_to_path(&path);
+            self.closed = true;
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -1186,10 +1215,13 @@ pub struct PluginManagerDialog {
     closed: bool,
     scan_paths: Vec<String>,
     new_path: String,
+    browse_fd: FileDialog,
+    browse_opened: bool,
 }
-
 impl PluginManagerDialog {
     pub fn new() -> Self {
+        let browse_fd = FileDialog::new()
+            .title("Select Plugin Directory");
         Self {
             closed: false,
             scan_paths: vec![
@@ -1198,15 +1230,17 @@ impl PluginManagerDialog {
                 "/usr/local/lib/lv2".to_string(),
             ],
             new_path: String::new(),
+            browse_fd,
+            browse_opened: false,
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, _app: &mut super::app::YadawApp) {
+    pub fn show(&mut self, ctx: &egui::Context, app: &mut YadawApp) {
         let mut open = true;
 
         egui::Window::new("Plugin Manager")
             .open(&mut open)
-            .default_size(egui::vec2(500.0, 400.0))
+            .default_size(egui::vec2(600.0, 500.0))
             .resizable(true)
             .show(ctx, |ui| {
                 ui.heading("Plugin Scan Paths");
@@ -1232,6 +1266,7 @@ impl PluginManagerDialog {
 
                 ui.separator();
 
+                // Add path section
                 ui.horizontal(|ui| {
                     ui.text_edit_singleline(&mut self.new_path);
                     if ui.button("Add Path").clicked() && !self.new_path.is_empty() {
@@ -1239,9 +1274,8 @@ impl PluginManagerDialog {
                         self.new_path.clear();
                     }
                     if ui.button("Browse...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                            self.scan_paths.push(path.to_string_lossy().to_string());
-                        }
+                        self.browse_fd.pick_directory();
+                        self.browse_opened = true;
                     }
                 });
 
@@ -1258,6 +1292,14 @@ impl PluginManagerDialog {
                 }
             });
 
+        if self.browse_opened {
+            self.browse_fd.update(ctx);
+            if let Some(path) = self.browse_fd.take_picked() {
+                self.scan_paths.push(path.to_string_lossy().to_string());
+                self.browse_opened = false;
+            }
+        }
+
         if !open {
             self.closed = true;
         }
@@ -1266,6 +1308,53 @@ impl PluginManagerDialog {
     pub fn is_closed(&self) -> bool {
         self.closed
     }
+}
+
+pub struct ImportAudioDialog {
+    fd: FileDialog,
+    opened: bool,
+}
+
+impl ImportAudioDialog {
+    pub fn new() -> Self {
+        let fd = FileDialog::new()
+            .title("Import Audio")
+            .add_file_filter_extensions("Audio Files", (&["wav", "mp3", "flac", "ogg", "m4a", "aac"]).to_vec())
+            .add_file_filter_extensions("All Files", (&["*"]).to_vec());
+        Self { fd, opened: false }
+    }
+
+    pub fn open(&mut self) {
+        self.fd.pick_multiple(); // precise 0.11 API for multi-select
+        self.opened = true;
+    }
+
+    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
+        if !self.opened { return; }
+        self.fd.update(ctx);
+        if let Some(paths) = self.fd.take_picked_multiple() {
+            app.push_undo();
+            let bpm = app.audio_state.bpm.load();
+            for path in paths {
+                crate::audio_import::import_audio_file(&path, bpm)
+                    .map_err(|e| common::audio_import_failed(&path, e))
+                    .map(|clip| {
+                        let mut state = app.state.lock().unwrap();
+                        if let Some(track) = state.tracks.get_mut(app.selected_track) {
+                            if !track.is_midi {
+                                track.audio_clips.push(clip);
+                            } else {
+                                app.dialogs.show_warning("Cannot import audio to MIDI track");
+                            }
+                        }
+                    })
+                    .notify_user(&mut app.dialogs);
+            }
+            self.opened = false;
+        }
+    }
+
+    pub fn is_open(&self) -> bool { self.opened }
 }
 
 pub struct LayoutManagerDialog {

@@ -1,0 +1,11 @@
+prefix=/data/data/com.termux/files/usr
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: Sratom
+Description: Small library for serializing LV2 atoms
+Version: 0.6.18
+Requires: serd-0 >=  0.30.10, sord-0 >=  0.16.16, lv2 >=  1.18.4
+Libs: -L${libdir} -lsratom-0
+Libs.private: -lm
+Cflags: -I${includedir}/sratom-0
