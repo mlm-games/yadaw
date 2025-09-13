@@ -240,7 +240,7 @@ impl PianoRoll {
 
                         let pitch_y = grid_pos.y - click_offset.y + self.scroll_y;
                         let pitch_float = 127.0 - (pitch_y / self.zoom_y);
-                        let pitch = pitch_float.round() as i32;
+                        let pitch = pitch_float.floor().clamp(0.0, 127.0) as i32;
 
                         if let Some((_, first_original)) = initial_positions.first() {
                             let beat_delta = snapped_beat as f64 - first_original.start;
@@ -379,7 +379,7 @@ impl PianoRoll {
                     let grid_pos = pos - grid_rect.min;
                     let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
                     let pitch_float = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
-                    let pitch = pitch_float.round().clamp(0.0, 127.0) as u8;
+                    let pitch = pitch_float.floor().clamp(0.0, 127.0) as u8;
                     let snapped_beat = ((beat / self.grid_snap).round() * self.grid_snap).max(0.0);
                     if (snapped_beat as f64) < pattern.length_beats {
                         let duration =
@@ -406,7 +406,7 @@ impl PianoRoll {
                     } else {
                         let grid_pos = pos - grid_rect.min;
                         let pitch_float = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
-                        let pitch = pitch_float.round().clamp(0.0, 127.0) as u8;
+                        let pitch = pitch_float.floor().clamp(0.0, 127.0) as u8;
                         actions.push(PianoRollAction::PreviewNote(pitch));
                     }
                 } else if let Some(hover_idx) = self.hover_note {
@@ -422,7 +422,7 @@ impl PianoRoll {
                     let grid_pos = pos - grid_rect.min;
                     let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
                     let pitch_float = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
-                    let pitch = pitch_float.round().clamp(0.0, 127.0) as u8;
+                    let pitch = pitch_float.floor().clamp(0.0, 127.0) as u8;
                     let snapped_beat = ((beat / self.grid_snap).round() * self.grid_snap).max(0.0);
                     if (snapped_beat as f64) < pattern.length_beats {
                         let duration =
@@ -896,7 +896,7 @@ impl PianoRoll {
         for octave in 0..11 {
             for &key in &white_keys {
                 let pitch = octave * 12 + key;
-                let y = self.pitch_to_y(pitch as f32, rect);
+                let y = self.pitch_to_y(pitch as f32 + 0.5, rect);
 
                 if y >= rect.min.y - self.zoom_y && y <= rect.max.y + self.zoom_y {
                     let key_rect = egui::Rect::from_min_size(
@@ -1079,4 +1079,9 @@ pub enum PianoRollAction {
     UpdateNote(usize, MidiNote),
     PreviewNote(u8),
     StopPreview,
+}
+
+pub fn y_to_pitch(y_pixels: f32, scroll_y: f32, zoom_y: f32) -> u8 {
+    let pf = 127.0 - ((y_pixels + scroll_y) / zoom_y);
+    pf.floor().clamp(0.0, 127.0) as u8
 }
