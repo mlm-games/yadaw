@@ -896,7 +896,7 @@ impl PianoRoll {
         for octave in 0..11 {
             for &key in &white_keys {
                 let pitch = octave * 12 + key;
-                let y = self.pitch_to_y(pitch as f32 + 0.5, rect);
+                let y = self.pitch_to_y(pitch as f32, rect);
 
                 if y >= rect.min.y - self.zoom_y && y <= rect.max.y + self.zoom_y {
                     let key_rect = egui::Rect::from_min_size(
