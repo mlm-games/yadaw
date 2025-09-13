@@ -66,7 +66,12 @@ enum ResizeEdge {
 }
 
 impl PianoRoll {
-    pub fn ui(&mut self, ui: &mut egui::Ui, pattern: &mut MidiClip) -> Vec<PianoRollAction> {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        pattern: &mut MidiClip,
+        allow_add_on_click: bool,
+    ) -> Vec<PianoRollAction> {
         let mut actions = Vec::new();
         let available_rect = ui.available_rect_before_wrap();
 
@@ -398,44 +403,87 @@ impl PianoRoll {
         // Single click (with Alt audition preserved)
         else if response.clicked() && !response.dragged() {
             if let Some(pos) = response.interact_pointer_pos() {
+                // 1) Detect if the tap hit an existing note right now (not relying on hover)
+                let clicked_idx = pattern
+                    .notes
+                    .iter()
+                    .enumerate()
+                    .rev() // top-most first if overlapping
+                    .find(|(_, n)| self.note_rect(n, grid_rect).contains(pos))
+                    .map(|(i, _)| i);
+
                 if ui.input(|i| i.modifiers.alt) {
-                    if let Some(hover_idx) = self.hover_note {
-                        if let Some(n) = pattern.notes.get(hover_idx) {
+                    // Alt = preview
+                    if let Some(idx) = clicked_idx {
+                        if let Some(n) = pattern.notes.get(idx) {
                             actions.push(PianoRollAction::PreviewNote(n.pitch));
                         }
                     } else {
-                        let grid_pos = pos - grid_rect.min;
-                        let pitch_float = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
-                        let pitch = pitch_float.floor().clamp(0.0, 127.0) as u8;
+                        let pitch = {
+                            let pf =
+                                127.0 - ((pos.y - grid_rect.min.y + self.scroll_y) / self.zoom_y);
+                            pf.floor().clamp(0.0, 127.0) as u8
+                        };
                         actions.push(PianoRollAction::PreviewNote(pitch));
                     }
-                } else if let Some(hover_idx) = self.hover_note {
+                    return actions;
+                }
+
+                if let Some(idx) = clicked_idx {
+                    // Selection behavior (respect multi-select modifiers)
                     if ui.input(|i| i.modifiers.ctrl || i.modifiers.command) {
-                        self.toggle_single(&pattern.notes[hover_idx], hover_idx);
+                        self.toggle_single(&pattern.notes[idx], idx);
                     } else {
-                        self.select_single(&pattern.notes[hover_idx], hover_idx, false);
+                        self.select_single(&pattern.notes[idx], idx, false);
                     }
-                } else {
-                    if !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl) {
-                        self.clear_selection();
-                    }
+                    // No AddNote action
+                    return actions;
+                }
+
+                // 3) Otherwise it's empty space: only add if allowed (Draw tool), else do nothing
+                if allow_add_on_click {
                     let grid_pos = pos - grid_rect.min;
                     let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
-                    let pitch_float = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
-                    let pitch = pitch_float.floor().clamp(0.0, 127.0) as u8;
-                    let snapped_beat = ((beat / self.grid_snap).round() * self.grid_snap).max(0.0);
-                    if (snapped_beat as f64) < pattern.length_beats {
-                        let duration =
-                            (self.grid_snap as f64).min(pattern.length_beats - snapped_beat as f64);
+                    let snapped_beat = if self.grid_snap > 0.0 {
+                        ((beat / self.grid_snap) as f64).round() * self.grid_snap as f64
+                    } else {
+                        beat as f64
+                    }
+                    .max(0.0);
+
+                    // compute pitch with floor (so tap matches visual row)
+                    let pitch = {
+                        let pf = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
+                        pf.floor().clamp(0.0, 127.0) as u8
+                    };
+
+                    // Keep duration at grid size (or your minimum)
+                    let duration = if self.grid_snap > 0.0 {
+                        self.grid_snap as f64
+                    } else {
+                        0.25f64
+                    };
+
+                    // Don’t add on top of an existing same-cell note; select it instead.
+                    const EPS: f64 = 1e-6;
+                    if let Some(existing_idx) = pattern
+                        .notes
+                        .iter()
+                        .position(|n| n.pitch == pitch && (n.start - snapped_beat).abs() < EPS)
+                    {
+                        // Select existing
+                        self.select_single(&pattern.notes[existing_idx], existing_idx, false);
+                    } else {
                         actions.push(PianoRollAction::AddNote(MidiNote {
                             id: 0,
                             pitch,
                             velocity: 100,
-                            start: snapped_beat as f64,
+                            start: snapped_beat,
                             duration,
                         }));
                     }
                 }
+                // If not allowed to add (Select tool): do nothing on empty space tap
             }
         }
 

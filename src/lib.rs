@@ -1,6 +1,3 @@
-#[cfg(target_os = "android")]
-use android_activity::WindowManagerFlags;
-
 pub mod audio;
 pub mod audio_import;
 pub mod audio_snapshot;
@@ -31,6 +28,9 @@ pub mod track_manager;
 pub mod transport;
 pub mod ui;
 pub mod waveform;
+
+#[cfg(target_os = "android")]
+use android_activity::WindowManagerFlags;
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]

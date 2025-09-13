@@ -711,7 +711,9 @@ impl PianoRollView {
             }
         }
 
-        let actions = self.piano_roll.ui(ui, &mut temp_clip);
+        let actions = self
+            .piano_roll
+            .ui(ui, &mut temp_clip, self.tool_mode == ToolMode::Draw);
 
         // Apply actions (assign IDs on AddNote immediately if possible)
         let mut action_changed = false;
