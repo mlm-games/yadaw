@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use egui::scroll_area::ScrollSource;
 use rayon::vec;
 
 use super::*;
@@ -363,206 +364,221 @@ impl PianoRollView {
     }
 
     fn draw_header(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        ui.horizontal(|ui| {
-            ui.heading("Piano Roll");
+        egui::ScrollArea::horizontal()
+            .id_salt("pr_tool_strip")
+            .scroll_source(ScrollSource::ALL)
+            // .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Piano Roll");
 
-            ui.separator();
+                    ui.separator();
 
-            // Clip selector
-            ui.label("MIDI Clip:");
-            let state = app.state.lock().unwrap();
-            if let Some(track) = state.tracks.get(app.selected_track) {
-                let selected_text = if let Some(clip_idx) = self.selected_clip {
-                    track
-                        .midi_clips
-                        .get(clip_idx)
-                        .map(|c| c.name.as_str())
-                        .unwrap_or("No Clip")
-                } else {
-                    "No Clip Selected"
-                };
+                    // Clip selector
+                    ui.label("MIDI Clip:");
+                    let state = app.state.lock().unwrap();
+                    if let Some(track) = state.tracks.get(app.selected_track) {
+                        let selected_text = if let Some(clip_idx) = self.selected_clip {
+                            track
+                                .midi_clips
+                                .get(clip_idx)
+                                .map(|c| c.name.as_str())
+                                .unwrap_or("No Clip")
+                        } else {
+                            "No Clip Selected"
+                        };
 
-                egui::ComboBox::from_id_salt("clip_selector")
-                    .selected_text(selected_text)
-                    .show_ui(ui, |ui| {
-                        for (i, clip) in track.midi_clips.iter().enumerate() {
-                            if ui
-                                .selectable_value(&mut self.selected_clip, Some(i), &clip.name)
-                                .clicked()
-                            {
-                                // Load clip notes for editing
-                                self.editing_notes = clip.notes.clone();
+                        egui::ComboBox::from_id_salt("clip_selector")
+                            .selected_text(selected_text)
+                            .show_ui(ui, |ui| {
+                                for (i, clip) in track.midi_clips.iter().enumerate() {
+                                    if ui
+                                        .selectable_value(
+                                            &mut self.selected_clip,
+                                            Some(i),
+                                            &clip.name,
+                                        )
+                                        .clicked()
+                                    {
+                                        // Load clip notes for editing
+                                        self.editing_notes = clip.notes.clone();
+                                    }
+                                }
+                            });
+
+                        // Create new clip button
+                        if ui
+                            .button("➕")
+                            .on_hover_text("Create New MIDI Clip")
+                            .clicked()
+                        {
+                            let current_beat =
+                                state.position_to_beats(app.audio_state.get_position());
+                            let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
+                                app.selected_track,
+                                current_beat,
+                                DEFAULT_MIDI_CLIP_LEN, // Default 1 bar length
+                            ));
+                        }
+
+                        // Duplicate clip button
+                        if ui.button("⎘").on_hover_text("Duplicate Clip").clicked() {
+                            if let Some(clip_idx) = self.selected_clip {
+                                if let Some(clip) = track.midi_clips.get(clip_idx) {
+                                    let new_clip = MidiClip {
+                                        name: format!("{} (copy)", clip.name),
+                                        start_beat: clip.start_beat + clip.length_beats,
+                                        length_beats: clip.length_beats,
+                                        notes: clip.notes.clone(),
+                                        color: clip.color,
+                                        ..Default::default()
+                                    };
+                                    // Add the duplicated clip
+                                    let _ =
+                                        app.command_tx.send(AudioCommand::CreateMidiClipWithData(
+                                            app.selected_track,
+                                            new_clip,
+                                        ));
+                                }
                             }
+                        }
+
+                        // Delete clip button
+                        if self.selected_clip.is_some() {
+                            if ui.button("🗑").on_hover_text("Delete Clip").clicked() {
+                                if let Some(clip_idx) = self.selected_clip {
+                                    let _ = app.command_tx.send(AudioCommand::DeleteMidiClip(
+                                        app.selected_track,
+                                        clip_idx,
+                                    ));
+                                    self.selected_clip = None;
+                                    self.editing_notes.clear();
+                                }
+                            }
+                        }
+
+                        ui.checkbox(
+                            &mut self.write_to_all_selected,
+                            "Write to all selected clips",
+                        )
+                        .on_hover_text(
+                            "Apply edits to all selected MIDI clips (in addition to aliases).",
+                        );
+                    }
+                    drop(state);
+
+                    ui.separator();
+
+                    // Tool selection
+                    ui.label("Tool:");
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(self.tool_mode == ToolMode::Select, "↖")
+                            .on_hover_text("Select Tool")
+                            .clicked()
+                        {
+                            self.tool_mode = ToolMode::Select;
+                        }
+
+                        if ui
+                            .selectable_label(self.tool_mode == ToolMode::Draw, "✏")
+                            .on_hover_text("Draw Tool")
+                            .clicked()
+                        {
+                            self.tool_mode = ToolMode::Draw;
+                        }
+
+                        if ui
+                            .selectable_label(self.tool_mode == ToolMode::Erase, "⌫")
+                            .on_hover_text("Erase Tool")
+                            .clicked()
+                        {
+                            self.tool_mode = ToolMode::Erase;
+                        }
+
+                        if ui
+                            .selectable_label(self.tool_mode == ToolMode::Split, "✂")
+                            .on_hover_text("Split Tool")
+                            .clicked()
+                        {
+                            self.tool_mode = ToolMode::Split;
+                        }
+
+                        if ui
+                            .selectable_label(self.tool_mode == ToolMode::Glue, "⊕")
+                            .on_hover_text("Glue Tool")
+                            .clicked()
+                        {
+                            self.tool_mode = ToolMode::Glue;
+                        }
+
+                        if ui
+                            .selectable_label(self.tool_mode == ToolMode::Velocity, "⇅")
+                            .on_hover_text("Velocity Tool")
+                            .clicked()
+                        {
+                            self.tool_mode = ToolMode::Velocity;
                         }
                     });
 
-                // Create new clip button
-                if ui
-                    .button("➕")
-                    .on_hover_text("Create New MIDI Clip")
-                    .clicked()
-                {
-                    let current_beat = state.position_to_beats(app.audio_state.get_position());
-                    let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
-                        app.selected_track,
-                        current_beat,
-                        DEFAULT_MIDI_CLIP_LEN, // Default 1 bar length
-                    ));
-                }
+                    ui.separator();
 
-                // Duplicate clip button
-                if ui.button("⎘").on_hover_text("Duplicate Clip").clicked() {
-                    if let Some(clip_idx) = self.selected_clip {
-                        if let Some(clip) = track.midi_clips.get(clip_idx) {
-                            let new_clip = MidiClip {
-                                name: format!("{} (copy)", clip.name),
-                                start_beat: clip.start_beat + clip.length_beats,
-                                length_beats: clip.length_beats,
-                                notes: clip.notes.clone(),
-                                color: clip.color,
-                                ..Default::default()
-                            };
-                            // Add the duplicated clip
-                            let _ = app.command_tx.send(AudioCommand::CreateMidiClipWithData(
-                                app.selected_track,
-                                new_clip,
-                            ));
-                        }
+                    // Snap settings
+                    ui.label("Snap:");
+                    egui::ComboBox::from_id_salt("piano_roll_snap")
+                        .selected_text(format!("1/{}", (1.0 / self.piano_roll.grid_snap) as i32))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.piano_roll.grid_snap, 1.0, "1/1");
+                            ui.selectable_value(&mut self.piano_roll.grid_snap, 0.5, "1/2");
+                            ui.selectable_value(&mut self.piano_roll.grid_snap, 0.25, "1/4");
+                            ui.selectable_value(&mut self.piano_roll.grid_snap, 0.125, "1/8");
+                            ui.selectable_value(&mut self.piano_roll.grid_snap, 0.0625, "1/16");
+                            ui.selectable_value(&mut self.piano_roll.grid_snap, 0.03125, "1/32");
+                            ui.selectable_value(&mut self.piano_roll.grid_snap, 0.0, "Off");
+                        });
+
+                    ui.separator();
+
+                    // View options
+                    ui.checkbox(&mut self.show_velocity_lane, "Velocity")
+                        .on_hover_text("Show/Hide Velocity Lane");
+
+                    ui.checkbox(&mut self.show_controller_lanes, "Controllers")
+                        .on_hover_text("Show/Hide Controller Lanes");
+
+                    ui.separator();
+
+                    // MIDI input
+                    ui.checkbox(&mut self.midi_input_enabled, "MIDI In")
+                        .on_hover_text("Enable MIDI Input");
+
+                    if self.midi_input_enabled {
+                        ui.label("Octave:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.midi_octave_offset)
+                                .speed(1)
+                                .range(-4..=4),
+                        );
                     }
-                }
 
-                // Delete clip button
-                if self.selected_clip.is_some() {
-                    if ui.button("🗑").on_hover_text("Delete Clip").clicked() {
-                        if let Some(clip_idx) = self.selected_clip {
-                            let _ = app
-                                .command_tx
-                                .send(AudioCommand::DeleteMidiClip(app.selected_track, clip_idx));
-                            self.selected_clip = None;
-                            self.editing_notes.clear();
-                        }
+                    ui.separator();
+
+                    // Zoom controls
+                    ui.label("Zoom:");
+                    if ui.button("−").clicked() {
+                        self.piano_roll.zoom_x = (self.piano_roll.zoom_x * 0.8).max(10.0);
+                        self.piano_roll.zoom_y = (self.piano_roll.zoom_y * 0.9).max(10.0);
                     }
-                }
-
-                ui.checkbox(
-                    &mut self.write_to_all_selected,
-                    "Write to all selected clips",
-                )
-                .on_hover_text("Apply edits to all selected MIDI clips (in addition to aliases).");
-            }
-            drop(state);
-
-            ui.separator();
-
-            // Tool selection
-            ui.label("Tool:");
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(self.tool_mode == ToolMode::Select, "↖")
-                    .on_hover_text("Select Tool")
-                    .clicked()
-                {
-                    self.tool_mode = ToolMode::Select;
-                }
-
-                if ui
-                    .selectable_label(self.tool_mode == ToolMode::Draw, "✏")
-                    .on_hover_text("Draw Tool")
-                    .clicked()
-                {
-                    self.tool_mode = ToolMode::Draw;
-                }
-
-                if ui
-                    .selectable_label(self.tool_mode == ToolMode::Erase, "⌫")
-                    .on_hover_text("Erase Tool")
-                    .clicked()
-                {
-                    self.tool_mode = ToolMode::Erase;
-                }
-
-                if ui
-                    .selectable_label(self.tool_mode == ToolMode::Split, "✂")
-                    .on_hover_text("Split Tool")
-                    .clicked()
-                {
-                    self.tool_mode = ToolMode::Split;
-                }
-
-                if ui
-                    .selectable_label(self.tool_mode == ToolMode::Glue, "⊕")
-                    .on_hover_text("Glue Tool")
-                    .clicked()
-                {
-                    self.tool_mode = ToolMode::Glue;
-                }
-
-                if ui
-                    .selectable_label(self.tool_mode == ToolMode::Velocity, "⇅")
-                    .on_hover_text("Velocity Tool")
-                    .clicked()
-                {
-                    self.tool_mode = ToolMode::Velocity;
-                }
-            });
-
-            ui.separator();
-
-            // Snap settings
-            ui.label("Snap:");
-            egui::ComboBox::from_id_salt("piano_roll_snap")
-                .selected_text(format!("1/{}", (1.0 / self.piano_roll.grid_snap) as i32))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.piano_roll.grid_snap, 1.0, "1/1");
-                    ui.selectable_value(&mut self.piano_roll.grid_snap, 0.5, "1/2");
-                    ui.selectable_value(&mut self.piano_roll.grid_snap, 0.25, "1/4");
-                    ui.selectable_value(&mut self.piano_roll.grid_snap, 0.125, "1/8");
-                    ui.selectable_value(&mut self.piano_roll.grid_snap, 0.0625, "1/16");
-                    ui.selectable_value(&mut self.piano_roll.grid_snap, 0.03125, "1/32");
-                    ui.selectable_value(&mut self.piano_roll.grid_snap, 0.0, "Off");
+                    if ui.button("╋").clicked() {
+                        self.piano_roll.zoom_x = (self.piano_roll.zoom_x * 1.25).min(500.0);
+                        self.piano_roll.zoom_y = (self.piano_roll.zoom_y * 1.1).min(50.0);
+                    }
+                    if ui.button("Reset").clicked() {
+                        self.piano_roll.zoom_x = 100.0;
+                        self.piano_roll.zoom_y = 20.0;
+                    }
                 });
-
-            ui.separator();
-
-            // View options
-            ui.checkbox(&mut self.show_velocity_lane, "Velocity")
-                .on_hover_text("Show/Hide Velocity Lane");
-
-            ui.checkbox(&mut self.show_controller_lanes, "Controllers")
-                .on_hover_text("Show/Hide Controller Lanes");
-
-            ui.separator();
-
-            // MIDI input
-            ui.checkbox(&mut self.midi_input_enabled, "MIDI In")
-                .on_hover_text("Enable MIDI Input");
-
-            if self.midi_input_enabled {
-                ui.label("Octave:");
-                ui.add(
-                    egui::DragValue::new(&mut self.midi_octave_offset)
-                        .speed(1)
-                        .range(-4..=4),
-                );
-            }
-
-            ui.separator();
-
-            // Zoom controls
-            ui.label("Zoom:");
-            if ui.button("−").clicked() {
-                self.piano_roll.zoom_x = (self.piano_roll.zoom_x * 0.8).max(10.0);
-                self.piano_roll.zoom_y = (self.piano_roll.zoom_y * 0.9).max(10.0);
-            }
-            if ui.button("╋").clicked() {
-                self.piano_roll.zoom_x = (self.piano_roll.zoom_x * 1.25).min(500.0);
-                self.piano_roll.zoom_y = (self.piano_roll.zoom_y * 1.1).min(50.0);
-            }
-            if ui.button("Reset").clicked() {
-                self.piano_roll.zoom_x = 100.0;
-                self.piano_roll.zoom_y = 20.0;
-            }
-        });
+            });
     }
 
     fn draw_piano_roll(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {

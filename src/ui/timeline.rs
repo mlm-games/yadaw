@@ -6,6 +6,7 @@ use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
 use crate::model::{AudioClip, MidiClip, Track};
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
+use egui::scroll_area::ScrollSource;
 use smallvec::SmallVec;
 
 pub struct TimelineView {
@@ -121,55 +122,60 @@ impl TimelineView {
     }
 
     fn draw_toolbar(&mut self, ui: &mut egui::Ui, app: &super::app::YadawApp) {
-        ui.horizontal(|ui| {
-            // Zoom controls
-            ui.label("Zoom:");
-            if ui.button("−").clicked() {
-                self.zoom_x = (self.zoom_x * 0.8).max(10.0);
-            }
-            if ui.button("╋").clicked() {
-                self.zoom_x = (self.zoom_x * 1.25).min(500.0);
-            }
-            ui.label(format!("{:.0}px/beat", self.zoom_x));
+        egui::ScrollArea::horizontal()
+            .id_salt("tl_tool_strip")
+            .scroll_source(ScrollSource::ALL)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Zoom controls
+                    ui.label("Zoom:");
+                    if ui.button("−").clicked() {
+                        self.zoom_x = (self.zoom_x * 0.8).max(10.0);
+                    }
+                    if ui.button("╋").clicked() {
+                        self.zoom_x = (self.zoom_x * 1.25).min(500.0);
+                    }
+                    ui.label(format!("{:.0}px/beat", self.zoom_x));
 
-            ui.separator();
+                    ui.separator();
 
-            // Track height
-            ui.label("Track Height:");
-            if ui
-                .add(
-                    egui::Slider::new(
-                        &mut self.track_height,
-                        self.min_track_height..=self.max_track_height,
-                    )
-                    .show_value(false),
-                )
-                .changed()
-            {
-                // Track height changed
-            }
+                    // Track height
+                    ui.label("Track Height:");
+                    if ui
+                        .add(
+                            egui::Slider::new(
+                                &mut self.track_height,
+                                self.min_track_height..=self.max_track_height,
+                            )
+                            .show_value(false),
+                        )
+                        .changed()
+                    {
+                        // Track height changed
+                    }
 
-            ui.separator();
+                    ui.separator();
 
-            // Grid snap
-            ui.label("Snap:");
-            egui::ComboBox::from_label("")
-                .selected_text(format!("1/{}", (1.0 / self.grid_snap) as i32))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.grid_snap, 1.0, "1/1");
-                    ui.selectable_value(&mut self.grid_snap, 0.5, "1/2");
-                    ui.selectable_value(&mut self.grid_snap, 0.25, "1/4");
-                    ui.selectable_value(&mut self.grid_snap, 0.125, "1/8");
-                    ui.selectable_value(&mut self.grid_snap, 0.0625, "1/16");
-                    ui.selectable_value(&mut self.grid_snap, 0.03125, "1/32");
+                    // Grid snap
+                    ui.label("Snap:");
+                    egui::ComboBox::from_label("")
+                        .selected_text(format!("1/{}", (1.0 / self.grid_snap) as i32))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.grid_snap, 1.0, "1/1");
+                            ui.selectable_value(&mut self.grid_snap, 0.5, "1/2");
+                            ui.selectable_value(&mut self.grid_snap, 0.25, "1/4");
+                            ui.selectable_value(&mut self.grid_snap, 0.125, "1/8");
+                            ui.selectable_value(&mut self.grid_snap, 0.0625, "1/16");
+                            ui.selectable_value(&mut self.grid_snap, 0.03125, "1/32");
+                        });
+
+                    ui.separator();
+
+                    // View options
+                    ui.checkbox(&mut self.show_automation, "Show Automation");
+                    ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
                 });
-
-            ui.separator();
-
-            // View options
-            ui.checkbox(&mut self.show_automation, "Show Automation");
-            ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
-        });
+            });
     }
 
     fn draw_timeline(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
