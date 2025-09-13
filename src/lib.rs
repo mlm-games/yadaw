@@ -7,6 +7,7 @@ pub mod command_processor;
 pub mod config;
 pub mod constants;
 pub mod edit_actions;
+pub mod entry;
 pub mod error;
 pub mod level_meter;
 pub mod lv2_plugin_host;
@@ -27,3 +28,23 @@ pub mod track_manager;
 pub mod transport;
 pub mod ui;
 pub mod waveform;
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+fn android_main(app: android_activity::AndroidApp) {
+    use android_activity::AndroidApp;
+
+    // Initialize Android logging
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("yadaw"),
+    );
+
+    log::info!("Starting YADAW on Android...");
+
+    // Start your app. If it errors, log it rather than abort.
+    if let Err(e) = crate::entry::run_app() {
+        log::error!("android_main error: {e}");
+    }
+}

@@ -1,0 +1,10 @@
+prefix=/data/data/com.termux/files/usr
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: Serd
+Description: Lightweight C library for working with RDF data
+Version: 0.32.4
+Libs: -L${libdir} -lserd-0
+Libs.private: -lm
+Cflags: -I${includedir}/serd-0
