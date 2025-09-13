@@ -88,6 +88,8 @@ impl PianoRollView {
                 ui.child_ui(roll_rect, egui::Layout::top_down(egui::Align::Min), None);
             self.draw_piano_roll(&mut roll_ui, app);
 
+            self.handle_touch_pan_zoom(ui.ctx(), roll_rect);
+
             // Foreground playhead overlay (topmost)
             if let Some(current_beat) = ui
                 .ctx()
@@ -1003,6 +1005,85 @@ impl PianoRollView {
                 egui::Color32::from_gray(100),
             );
         });
+    }
+
+    fn handle_touch_pan_zoom(&mut self, ctx: &egui::Context, roll_rect: egui::Rect) {
+        // IDs for temp memory
+        let id_centroid = egui::Id::new(("pr_gesture", "centroid"));
+        let id_dist = egui::Id::new(("pr_gesture", "dist"));
+
+        // 1) Gather touch points inside the roll rect (read-only; no memory calls here)
+        let points: Vec<egui::Pos2> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| {
+                    if let egui::Event::Touch { pos, phase, .. } = e {
+                        match phase {
+                            egui::TouchPhase::Start | egui::TouchPhase::Move => {
+                                if roll_rect.contains(*pos) {
+                                    Some(*pos)
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        });
+
+        // 2) If we have two touches, pan + pinch
+        if points.len() >= 2 {
+            let centroid = egui::pos2(
+                (points[0].x + points[1].x) * 0.5,
+                (points[0].y + points[1].y) * 0.5,
+            );
+            let dist = (points[0] - points[1]).length();
+
+            // Read previous gesture state (outside ctx.input)
+            let (prev_centroid, prev_dist) = ctx.memory(|m| {
+                (
+                    m.data.get_temp::<egui::Pos2>(id_centroid),
+                    m.data.get_temp::<f32>(id_dist),
+                )
+            });
+
+            if let (Some(pc), Some(pd)) = (prev_centroid, prev_dist) {
+                // Pan by centroid delta (pixels)
+                let delta = centroid - pc;
+                self.piano_roll.scroll_x = (self.piano_roll.scroll_x - delta.x).max(0.0);
+                self.piano_roll.scroll_y = (self.piano_roll.scroll_y - delta.y).max(0.0);
+
+                // Pinch zoom on X, keep pinch center anchored
+                if pd > 1.0 {
+                    let scale = (dist / pd).clamp(0.5, 2.0);
+                    let old_zoom_x = self.piano_roll.zoom_x;
+                    self.piano_roll.zoom_x = (self.piano_roll.zoom_x * scale).clamp(10.0, 500.0);
+
+                    if (self.piano_roll.zoom_x - old_zoom_x).abs() > f32::EPSILON {
+                        let grid_left = roll_rect.left() + crate::constants::PIANO_KEY_WIDTH;
+                        let cx = (centroid.x - grid_left + self.piano_roll.scroll_x) / old_zoom_x;
+                        self.piano_roll.scroll_x =
+                            (cx * self.piano_roll.zoom_x - (centroid.x - grid_left)).max(0.0);
+                    }
+                }
+            }
+
+            // Save gesture state for next frame (outside ctx.input)
+            ctx.memory_mut(|m| {
+                m.data.insert_temp(id_centroid, centroid);
+                m.data.insert_temp(id_dist, dist);
+            });
+        } else {
+            // No pinch -> clear temp state (outside ctx.input)
+            ctx.memory_mut(|m| {
+                m.data.remove::<egui::Pos2>(id_centroid);
+                m.data.remove::<f32>(id_dist);
+            });
+        }
     }
 }
 
