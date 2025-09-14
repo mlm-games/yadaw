@@ -426,21 +426,30 @@ impl TimelineView {
             return;
         }
 
+        // Beats -> px using the same transform as grid/clips
         let start_x = rect.left() + (loop_start as f32 * self.zoom_x - self.scroll_x);
         let end_x = rect.left() + (loop_end as f32 * self.zoom_x - self.scroll_x);
 
-        // Semi-transparent overlay below the ruler
+        // If fully off-screen, bail
+        if end_x <= rect.left() || start_x >= rect.right() {
+            return;
+        }
+
+        // Clamp overlay to canvas to avoid a degenerate rect
+        let left = start_x.max(rect.left());
+        let right = end_x.min(rect.right());
+
         let overlay = egui::Rect::from_min_max(
-            egui::pos2(start_x, rect.top() + 18.0),
-            egui::pos2(end_x, rect.bottom()),
+            egui::pos2(left, rect.top() + 18.0),
+            egui::pos2(right, rect.bottom()),
         );
         painter.rect_filled(
             overlay,
             0.0,
-            egui::Color32::from_rgba_premultiplied(100, 150, 255, 28),
+            egui::Color32::from_rgba_premultiplied(100, 150, 255, 64),
         );
 
-        // Loop markers (full height)
+        // Marker lines (clipped to the canvas)
         painter.line_segment(
             [
                 egui::pos2(start_x, rect.top()),

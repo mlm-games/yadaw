@@ -45,7 +45,7 @@ impl PianoRollView {
     pub fn new() -> Self {
         Self {
             piano_roll: PianoRoll::default(),
-            show_velocity_lane: true,
+            show_velocity_lane: false,
             show_controller_lanes: false,
             velocity_lane_height: 100.0,
 
