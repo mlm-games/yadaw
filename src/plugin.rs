@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
-use crate::lv2_plugin_host::PluginInfo;
+use crate::lv2_plugin_host::{ControlPortInfo, PluginInfo};
 use crate::messages::AudioCommand;
 use crate::model::plugin::{PluginDescriptor, PluginParam};
 use crate::model::track::Track;
-use crate::plugin_host::get_available_plugins;
+use crate::plugin_host::{get_available_plugins, with_host};
 
 pub use crate::lv2_plugin_host::PluginInfo as PluginScanResult;
 
@@ -222,4 +222,16 @@ pub fn categorize_plugin(plugin: &PluginInfo) -> Vec<String> {
     }
 
     categories
+}
+
+pub fn get_control_port_info(uri: &str, symbol: &str) -> Option<ControlPortInfo> {
+    with_host(|h| {
+        h.get_available_plugins()
+            .iter()
+            .find(|p| p.uri == uri)
+            .and_then(|p| p.control_ports.iter().find(|c| c.symbol == symbol))
+            .cloned()
+    })
+    .ok()
+    .flatten()
 }

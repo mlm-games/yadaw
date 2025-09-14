@@ -4,6 +4,7 @@ use crate::level_meter::LevelMeter;
 use crate::messages::AudioCommand;
 use crate::model::automation::AutomationTarget;
 use crate::model::track::Track;
+use crate::plugin::get_control_port_info;
 use crate::track_manager::{arm_track_exclusive, mute_track, solo_track};
 
 pub struct TracksPanel {
@@ -403,9 +404,16 @@ impl TracksPanel {
                 for (pname, val) in plugin.params.iter_mut() {
                     ui.horizontal(|ui| {
                         ui.label(pname);
+
+                        let meta = get_control_port_info(&plugin.uri, pname);
+                        let (min_v, max_v, default_v) = match meta.as_ref() {
+                            Some(m) => (m.min, m.max, m.default),
+                            None => (0.0, 1.0, 0.0),
+                        };
+
                         let mut v = *val;
                         if ui
-                            .add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(true))
+                            .add(egui::Slider::new(&mut v, min_v..=max_v).show_value(true))
                             .changed()
                         {
                             *val = v;
@@ -416,13 +424,18 @@ impl TracksPanel {
                                 v,
                             ));
                         }
-                        if ui.small_button("↺").on_hover_text("Reset to 0.0").clicked() {
-                            *val = 0.0;
+
+                        if ui
+                            .small_button("↺")
+                            .on_hover_text(format!("Reset to default ({:.3})", default_v))
+                            .clicked()
+                        {
+                            *val = default_v;
                             let _ = app.command_tx.send(AudioCommand::SetPluginParam(
                                 idx,
                                 plugin_idx,
                                 pname.clone(),
-                                *val,
+                                default_v,
                             ));
                         }
                     });
