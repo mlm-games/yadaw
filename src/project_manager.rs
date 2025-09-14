@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::constants::PROJECT_EXTENSION;
+use crate::paths::cache_dir;
 use crate::project::{AppState, Project};
 
 #[derive(Debug, Clone)]
@@ -173,21 +174,19 @@ impl ProjectManager {
         ))
     }
 
-    fn get_auto_save_path(&self) -> Result<PathBuf> {
-        let auto_save_dir = directories::ProjectDirs::from("com", "yadaw", "yadaw")
-            .ok_or_else(|| anyhow!("Cannot determine auto-save directory"))?
-            .cache_dir()
-            .join("autosave");
-
-        fs::create_dir_all(&auto_save_dir)?;
-
+    fn get_auto_save_path(&self) -> anyhow::Result<std::path::PathBuf> {
+        let dir = cache_dir().join("autosave");
+        std::fs::create_dir_all(&dir)?;
         let filename = if let Some(info) = &self.current_project {
-            format!("{}_autosave.{}", info.name, PROJECT_EXTENSION)
+            format!(
+                "{}_autosave.{}",
+                info.name,
+                crate::constants::PROJECT_EXTENSION
+            )
         } else {
-            format!("untitled_autosave.{}", PROJECT_EXTENSION)
+            format!("untitled_autosave.{}", crate::constants::PROJECT_EXTENSION)
         };
-
-        Ok(auto_save_dir.join(filename))
+        Ok(dir.join(filename))
     }
 
     fn add_to_recent(&mut self, path: &Path) {

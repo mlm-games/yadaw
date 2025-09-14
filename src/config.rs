@@ -2,6 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::paths::config_path;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub audio: AudioConfig,
@@ -105,9 +107,8 @@ impl Config {
         Ok(())
     }
 
-    fn config_path() -> Option<PathBuf> {
-        directories::ProjectDirs::from("com", "yadaw", "yadaw")
-            .map(|dirs| dirs.config_dir().join("config.json"))
+    fn config_path() -> Option<std::path::PathBuf> {
+        Some(config_path())
     }
 
     fn default_plugin_paths() -> Vec<PathBuf> {

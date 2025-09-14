@@ -3,6 +3,7 @@ mod automation_lane;
 mod dialogs;
 mod menu_bar;
 mod mixer;
+mod piano_roll;
 mod piano_roll_view;
 mod theme;
 mod timeline;

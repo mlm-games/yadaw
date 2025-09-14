@@ -69,6 +69,9 @@ log = "0.4.28"
 android_logger = "0.15.1"
 # ndk-glue = "0.7"
 android-activity = { version = "0.6.0", features = ["native-activity"] }
+winit = { version = "0.30.12", default-features = false, features = [
+    "android-native-activity",
+] }
 
 
 [features]
@@ -76,7 +79,8 @@ default = []
 desktop-bin = []
 android = []
 
-# [target.'cfg(not(target_os = "android"))'.dependencies]
+[target.'cfg(not(target_os = "android"))'.dependencies]
+winit = "0.30.12"
 
 [package.metadata.android]
 package = "com.yadaw.app"

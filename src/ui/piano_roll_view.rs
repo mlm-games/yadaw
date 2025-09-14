@@ -8,7 +8,7 @@ use rayon::vec;
 use super::*;
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, PIANO_KEY_WIDTH};
 use crate::model::{MidiClip, MidiNote};
-use crate::piano_roll::{PianoRoll, PianoRollAction};
+use crate::ui::piano_roll::{PianoRoll, PianoRollAction};
 
 pub struct PianoRollView {
     pub(crate) piano_roll: PianoRoll,
@@ -735,7 +735,7 @@ impl PianoRollView {
         let mut action_changed = false;
         for a in &actions {
             match a {
-                crate::piano_roll::PianoRollAction::AddNote(n) => {
+                PianoRollAction::AddNote(n) => {
                     let mut nn = *n;
 
                     // Snap epsilon to treat same-cell adds as duplicates
@@ -795,13 +795,13 @@ impl PianoRollView {
                         self.piano_roll.temp_selected_indices.push(new_index);
                     }
                 }
-                crate::piano_roll::PianoRollAction::RemoveNote(idx) => {
+                PianoRollAction::RemoveNote(idx) => {
                     if *idx < self.editing_notes.len() {
                         self.editing_notes.remove(*idx);
                         action_changed = true;
                     }
                 }
-                crate::piano_roll::PianoRollAction::UpdateNote(idx, n) => {
+                PianoRollAction::UpdateNote(idx, n) => {
                     if *idx < self.editing_notes.len() {
                         let mut nn = *n;
                         if nn.id == 0 {
@@ -813,7 +813,7 @@ impl PianoRollView {
                         action_changed = true;
                     }
                 }
-                crate::piano_roll::PianoRollAction::PreviewNote(pitch) => {
+                PianoRollAction::PreviewNote(pitch) => {
                     let _ = app
                         .command_tx
                         .send(crate::messages::AudioCommand::PreviewNote(
@@ -821,7 +821,7 @@ impl PianoRollView {
                             *pitch,
                         ));
                 }
-                crate::piano_roll::PianoRollAction::StopPreview => {
+                PianoRollAction::StopPreview => {
                     let _ = app
                         .command_tx
                         .send(crate::messages::AudioCommand::StopPreviewNote);

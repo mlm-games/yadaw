@@ -14,3 +14,5 @@ crate-type = ["cdylib"]
 
 and then build it using 
 `cargo apk build --target aarch64-linux-android --lib`
+
+> Note: lv2 plugins that are compiled using the android ndk only work... Might allow for placing them in the plugins dir of the internal storage (using root or other methods)

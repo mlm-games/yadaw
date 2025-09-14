@@ -16,6 +16,8 @@ use android_activity::AndroidApp;
 #[cfg(not(target_os = "android"))]
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Logging
+
+    use crate::project;
     #[cfg(not(target_os = "android"))]
     env_logger::init();
     // #[cfg(target_os = "android")]
@@ -33,7 +35,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load().unwrap_or_default();
 
     // Initialize state
-    let app_state = Arc::new(Mutex::new(crate::project::AppState::default()));
+    let app_state = Arc::new(Mutex::new(project::AppState::default()));
     let audio_state = Arc::new(AudioState::new());
 
     // Create channels for communication
