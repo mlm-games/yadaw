@@ -8,6 +8,7 @@ use dashmap::DashMap;
 
 use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, NoteDelta, UIUpdate};
+use crate::plugin::get_control_port_info;
 use crate::project::AppState;
 
 const MIDI_PREVIEW_THROTTLE_MS: u64 = 30;
@@ -233,17 +234,40 @@ fn process_command(
             ));
         }
         AudioCommand::SetPluginParam(track_id, plugin_idx, param_name, value) => {
+            // Look up min/max/default (fall back to 0..1)
+            let (min_v, max_v) = get_control_port_info(
+                {
+                    // we need the plugin URI; read it without holding the lock too long
+                    let state = app_state.lock().unwrap();
+                    state
+                        .tracks
+                        .get(*track_id)
+                        .and_then(|t| t.plugin_chain.get(*plugin_idx))
+                        .map(|p| p.uri.clone())
+                }
+                .as_deref()
+                .unwrap_or(""),
+                param_name,
+            )
+            .map(|m| (m.min, m.max))
+            .unwrap_or((0.0, 1.0));
+
+            let v = value.clamp(min_v, max_v);
+
+            // Update model
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if let Some(plugin) = track.plugin_chain.get_mut(*plugin_idx) {
-                    plugin.params.insert(param_name.clone(), *value);
+                    plugin.params.insert(param_name.clone(), v);
                 }
             }
+
+            // RT update
             let _ = realtime_tx.send(RealtimeCommand::UpdatePluginParam(
                 *track_id,
                 *plugin_idx,
                 param_name.clone(),
-                *value,
+                v,
             ));
         }
 

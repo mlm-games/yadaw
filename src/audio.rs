@@ -40,10 +40,8 @@ pub(crate) struct AudioEngine {
 struct TrackProcessor {
     id: usize,
     plugins: Vec<PluginProcessor>,
-    input_buffer_l: Vec<f32>,
-    input_buffer_r: Vec<f32>,
-    output_buffer_l: Vec<f32>,
-    output_buffer_r: Vec<f32>,
+    input_buffers: Vec<Vec<f32>>,
+    output_buffers: Vec<Vec<f32>>,
     active_notes: Vec<ActiveMidiNote>, // Remove later, not needed
     last_pattern_position: f64,
     automated_volume: f32,
@@ -56,13 +54,11 @@ struct TrackProcessor {
 
 impl TrackProcessor {
     fn new(id: usize) -> Self {
-        Self {
+        let mut tp = Self {
             id,
             plugins: Vec::new(),
-            input_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
-            input_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
-            output_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
-            output_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
+            input_buffers: Vec::new(),
+            output_buffers: Vec::new(),
             active_notes: Vec::new(),
             last_pattern_position: 0.0,
             automated_volume: f32::NAN,
@@ -71,6 +67,16 @@ impl TrackProcessor {
             pattern_loop_count: 0,
             notes_triggered_this_loop: Vec::new(),
             last_block_end_samples: 0.0,
+        };
+        tp.ensure_channels(2); // default stereo track
+        tp
+    }
+
+    fn ensure_channels(&mut self, n: usize) {
+        let need = n.max(1);
+        if self.input_buffers.len() != need {
+            self.input_buffers = (0..need).map(|_| vec![0.0; MAX_BUFFER_SIZE]).collect();
+            self.output_buffers = (0..need).map(|_| vec![0.0; MAX_BUFFER_SIZE]).collect();
         }
     }
 }
@@ -504,10 +510,8 @@ impl AudioEngine {
             self.track_processors.push(TrackProcessor {
                 id: self.track_processors.len(),
                 plugins: Vec::new(),
-                input_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
-                input_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
-                output_buffer_l: vec![0.0; MAX_BUFFER_SIZE],
-                output_buffer_r: vec![0.0; MAX_BUFFER_SIZE],
+                input_buffers: Vec::new(),
+                output_buffers: Vec::new(),
                 active_notes: Vec::new(),
                 last_pattern_position: 0.0,
                 automated_volume: f32::NAN,
@@ -695,8 +699,8 @@ impl AudioEngine {
                             .min(frames_to_process);
                         for i in 0..take {
                             let s = self.recording_state.monitor_queue[i];
-                            processor.input_buffer_l[i] += s;
-                            processor.input_buffer_r[i] += s;
+                            processor.input_buffers[0][i] += s;
+                            processor.input_buffers[0][i] += s;
                         }
                         if take > 0 {
                             self.recording_state.monitor_queue.drain(..take);
@@ -725,8 +729,8 @@ impl AudioEngine {
 
                     for i in 0..frames_to_process {
                         let out_idx = (frames_processed + i) * channels;
-                        let l = processor.input_buffer_l[i] * left_gain;
-                        let r = processor.input_buffer_r[i] * right_gain;
+                        let l = processor.input_buffers[0][i] * left_gain;
+                        let r = processor.input_buffers[0][i] * right_gain;
 
                         output[out_idx] += l;
                         if channels > 1 {
@@ -901,8 +905,8 @@ fn process_midi_track(
     }
 
     // Clear input buffers
-    processor.input_buffer_l[..num_frames].fill(0.0);
-    processor.input_buffer_r[..num_frames].fill(0.0);
+    processor.input_buffers[0][..num_frames].fill(0.0);
+    processor.input_buffers[0][..num_frames].fill(0.0);
 
     // Generate audio if no plugins
     if processor.plugins.is_empty() && !processor.active_notes.is_empty() {
@@ -913,8 +917,8 @@ fn process_midi_track(
                 sample +=
                     generate_sine_for_note(note.pitch, note.velocity, sample_offset, sample_rate);
             }
-            processor.input_buffer_l[i] = sample;
-            processor.input_buffer_r[i] = sample;
+            processor.input_buffers[0][i] = sample;
+            processor.input_buffers[0][i] = sample;
         }
     }
 }
@@ -928,8 +932,8 @@ fn process_audio_track(
     sample_rate: f64,
 ) {
     // Zero
-    processor.input_buffer_l[..num_frames].fill(0.0);
-    processor.input_buffer_r[..num_frames].fill(0.0);
+    processor.input_buffers[0][..num_frames].fill(0.0);
+    processor.input_buffers[0][..num_frames].fill(0.0);
 
     let converter = TimeConverter::new(sample_rate as f32, bpm);
 
@@ -992,8 +996,8 @@ fn process_audio_track(
                 s *= f.clamp(0.0, 1.0);
             }
 
-            processor.input_buffer_l[buf_idx] += s;
-            processor.input_buffer_r[buf_idx] += s;
+            processor.input_buffers[0][buf_idx] += s;
+            processor.input_buffers[0][buf_idx] += s;
         }
     }
 }
@@ -1016,8 +1020,8 @@ fn process_preview_note(
             );
             let envelope = (-(sample_pos * 4.0 / sample_rate)).exp() as f32;
 
-            processor.input_buffer_l[i] += sample * envelope * 3.0; // Boost for preview
-            processor.input_buffer_r[i] += sample * envelope * 3.0;
+            processor.input_buffers[0][i] += sample * envelope * 3.0; // Boost for preview
+            processor.input_buffers[0][i] += sample * envelope * 3.0;
         }
     }
 }
@@ -1122,8 +1126,8 @@ fn build_block_midi_events(
                 let e_raw = (rep_off + e_local).min(rep_end);
 
                 // Global transforms
-                let mut pitch = (n.pitch as i16 + clip.transpose as i16).clamp(0, 127) as u8;
-                let mut vel = (n.velocity as i16 + clip.velocity_offset as i16).clamp(1, 127) as u8;
+                let pitch = (n.pitch as i16 + clip.transpose as i16).clamp(0, 127) as u8;
+                let vel = (n.velocity as i16 + clip.velocity_offset as i16).clamp(1, 127) as u8;
 
                 // Quantize start/end (separately)
                 let s_q = quantize(s_raw);
@@ -1188,8 +1192,8 @@ fn process_track_plugins(
     }
 
     // Clear plugin outputs
-    processor.output_buffer_l[..num_frames].fill(0.0);
-    processor.output_buffer_r[..num_frames].fill(0.0);
+    processor.output_buffers[0][..num_frames].fill(0.0);
+    processor.output_buffers[1][..num_frames].fill(0.0);
 
     // If no plugins, just advance last_block_end_samples and return
     if processor.plugins.is_empty() {
@@ -1198,45 +1202,63 @@ fn process_track_plugins(
     }
 
     let mut first_active_plugin = true;
+
     for (plugin_idx, plugin_processor) in processor.plugins.iter_mut().enumerate() {
         if plugin_processor.bypass {
             continue;
         }
         if let Some(instance) = &mut plugin_processor.instance {
+            // Push automation into instance
             for kv in processor.automated_plugin_params.iter() {
                 let ((p_idx, param_name), value) = (kv.key().clone(), *kv.value());
                 if p_idx == plugin_idx {
                     instance.set_parameter(&param_name, value);
                 }
             }
-            if track.is_midi {
-                if first_active_plugin && !all_midi_events.is_empty() {
-                    instance.prepare_midi_raw_events(&all_midi_events);
-                } else {
-                    instance.clear_midi_events();
-                }
-                first_active_plugin = false;
+
+            // MIDI routing policy: first active plugin on a MIDI track gets events
+            let use_midi_here = track.is_midi && first_active_plugin;
+            if use_midi_here && !all_midi_events.is_empty() {
+                instance.prepare_midi_raw_events(&all_midi_events);
             } else {
                 instance.clear_midi_events();
             }
 
+            // Inputs/outputs (stereo bus)
+            let in_l = &processor.input_buffers[0][..num_frames];
+            let in_r = &processor.input_buffers[0][..num_frames];
+            let (left_vecs, right_vecs) = processor.output_buffers.split_at_mut(1);
+            let out_l = &mut left_vecs[0][..num_frames];
+            let out_r = &mut right_vecs[0][..num_frames];
+            let inputs: [&[f32]; 2] = [in_l, in_r];
+            let mut outputs: [&mut [f32]; 2] = [out_l, out_r];
+
+            // Run
             let t0 = Instant::now();
-            let res = instance.process(
-                &processor.input_buffer_l[..num_frames],
-                &processor.input_buffer_r[..num_frames],
-                &mut processor.output_buffer_l[..num_frames],
-                &mut processor.output_buffer_r[..num_frames],
-                num_frames,
-            );
+            let res = instance.process_multi(&inputs, &mut outputs, use_midi_here, num_frames);
             *plugin_time_ms_accum += t0.elapsed().as_secs_f32() * 1000.0;
 
             if let Err(e) = res {
                 eprintln!("Plugin processing error: {}", e);
             } else {
-                processor.input_buffer_l[..num_frames]
-                    .copy_from_slice(&processor.output_buffer_l[..num_frames]);
-                processor.input_buffer_r[..num_frames]
-                    .copy_from_slice(&processor.output_buffer_r[..num_frames]);
+                // If plugin has 1 output, mirror L->R for the stereo bus
+                let (_ins, outs) = instance.audio_in_out_counts();
+                if outs == 1 {
+                    let (left_vecs, right_vecs) = processor.output_buffers.split_at_mut(1);
+                    let l = &left_vecs[0][..num_frames];
+                    let r = &mut right_vecs[0][..num_frames];
+                    r.copy_from_slice(l);
+                }
+
+                // Feed next plugin from this plugin’s outputs
+                processor.input_buffers[0][..num_frames]
+                    .copy_from_slice(&processor.output_buffers[0][..num_frames]);
+                processor.input_buffers[0][..num_frames]
+                    .copy_from_slice(&processor.output_buffers[1][..num_frames]);
+            }
+
+            if use_midi_here {
+                first_active_plugin = false;
             }
         }
     }
