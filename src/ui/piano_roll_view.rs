@@ -76,53 +76,54 @@ impl PianoRollView {
             };
 
             // Piano roll area
-            let (roll_resp, _roll_painter) =
+            let (roll_resp, _) =
                 ui.allocate_painter(egui::vec2(total_w, piano_roll_height), egui::Sense::hover());
             let roll_rect = roll_resp.rect;
 
-            // Mark notes as the active edit target when the roll is hot
-            if roll_resp.hovered() || roll_resp.is_pointer_button_down_on() {
-                app.active_edit_target = super::app::ActiveEditTarget::Notes;
-            }
+            // // Mark notes as the active edit target when the roll is hot
+            // if roll_resp.hovered() || roll_resp.is_pointer_button_down_on() {
+            //     app.active_edit_target = super::app::ActiveEditTarget::Notes;
+            // }
 
-            let mut roll_ui =
-                ui.child_ui(roll_rect, egui::Layout::top_down(egui::Align::Min), None);
-            self.draw_piano_roll(&mut roll_ui, app);
+            ui.allocate_ui_at_rect(roll_rect, |ui| {
+                ui.set_clip_rect(roll_rect);
+                self.draw_piano_roll(ui, app);
+
+                if let Some(current_beat) = ui
+                    .ctx()
+                    .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
+                {
+                    let grid_left = roll_rect.left() + crate::constants::PIANO_KEY_WIDTH;
+                    let x = grid_left
+                        + (current_beat as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
+
+                    if x >= roll_rect.left() && x <= roll_rect.right() {
+                        ui.painter().line_segment(
+                            [
+                                egui::pos2(x, roll_rect.top()),
+                                egui::pos2(x, roll_rect.bottom()),
+                            ],
+                            egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
+                        );
+                    }
+                }
+            });
 
             self.handle_touch_pan_zoom(ui.ctx(), roll_rect);
-
-            // Foreground playhead overlay (topmost)
-            if let Some(current_beat) = ui
-                .ctx()
-                .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
-            {
-                let grid_left = roll_rect.left() + crate::constants::PIANO_KEY_WIDTH;
-                let x = grid_left
-                    + (current_beat as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
-
-                if x >= roll_rect.left() && x <= roll_rect.right() {
-                    ui.ctx().debug_painter().line_segment(
-                        [
-                            egui::pos2(x, roll_rect.top()),
-                            egui::pos2(x, roll_rect.bottom()),
-                        ],
-                        egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
-                    );
-                }
-            }
 
             // Velocity lane
             if self.show_velocity_lane {
                 ui.add_space(2.0);
-                let (lane_resp, _lane_painter) = ui.allocate_painter(
+                let (lane_resp, _) = ui.allocate_painter(
                     egui::vec2(total_w, self.velocity_lane_height),
                     egui::Sense::click_and_drag(),
                 );
                 let lane_rect = lane_resp.rect;
 
-                let mut lane_ui =
-                    ui.child_ui(lane_rect, egui::Layout::top_down(egui::Align::Min), None);
-                self.draw_velocity_lane(&mut lane_ui, app);
+                ui.allocate_ui_at_rect(lane_rect, |ui| {
+                    ui.set_clip_rect(lane_rect); // <— clipped lane
+                    self.draw_velocity_lane(ui, app);
+                });
             }
 
             if self.show_controller_lanes {
