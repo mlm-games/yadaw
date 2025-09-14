@@ -435,19 +435,19 @@ impl TimelineView {
             return;
         }
 
-        // Clamp overlay to canvas to avoid a degenerate rect
-        let left = start_x.max(rect.left());
-        let right = end_x.min(rect.right());
+        // // Clamp overlay to canvas to avoid a degenerate rect (looks uneeded, can add later if needed)
+        // let left = start_x.max(rect.left());
+        // let right = end_x.min(rect.right());
 
-        let overlay = egui::Rect::from_min_max(
-            egui::pos2(left, rect.top() + 18.0),
-            egui::pos2(right, rect.bottom()),
-        );
-        painter.rect_filled(
-            overlay,
-            0.0,
-            egui::Color32::from_rgba_premultiplied(100, 150, 255, 64),
-        );
+        // let overlay = egui::Rect::from_min_max(
+        //     egui::pos2(left, rect.top() + 18.0),
+        //     egui::pos2(right, rect.bottom()),
+        // );
+        // painter.rect_filled(
+        //     overlay,
+        //     0.0,
+        //     egui::Color32::from_rgba_premultiplied(100, 150, 255, 24),
+        // );
 
         // Marker lines (clipped to the canvas)
         painter.line_segment(
@@ -490,12 +490,20 @@ impl TimelineView {
         }
 
         // Draw clip background
-        let color = if let Some((r, g, b)) = clip.color {
-            egui::Color32::from_rgb(r, g, b)
+        let clip_fill = if let Some((r, g, b)) = clip.color {
+            egui::Color32::from_rgba_premultiplied(r, g, b, 196)
         } else {
-            egui::Color32::from_rgb(100, 150, 200)
+            egui::Color32::from_rgba_premultiplied(100, 150, 200, 196)
         };
-        painter.rect_filled(clip_rect, 4.0, color);
+        painter.rect_filled(clip_rect, 4.0, clip_fill);
+
+        // thin outline (helps contrast)
+        painter.rect_stroke(
+            clip_rect,
+            4.0,
+            egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+            egui::StrokeKind::Middle,
+        );
 
         // Draw MIDI notes preview
         let content_len = clip.content_len_beats.max(0.000001);
@@ -521,13 +529,6 @@ impl TimelineView {
         } else {
             0
         };
-
-        let color = if let Some((r, g, b)) = clip.color {
-            egui::Color32::from_rgb(r, g, b)
-        } else {
-            egui::Color32::from_rgb(100, 150, 200)
-        };
-        painter.rect_filled(clip_rect, 4.0, color);
 
         // Optional: draw content segment dividers when looping
         if clip.loop_enabled {
