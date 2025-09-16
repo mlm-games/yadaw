@@ -57,6 +57,7 @@ livi = "0.8.0"
 smallvec = "1.15.1"
 dirs = "6.0.0"
 log = "0.4.28"
+clack = "0.1.0"
 
 # Not needed (unless creating LV2 plugins):
 # lv2 = { version = "0.6.0", features = ["lv2-atom", "lv2-midi", "lv2-urid"] }
@@ -75,9 +76,23 @@ winit = { version = "0.30.12", default-features = false, features = [
 
 
 [features]
-default = []
+default = ["clap-host", "lv2-legacy"]
 desktop-bin = []
 android = []
+clap-host = []
+lv2-legacy = []
+
+[dependencies.clack-host]
+git = "https://github.com/prokopyl/clack"
+package = "clack-host"
+branch = "main"
+
+[dependencies.clack-extensions]
+git = "https://github.com/prokopyl/clack"
+package = "clack-extensions"
+branch = "main"
+optional = true
+
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 winit = "0.30.12"

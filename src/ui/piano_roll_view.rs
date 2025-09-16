@@ -121,8 +121,8 @@ impl PianoRollView {
                 let lane_rect = lane_resp.rect;
 
                 ui.allocate_ui_at_rect(lane_rect, |ui| {
-                    ui.set_clip_rect(lane_rect); // <— clipped lane
-                    self.draw_velocity_lane(ui, app);
+                    ui.set_clip_rect(lane_rect);
+                    self.draw_velocity_lane(ui, lane_rect, app);
                 });
             }
 
@@ -944,106 +944,132 @@ impl PianoRollView {
         }
     }
 
-    fn draw_velocity_lane(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        let state = app.state.lock().unwrap();
+    fn draw_velocity_lane(
+        &mut self,
+        ui: &mut egui::Ui,
+        lane_rect: egui::Rect,
+        app: &mut super::app::YadawApp,
+    ) {
+        // Prepare painter strictly clipped to lane_rect
+        let painter = ui.painter_at(lane_rect);
 
-        if let Some(track) = state.tracks.get(app.selected_track) {
-            if let Some(clip_idx) = self.selected_clip {
-                if let Some(pattern) = track.midi_clips.get(clip_idx) {
-                    let rect = ui.max_rect();
-                    let painter = ui.painter();
+        // Background
+        painter.rect_filled(lane_rect, 0.0, egui::Color32::from_gray(15));
 
-                    painter.rect_filled(rect, 0.0, egui::Color32::from_gray(15));
+        // Get current clip (if any)
+        let (clip_opt, track_is_midi) = {
+            let st = app.state.lock().unwrap();
+            let track_opt = st.tracks.get(app.selected_track);
+            let is_midi = track_opt.map(|t| t.is_midi).unwrap_or(false);
+            let clip_opt = match (track_opt, self.selected_clip) {
+                (Some(t), Some(idx)) => t.midi_clips.get(idx),
+                _ => None,
+            };
+            (clip_opt.cloned(), is_midi)
+        };
 
-                    let grid_left = rect.left() + PIANO_KEY_WIDTH;
-                    let gutter_rect =
-                        egui::Rect::from_min_max(rect.min, egui::pos2(grid_left, rect.bottom()));
-                    painter.rect_filled(gutter_rect, 0.0, egui::Color32::from_gray(10));
+        if !track_is_midi || clip_opt.is_none() {
+            return; // nothing to draw
+        }
 
-                    for i in 0..=4 {
-                        let y = rect.top() + (i as f32 / 4.0) * rect.height();
-                        painter.line_segment(
-                            [egui::pos2(grid_left, y), egui::pos2(rect.right(), y)],
-                            egui::Stroke::new(1.0, egui::Color32::from_gray(30)),
-                        );
-                    }
+        let clip = clip_opt.unwrap();
 
-                    // Resolve selection indices
-                    let sel_idx = self.piano_roll.selected_indices(pattern);
+        // Left gutter aligned with the piano keyboard width
+        let grid_left = lane_rect.left() + crate::constants::PIANO_KEY_WIDTH;
+        let gutter =
+            egui::Rect::from_min_max(lane_rect.min, egui::pos2(grid_left, lane_rect.bottom()));
+        painter.rect_filled(gutter, 0.0, egui::Color32::from_gray(10));
 
-                    for (i, note) in pattern.notes.iter().enumerate() {
-                        let x = grid_left
-                            + (note.start as f32 * self.piano_roll.zoom_x
-                                - self.piano_roll.scroll_x);
-                        let width = (note.duration as f32 * self.piano_roll.zoom_x).max(2.0);
-                        let height = (note.velocity as f32 / 127.0) * rect.height();
+        // Horizontal guide lines
+        for i in 0..=4 {
+            let y = lane_rect.top() + (i as f32 / 4.0) * lane_rect.height();
+            painter.line_segment(
+                [egui::pos2(grid_left, y), egui::pos2(lane_rect.right(), y)],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(30)),
+            );
+        }
 
-                        let left = x.max(grid_left);
-                        let right = (x + width).min(rect.right());
-                        if right <= left {
-                            continue;
+        // Selection indices resolved against this clip
+        let sel_idx = self.piano_roll.selected_indices(&clip);
+
+        // Draw each velocity bar using same scroll_x/zoom_x as the piano roll grid
+        for (i, note) in clip.notes.iter().enumerate() {
+            let x =
+                grid_left + (note.start as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
+            let w = (note.duration as f32 * self.piano_roll.zoom_x).max(2.0);
+            let h = (note.velocity as f32 / 127.0) * lane_rect.height();
+
+            let left = x.max(grid_left);
+            let right = (x + w).min(lane_rect.right());
+            if right <= left {
+                continue;
+            }
+
+            let bar_rect = egui::Rect::from_min_size(
+                egui::pos2(left, lane_rect.bottom() - h),
+                egui::vec2(right - left, h),
+            );
+
+            let color = if sel_idx.contains(&i) {
+                egui::Color32::from_rgb(100, 150, 255)
+            } else {
+                egui::Color32::from_rgb(60, 90, 150)
+            };
+
+            // Paint bar (clipped to lane_rect)
+            painter.rect_filled(bar_rect, 0.0, color);
+
+            // Interact with the bar using Ui (for pointer + drag)
+            let resp = ui.interact(
+                bar_rect,
+                ui.id().with(("velocity", i)),
+                egui::Sense::click_and_drag(),
+            );
+
+            if resp.dragged() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let new_velocity = ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
+                        .round()
+                        .clamp(0.0, 127.0) as u8;
+
+                    if new_velocity != note.velocity {
+                        let mut new_note = *note;
+                        new_note.velocity = new_velocity;
+                        if let Some(clip_idx) = self.selected_clip {
+                            let _ = app
+                                .command_tx
+                                .send(crate::messages::AudioCommand::UpdateNote(
+                                    app.selected_track,
+                                    clip_idx,
+                                    i,
+                                    new_note,
+                                ));
                         }
-
-                        let bar_rect = egui::Rect::from_min_size(
-                            egui::pos2(left, rect.bottom() - height),
-                            egui::vec2(right - left, height),
-                        );
-
-                        let is_selected = sel_idx.contains(&i);
-
-                        let color = if is_selected {
-                            egui::Color32::from_rgb(100, 150, 255)
-                        } else {
-                            egui::Color32::from_rgb(60, 90, 150)
-                        };
-
-                        painter.rect_filled(bar_rect, 0.0, color);
-
-                        let resp = ui.interact(
-                            bar_rect,
-                            ui.id().with(("velocity", i)),
-                            egui::Sense::click_and_drag(),
-                        );
-                        if resp.dragged() {
-                            if let Some(pos) = resp.interact_pointer_pos() {
-                                let new_velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
-                                    .round()
-                                    .clamp(0.0, 127.0)
-                                    as u8;
-
-                                if new_velocity != note.velocity {
-                                    let mut new_note = *note;
-                                    new_note.velocity = new_velocity;
-
-                                    let _ = app.command_tx.send(AudioCommand::UpdateNote(
-                                        app.selected_track,
-                                        clip_idx,
-                                        i,
-                                        new_note,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-
-                    if let Some(pos) = ui
-                        .interact(rect, ui.id().with("velocity_lane"), egui::Sense::hover())
-                        .hover_pos()
-                    {
-                        let velocity = ((rect.bottom() - pos.y) / rect.height() * 127.0)
-                            .round()
-                            .clamp(0.0, 127.0) as u8;
-
-                        painter.text(
-                            pos + egui::vec2(10.0, -10.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            format!("Vel: {}", velocity),
-                            egui::FontId::default(),
-                            egui::Color32::WHITE,
-                        );
                     }
                 }
             }
+        }
+
+        // Hover readout
+        if let Some(pos) = ui
+            .interact(
+                lane_rect,
+                ui.id().with("velocity_lane"),
+                egui::Sense::hover(),
+            )
+            .hover_pos()
+        {
+            let velocity = ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
+                .round()
+                .clamp(0.0, 127.0) as u8;
+
+            painter.text(
+                pos + egui::vec2(10.0, -10.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!("Vel: {}", velocity),
+                egui::FontId::default(),
+                egui::Color32::WHITE,
+            );
         }
     }
 

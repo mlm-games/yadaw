@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 use crate::lv2_plugin_host::LV2PluginInstance;
 use crate::model::PluginDescriptor;
+use crate::model::plugin_api::BackendKind;
 
 pub struct AtomicF64 {
     storage: AtomicU64,
@@ -153,13 +154,11 @@ pub enum RealtimeCommand {
     StopPreviewNote,
     SetLoopEnabled(bool),
     SetLoopRegion(f64, f64),
-    AddPluginInstance {
+    AddUnifiedPlugin {
         track_id: usize,
         plugin_idx: usize,
-        instance: LV2PluginInstance,
-        descriptor: Arc<DashMap<String, f32>>, // Plugin params
+        backend: BackendKind,
         uri: String,
-        bypass: bool,
     },
     RemovePluginInstance {
         track_id: usize,

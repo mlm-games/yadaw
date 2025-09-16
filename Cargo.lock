@@ -689,6 +689,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "clack"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c91b44356ec0db6b07f4f3c344338463114a998032b5b57df20fb7f4fac0c9e"
+
+[[package]]
+name = "clack-common"
+version = "0.1.0"
+source = "git+https://github.com/prokopyl/clack?branch=main#5deaa1be9b5af7078d75cbe54abefee12ed40f63"
+dependencies = [
+ "bitflags 2.9.4",
+ "clap-sys",
+]
+
+[[package]]
+name = "clack-extensions"
+version = "0.1.0"
+source = "git+https://github.com/prokopyl/clack?branch=main#5deaa1be9b5af7078d75cbe54abefee12ed40f63"
+dependencies = [
+ "bitflags 2.9.4",
+ "clack-common",
+ "clap-sys",
+]
+
+[[package]]
+name = "clack-host"
+version = "0.1.0"
+source = "git+https://github.com/prokopyl/clack?branch=main#5deaa1be9b5af7078d75cbe54abefee12ed40f63"
+dependencies = [
+ "clack-common",
+ "clap-sys",
+ "libloading",
+]
+
+[[package]]
+name = "clap-sys"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61b04354981cd059bf376007c9361ded38b15de87972e634670799685b042197"
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1952,7 +1993,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.53.3",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -4786,6 +4827,9 @@ dependencies = [
  "android_logger",
  "anyhow",
  "chrono",
+ "clack",
+ "clack-extensions",
+ "clack-host",
  "cpal",
  "crossbeam",
  "crossbeam-channel",

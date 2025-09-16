@@ -5,8 +5,8 @@ use crate::constants::{DEFAULT_MIN_PROJECT_BEATS, MAX_BUFFER_SIZE};
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::level_meter::LevelMeter;
-use crate::lv2_plugin_host::PluginInfo;
 use crate::model::automation::AutomationTarget;
+use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::{AudioClip, MidiNote};
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project::{AppState, AppStateSnapshot};
@@ -52,7 +52,7 @@ pub struct YadawApp {
     pub(super) dialogs: super::dialogs::DialogManager,
 
     // Plugin management
-    pub(super) available_plugins: Vec<PluginInfo>,
+    pub(super) available_plugins: Vec<UnifiedPluginInfo>,
     pub(super) selected_track_for_plugin: Option<usize>,
 
     // Selection state
@@ -109,7 +109,7 @@ impl YadawApp {
         audio_state: Arc<AudioState>,
         command_tx: Sender<AudioCommand>,
         ui_rx: Receiver<UIUpdate>,
-        available_plugins: Vec<PluginInfo>,
+        available_plugins: Vec<UnifiedPluginInfo>,
         config: Config,
     ) -> Self {
         let transport = Transport::new(audio_state.clone(), command_tx.clone());

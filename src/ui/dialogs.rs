@@ -4,9 +4,9 @@ use egui_file_dialog::FileDialog;
 
 use super::*;
 use crate::edit_actions::EditProcessor;
-use crate::error::{common, ResultExt, UserNotification};
-use crate::plugin::categorize_plugin;
+use crate::error::{ResultExt, UserNotification, common};
 use crate::messages::AudioCommand;
+use crate::plugin::{categorize_plugin, categorize_unified_plugin};
 use crate::ui::app::FileDialogPurpose;
 use crate::ui::theme;
 
@@ -173,9 +173,11 @@ impl Dialog for QuantizeContent {
     fn draw_content(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) -> bool {
         ui.horizontal(|ui| {
             ui.label("Strength:");
-            ui.add(egui::Slider::new(&mut self.strength, 0.0..=1.0)
-                .suffix("%")
-                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)));
+            ui.add(
+                egui::Slider::new(&mut self.strength, 0.0..=1.0)
+                    .suffix("%")
+                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
+            );
         });
         ui.horizontal(|ui| {
             ui.label("Grid:");
@@ -387,9 +389,13 @@ impl DialogManager {
                 self.track_rename = Some(d);
             }
         }
-        if let Some(d) = self.import_audio.as_mut() { d.show(ctx, app); }
+        if let Some(d) = self.import_audio.as_mut() {
+            d.show(ctx, app);
+        }
         if let Some(d) = &self.import_audio {
-            if !d.is_open() { self.import_audio = None; }
+            if !d.is_open() {
+                self.import_audio = None;
+            }
         }
     }
 
@@ -464,7 +470,11 @@ impl OpenDialog {
             .title("Open Project")
             .add_file_filter_extensions("YADAW Project", (&["yadaw", "ydw"]).to_vec())
             .add_file_filter_extensions("All Files", (&["*"]).to_vec());
-        Self { closed: false, fd, opened: false }
+        Self {
+            closed: false,
+            fd,
+            opened: false,
+        }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
@@ -497,7 +507,11 @@ impl SaveDialog {
             .default_file_name("untitled.yadaw")
             .add_file_filter_extensions("YADAW Project", (&["yadaw"]).to_vec())
             .allow_file_overwrite(true);
-        Self { closed: false, fd, opened: false }
+        Self {
+            closed: false,
+            fd,
+            opened: false,
+        }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
@@ -580,63 +594,51 @@ impl PluginBrowserDialog {
 
                 // Plugin list
                 egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .max_height(220.0)
-                    .show(ui, |ui| {
-                        for (idx, plugin) in app.available_plugins.iter().enumerate() {
-                        // Filter by search
-                            if !self.search_text.is_empty() {
-                                if !plugin
-                                    .name
-                                    .to_lowercase()
-                                    .contains(&self.search_text.to_lowercase())
-                                    && !plugin
-                                        .uri
-                                        .to_lowercase()
-                                        .contains(&self.search_text.to_lowercase())
-                                {
-                                    continue;
-                                }
-                            }
-
-                            // Category
-                            if self.selected_category != "All" {
-                                let plugin_categories = categorize_plugin(plugin);
-                                if !plugin_categories.contains(&self.selected_category) {
-                                    continue;
-                                }
-                            }
-
-                            let selected = self.selected_plugin == Some(idx);
-                            
-                            let display_name = if self.selected_category == "All" {
-                                // Show category hints when viewing all
-                                let cats = categorize_plugin(plugin);
-                                let main_cat = cats.iter()
-                                    .find(|c| *c != "All")
-                                    .map(|c| c.as_str())
-                                    .unwrap_or("Unknown");
-                                format!("{} [{}]", plugin.name, main_cat)
-                            } else {
-                                plugin.name.clone()
-                            };
-        
-                            let resp = ui.selectable_label(selected, display_name);
-                            if resp.double_clicked() {
-                                // Adds immediately on double-click
-                                let track_id = app
-                                    .selected_track_for_plugin
-                                    .take()
-                                    .unwrap_or(app.selected_track);
-                                let _ = app
-                                    .command_tx
-                                    .send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
-                                self.closed = true; // FIXME: Not closing would cause plugins to go to the first track due to the ref being dropped.
-                            } else if resp.clicked() {
-                                self.selected_plugin = Some(idx);
+                .auto_shrink([false, false])
+                .max_height(220.0)
+                .show(ui, |ui| {
+                    for (idx, plugin) in app.available_plugins.iter().enumerate() {
+                        // search filter
+                        if !self.search_text.is_empty() {
+                            let q = self.search_text.to_lowercase();
+                            if !plugin.name.to_lowercase().contains(&q)
+                                && !plugin.uri.to_lowercase().contains(&q)
+                            {
+                                continue;
                             }
                         }
-                    });
+                        // category filter
+                        if self.selected_category != "All" {
+                            let cats = categorize_unified_plugin(plugin);
+                            if !cats.contains(&self.selected_category) {
+                                continue;
+                            }
+                        }
+
+                        let selected = self.selected_plugin == Some(idx);
+
+                        // Show backend badge
+                        let backend_badge = if plugin.uri.starts_with("file://") { "[CLAP]" } else { "[LV2]" };
+
+                        // Show category hint in “All”
+                        let display_name = if self.selected_category == "All" {
+                            let cats = categorize_unified_plugin(plugin);
+                            let main_cat = cats.iter().find(|c| *c != "All").map(|c| c.as_str()).unwrap_or("Unknown");
+                            format!("{} {} [{}]", backend_badge, plugin.name, main_cat)
+                        } else {
+                            format!("{} {}", backend_badge, plugin.name)
+                        };
+
+                        let resp = ui.selectable_label(selected, display_name);
+                        if resp.double_clicked() {
+                            let track_id = app.selected_track_for_plugin.take().unwrap_or(app.selected_track);
+                            let _ = app.command_tx.send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
+                            self.closed = true;
+                        } else if resp.clicked() {
+                            self.selected_plugin = Some(idx);
+                        }
+                    }
+                });
 
                 ui.separator();
 
@@ -645,36 +647,12 @@ impl PluginBrowserDialog {
                     if let Some(plugin) = app.available_plugins.get(idx) {
                         ui.heading(&plugin.name);
                         ui.separator();
-                        ui.label(format!(
-                            "Type: {}",
-                            if plugin.is_instrument {
-                                "Instrument"
-                            } else {
-                                "Effect"
-                            }
-                        ));
-                        ui.label(format!(
-                            "Audio I/O: {} inputs / {} outputs",
-                            plugin.audio_inputs, plugin.audio_outputs
-                        ));
-                        if plugin.has_midi {
-                            ui.label("MIDI: Yes");
-                        }
+                        ui.label(format!("Backend: {}", if plugin.uri.starts_with("file://") { "CLAP" } else { "LV2" }));
+                        ui.label(format!("Type: {}", if plugin.is_instrument { "Instrument" } else { "Effect" }));
+                        ui.label(format!("Audio I/O: {} inputs / {} outputs", plugin.audio_inputs, plugin.audio_outputs));
+                        ui.label(format!("MIDI: {}", if plugin.has_midi { "Yes" } else { "No" }));
                         ui.separator();
-                        ui.heading("Parameters");
-                        if plugin.control_ports.is_empty() {
-                            ui.label("This plugin exposes no control parameters.");
-                        } else {
-                            for cp in &plugin.control_ports {
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("{} [{}]", cp.name, cp.symbol));
-                                    ui.label(format!(
-                                        "default: {:.3} [{:.3}..{:.3}]",
-                                        cp.default, cp.min, cp.max
-                                    ));
-                                });
-                            }
-                        }
+                        ui.label("Parameters: shown after loading the plugin.");
                     }
                 } else {
                     ui.label("Select a plugin to see details.");
@@ -937,7 +915,7 @@ impl ProjectSettingsDialog {
             bpm: 120.0,
             time_signature: (4, 4),
             sample_rate: 44100.0,
-            initialized: false
+            initialized: false,
         }
     }
 
@@ -950,7 +928,6 @@ impl ProjectSettingsDialog {
             self.sample_rate = app.audio_state.sample_rate.load();
             self.initialized = true;
         }
-        
 
         egui::Window::new("Project Settings")
             .open(&mut open)
@@ -1220,14 +1197,16 @@ pub struct PluginManagerDialog {
 }
 impl PluginManagerDialog {
     pub fn new() -> Self {
-        let browse_fd = FileDialog::new()
-            .title("Select Plugin Directory");
+        let browse_fd = FileDialog::new().title("Select Plugin Directory");
         Self {
             closed: false,
             scan_paths: vec![
                 "~/.lv2".to_string(),
                 "/usr/lib/lv2".to_string(),
                 "/usr/local/lib/lv2".to_string(),
+                "~/.clap".to_string(),
+                "/usr/lib/clap".to_string(),
+                "/usr/local/lib/clap".to_string(),
             ],
             new_path: String::new(),
             browse_fd,
@@ -1319,7 +1298,10 @@ impl ImportAudioDialog {
     pub fn new() -> Self {
         let fd = FileDialog::new()
             .title("Import Audio")
-            .add_file_filter_extensions("Audio Files", (&["wav", "mp3", "flac", "ogg", "m4a", "aac"]).to_vec())
+            .add_file_filter_extensions(
+                "Audio Files",
+                (&["wav", "mp3", "flac", "ogg", "m4a", "aac"]).to_vec(),
+            )
             .add_file_filter_extensions("All Files", (&["*"]).to_vec());
         Self { fd, opened: false }
     }
@@ -1330,7 +1312,9 @@ impl ImportAudioDialog {
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        if !self.opened { return; }
+        if !self.opened {
+            return;
+        }
         self.fd.update(ctx);
         if let Some(paths) = self.fd.take_picked_multiple() {
             app.push_undo();
@@ -1344,7 +1328,8 @@ impl ImportAudioDialog {
                             if !track.is_midi {
                                 track.audio_clips.push(clip);
                             } else {
-                                app.dialogs.show_warning("Cannot import audio to MIDI track");
+                                app.dialogs
+                                    .show_warning("Cannot import audio to MIDI track");
                             }
                         }
                     })
@@ -1354,7 +1339,9 @@ impl ImportAudioDialog {
         }
     }
 
-    pub fn is_open(&self) -> bool { self.opened }
+    pub fn is_open(&self) -> bool {
+        self.opened
+    }
 }
 
 pub struct LayoutManagerDialog {
@@ -1611,7 +1598,11 @@ pub struct TrackRenameDialog {
 
 impl TrackRenameDialog {
     pub fn new(track_idx: usize, current: String) -> Self {
-        Self { closed: false, track_idx, name: current }
+        Self {
+            closed: false,
+            track_idx,
+            name: current,
+        }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
@@ -1644,8 +1635,12 @@ impl TrackRenameDialog {
                     }
                 });
             });
-        if !open { self.closed = true; }
+        if !open {
+            self.closed = true;
+        }
     }
 
-    pub fn is_closed(&self) -> bool { self.closed }
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
 }

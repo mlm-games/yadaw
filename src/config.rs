@@ -117,9 +117,12 @@ impl Config {
         // Common LV2 paths on Linux
         if let Ok(home) = std::env::var("HOME") {
             paths.push(PathBuf::from(format!("{}/.lv2", home)));
+            paths.push(PathBuf::from(format!("{}/.clap", home)));
         }
         paths.push(PathBuf::from("/usr/lib/lv2"));
         paths.push(PathBuf::from("/usr/local/lib/lv2"));
+        paths.push(PathBuf::from("/usr/lib/clap"));
+        paths.push(PathBuf::from("/usr/local/lib/clap"));
 
         paths
     }

@@ -1,6 +1,7 @@
 pub mod automation;
 pub mod clip;
 pub mod plugin;
+pub mod plugin_api;
 pub mod track;
 
 pub use automation::{AutomationLane, AutomationMode, AutomationPoint, AutomationTarget};

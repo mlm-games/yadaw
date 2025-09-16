@@ -8,6 +8,7 @@ use dashmap::DashMap;
 
 use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, NoteDelta, UIUpdate};
+use crate::model::plugin_api::BackendKind;
 use crate::plugin::get_control_port_info;
 use crate::project::AppState;
 
@@ -156,53 +157,52 @@ fn process_command(
         | AudioCommand::UnfreezeTrack(_) => {}
 
         AudioCommand::AddPlugin(track_id, uri) => {
-            let sample_rate = audio_state.sample_rate.load();
+            let backend = if uri.starts_with("file://") || uri.ends_with(".clap") {
+                BackendKind::Clap
+            } else {
+                BackendKind::Lv2
+            };
+
+            // Keep updating the model (track.plugin_chain) for UI, reusing your LV2 create_plugin_instance
+            // For CLAP, insert an empty params map; the audio thread will discover params later.
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Ok(plugin_desc) = crate::plugin::create_plugin_instance(uri, sample_rate) {
-                    let plugin_idx = track.plugin_chain.len();
-                    track.plugin_chain.push(plugin_desc.clone());
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                let plugin_idx = track.plugin_chain.len();
 
-                    let params_dashmap = Arc::new(DashMap::new());
-                    for (key, value) in plugin_desc.params.iter() {
-                        params_dashmap.insert(key.clone(), *value);
+                let desc = if backend == BackendKind::Lv2 {
+                    // use your existing default seeding for LV2
+                    crate::plugin::create_plugin_instance(uri, audio_state.sample_rate.load())
+                        .unwrap_or_else(|_| crate::model::plugin::PluginDescriptor {
+                            uri: uri.clone(),
+                            name: uri.clone(),
+                            bypass: false,
+                            params: std::collections::HashMap::new(),
+                            preset_name: None,
+                            custom_name: None,
+                        })
+                } else {
+                    // CLAP: empty params now; can be refreshed later
+                    crate::model::plugin::PluginDescriptor {
+                        uri: uri.clone(),
+                        name: uri.clone(),
+                        bypass: false,
+                        params: std::collections::HashMap::new(),
+                        preset_name: None,
+                        custom_name: None,
                     }
+                };
 
-                    let tracks_clone = state.tracks.clone();
-                    drop(state);
+                track.plugin_chain.push(desc);
+                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                drop(state);
 
-                    match crate::plugin_host::instantiate(uri) {
-                        Ok(mut instance) => {
-                            for entry in params_dashmap.iter() {
-                                instance.set_parameter(entry.key(), *entry.value());
-                            }
-                            instance.set_params_arc(params_dashmap.clone());
-
-                            let _ = realtime_tx.send(RealtimeCommand::AddPluginInstance {
-                                track_id: *track_id,
-                                plugin_idx,
-                                instance,
-                                descriptor: params_dashmap,
-                                uri: uri.to_string(),
-                                bypass: plugin_desc.bypass,
-                            });
-
-                            let snapshots =
-                                crate::audio_snapshot::build_track_snapshots(&tracks_clone);
-                            let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to instantiate plugin: {}", e);
-                            let _ = ui_tx
-                                .send(UIUpdate::Error(format!("Failed to load plugin: {}", e)));
-                            let mut state = app_state.lock().unwrap();
-                            if let Some(track) = state.tracks.get_mut(*track_id) {
-                                track.plugin_chain.pop();
-                            }
-                        }
-                    }
-                }
+                // Ask audio thread to instantiate
+                let _ = realtime_tx.send(RealtimeCommand::AddUnifiedPlugin {
+                    track_id: *track_id,
+                    plugin_idx,
+                    backend,
+                    uri: uri.clone(),
+                });
             }
         }
         AudioCommand::RemovePlugin(track_id, plugin_idx) => {

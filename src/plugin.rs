@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow};
 use crate::lv2_plugin_host::{ControlPortInfo, PluginInfo};
 use crate::messages::AudioCommand;
 use crate::model::plugin::{PluginDescriptor, PluginParam};
+use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::track::Track;
 use crate::plugin_host::{get_available_plugins, with_host};
 
@@ -217,6 +218,76 @@ pub fn categorize_plugin(plugin: &PluginInfo) -> Vec<String> {
         || name_lower.contains("meter")
         || name_lower.contains("analyzer")
         || name_lower.contains("scope")
+    {
+        categories.push("Utility".to_string());
+    }
+
+    categories
+}
+
+pub fn categorize_unified_plugin(p: &UnifiedPluginInfo) -> Vec<String> {
+    let mut categories = vec!["All".to_string()];
+    if p.is_instrument || (p.has_midi && p.audio_outputs > 0 && p.audio_inputs == 0) {
+        categories.push("Instruments".to_string());
+    } else if p.audio_inputs > 0 && p.audio_outputs > 0 {
+        categories.push("Effects".to_string());
+    }
+    let name = p.name.to_lowercase();
+    let uri = p.uri.to_lowercase();
+
+    if name.contains("compressor")
+        || name.contains("limiter")
+        || name.contains("gate")
+        || name.contains("expander")
+        || uri.contains("compressor")
+        || uri.contains("limiter")
+    {
+        categories.push("Dynamics".to_string());
+    }
+
+    if name.contains("eq")
+        || name.contains("equalizer")
+        || name.contains("filter")
+        || uri.contains("eq")
+        || uri.contains("equalizer")
+    {
+        categories.push("EQ".to_string());
+    }
+
+    if name.contains("reverb")
+        || name.contains("room")
+        || name.contains("hall")
+        || uri.contains("reverb")
+    {
+        categories.push("Reverb".to_string());
+    }
+
+    if name.contains("delay") || name.contains("echo") || uri.contains("delay") {
+        categories.push("Delay".to_string());
+    }
+
+    if name.contains("chorus")
+        || name.contains("flanger")
+        || name.contains("phaser")
+        || name.contains("tremolo")
+        || uri.contains("modulation")
+    {
+        categories.push("Modulation".to_string());
+    }
+
+    if name.contains("distortion")
+        || name.contains("overdrive")
+        || name.contains("fuzz")
+        || name.contains("saturation")
+        || uri.contains("distortion")
+    {
+        categories.push("Distortion".to_string());
+    }
+
+    if name.contains("utility")
+        || name.contains("meter")
+        || name.contains("analyzer")
+        || name.contains("scope")
     {
         categories.push("Utility".to_string());
     }

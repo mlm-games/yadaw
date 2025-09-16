@@ -17,7 +17,7 @@ use android_activity::AndroidApp;
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Logging
 
-    use crate::project;
+    use crate::{model::plugin_api::HostConfig, project};
     #[cfg(not(target_os = "android"))]
     env_logger::init();
     // #[cfg(target_os = "android")]
@@ -50,10 +50,12 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     log::info!("Scanning for plugins...");
-    let mut plugin_scanner = PluginScanner::new();
-    plugin_scanner.discover_plugins();
-    let available_plugins = plugin_scanner.get_plugins();
-    log::info!("Found {} LV2 plugins", available_plugins.len());
+    let host_cfg = HostConfig {
+        sample_rate: audio_state.sample_rate.load() as f64, // or device_rate if you queried CPAL first
+        max_block: constants::MAX_BUFFER_SIZE,
+    };
+    let ui_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
+    let unified_plugins = ui_facade.scan().unwrap_or_default();
 
     // Start audio thread
     {
@@ -100,7 +102,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 audio_state.clone(),
                 command_tx.clone(),
                 ui_rx,
-                available_plugins,
+                unified_plugins,
                 config,
             )))
         }),
