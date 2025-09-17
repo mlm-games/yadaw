@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     automation::{AutomationMode, AutomationTarget},
     clip::{AudioClip, MidiClip, MidiNote},
+    plugin_api::BackendKind,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -35,7 +36,12 @@ pub enum AudioCommand {
     FreezeTrack(usize),
     UnfreezeTrack(usize),
 
-    AddPlugin(usize, String),
+    AddPluginUnified {
+        track_id: usize,
+        backend: BackendKind,
+        uri: String,
+        display_name: String,
+    },
     RemovePlugin(usize, usize),
     SetPluginBypass(usize, usize, bool),
     SetPluginParam(usize, usize, String, f32),
@@ -154,4 +160,10 @@ pub enum UIUpdate {
     Info(String),
 
     ReservedNoteIds(Vec<u64>),
+
+    PluginParamsDiscovered {
+        track_id: usize,
+        plugin_idx: usize,
+        params: Vec<(String, f32, f32, f32)>,
+    },
 }

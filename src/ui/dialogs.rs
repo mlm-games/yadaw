@@ -6,6 +6,7 @@ use super::*;
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::messages::AudioCommand;
+use crate::model::plugin_api::BackendKind;
 use crate::plugin::{categorize_plugin, categorize_unified_plugin};
 use crate::ui::app::FileDialogPurpose;
 use crate::ui::theme;
@@ -631,8 +632,18 @@ impl PluginBrowserDialog {
 
                         let resp = ui.selectable_label(selected, display_name);
                         if resp.double_clicked() {
+                            let backend = if plugin.uri.starts_with("file://") {
+                                BackendKind::Clap
+                            } else {
+                                BackendKind::Lv2
+                            };
                             let track_id = app.selected_track_for_plugin.take().unwrap_or(app.selected_track);
-                            let _ = app.command_tx.send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
+                            let _ = app.command_tx.send(AudioCommand::AddPluginUnified {
+                                track_id,
+                                backend,
+                                uri: plugin.uri.clone(),
+                                display_name: plugin.name.clone(),
+                            });
                             self.closed = true;
                         } else if resp.clicked() {
                             self.selected_plugin = Some(idx);
@@ -681,8 +692,19 @@ impl PluginBrowserDialog {
                                 }
 
                                 // Proceed with adding anyway (can choose)
-                                let _ = app.command_tx.send(AudioCommand::AddPlugin(track_id, plugin.uri.clone()));
-                                self.closed = true;
+                                let backend = if plugin.uri.starts_with("file://") {
+                                BackendKind::Clap
+                            } else {
+                                BackendKind::Lv2
+                            };
+                            let track_id = app.selected_track_for_plugin.take().unwrap_or(app.selected_track);
+                            let _ = app.command_tx.send(AudioCommand::AddPluginUnified {
+                                track_id,
+                                backend,
+                                uri: plugin.uri.clone(),
+                                display_name: plugin.name.clone(),
+                            });
+                            self.closed = true;
                             }
                         }
                     }

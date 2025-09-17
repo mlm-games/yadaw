@@ -8,8 +8,9 @@ use dashmap::DashMap;
 
 use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, NoteDelta, UIUpdate};
+use crate::model::PluginDescriptor;
 use crate::model::plugin_api::BackendKind;
-use crate::plugin::get_control_port_info;
+use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::AppState;
 
 const MIDI_PREVIEW_THROTTLE_MS: u64 = 30;
@@ -156,53 +157,53 @@ fn process_command(
         | AudioCommand::FreezeTrack(_)
         | AudioCommand::UnfreezeTrack(_) => {}
 
-        AudioCommand::AddPlugin(track_id, uri) => {
-            let backend = if uri.starts_with("file://") || uri.ends_with(".clap") {
-                BackendKind::Clap
-            } else {
-                BackendKind::Lv2
-            };
-
-            // Keep updating the model (track.plugin_chain) for UI, reusing your LV2 create_plugin_instance
-            // For CLAP, insert an empty params map; the audio thread will discover params later.
+        AudioCommand::AddPluginUnified {
+            track_id,
+            backend,
+            uri,
+            display_name,
+        } => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 let plugin_idx = track.plugin_chain.len();
-
-                let desc = if backend == BackendKind::Lv2 {
-                    // use your existing default seeding for LV2
-                    crate::plugin::create_plugin_instance(uri, audio_state.sample_rate.load())
-                        .unwrap_or_else(|_| crate::model::plugin::PluginDescriptor {
+                // seed descriptor
+                let desc = if *backend == BackendKind::Lv2 {
+                    create_plugin_instance(uri, audio_state.sample_rate.load()).unwrap_or_else(
+                        |_| PluginDescriptor {
                             uri: uri.clone(),
-                            name: uri.clone(),
+                            name: display_name.clone(),
                             bypass: false,
-                            params: std::collections::HashMap::new(),
+                            params: HashMap::new(),
                             preset_name: None,
                             custom_name: None,
-                        })
+                        },
+                    )
                 } else {
-                    // CLAP: empty params now; can be refreshed later
-                    crate::model::plugin::PluginDescriptor {
+                    PluginDescriptor {
                         uri: uri.clone(),
-                        name: uri.clone(),
+                        name: display_name.clone(),
                         bypass: false,
-                        params: std::collections::HashMap::new(),
+                        params: HashMap::new(),
                         preset_name: None,
                         custom_name: None,
                     }
                 };
-
                 track.plugin_chain.push(desc);
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                let tracks_clone = state.tracks.clone();
                 drop(state);
 
-                // Ask audio thread to instantiate
+                // ask audio thread to instantiate
                 let _ = realtime_tx.send(RealtimeCommand::AddUnifiedPlugin {
                     track_id: *track_id,
                     plugin_idx,
-                    backend,
+                    backend: *backend,
                     uri: uri.clone(),
                 });
+
+                // refresh tracks snapshot
+                let snapshots = crate::audio_snapshot::build_track_snapshots(&tracks_clone);
+                let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
             }
         }
         AudioCommand::RemovePlugin(track_id, plugin_idx) => {

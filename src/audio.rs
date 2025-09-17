@@ -772,7 +772,7 @@ impl AudioEngine {
                         for i in 0..take {
                             let s = self.recording_state.monitor_queue[i];
                             processor.input_buffers[0][i] += s;
-                            processor.input_buffers[0][i] += s;
+                            processor.input_buffers[1][i] += s;
                         }
                         if take > 0 {
                             self.recording_state.monitor_queue.drain(..take);
@@ -802,7 +802,7 @@ impl AudioEngine {
                     for i in 0..frames_to_process {
                         let out_idx = (frames_processed + i) * channels;
                         let l = processor.input_buffers[0][i] * left_gain;
-                        let r = processor.input_buffers[0][i] * right_gain;
+                        let r = processor.input_buffers[1][i] * right_gain;
 
                         output[out_idx] += l;
                         if channels > 1 {
@@ -1009,7 +1009,7 @@ fn process_midi_track(
 
     // Clear input buffers
     processor.input_buffers[0][..num_frames].fill(0.0);
-    processor.input_buffers[0][..num_frames].fill(0.0);
+    processor.input_buffers[1][..num_frames].fill(0.0);
 
     // Generate audio if no plugins
     if processor.plugins_unified.is_empty() && !processor.active_notes.is_empty() {
@@ -1021,7 +1021,7 @@ fn process_midi_track(
                     generate_sine_for_note(note.pitch, note.velocity, sample_offset, sample_rate);
             }
             processor.input_buffers[0][i] = sample;
-            processor.input_buffers[0][i] = sample;
+            processor.input_buffers[1][i] = sample;
         }
     }
 }
@@ -1036,7 +1036,7 @@ fn process_audio_track(
 ) {
     // Zero
     processor.input_buffers[0][..num_frames].fill(0.0);
-    processor.input_buffers[0][..num_frames].fill(0.0);
+    processor.input_buffers[1][..num_frames].fill(0.0);
 
     let converter = TimeConverter::new(sample_rate as f32, bpm);
 
@@ -1100,7 +1100,7 @@ fn process_audio_track(
             }
 
             processor.input_buffers[0][buf_idx] += s;
-            processor.input_buffers[0][buf_idx] += s;
+            processor.input_buffers[1][buf_idx] += s;
         }
     }
 }
@@ -1124,7 +1124,7 @@ fn process_preview_note(
             let envelope = (-(sample_pos * 4.0 / sample_rate)).exp() as f32;
 
             processor.input_buffers[0][i] += sample * envelope * 3.0; // Boost for preview
-            processor.input_buffers[0][i] += sample * envelope * 3.0;
+            processor.input_buffers[1][i] += sample * envelope * 3.0;
         }
     }
 }
