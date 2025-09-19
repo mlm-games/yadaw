@@ -79,7 +79,7 @@ winit = { version = "0.30.12", default-features = false, features = [
 default = ["clap-host", "lv2-legacy"]
 desktop-bin = []
 android = []
-clap-host = []
+clap-host = ["clack-extensions"]
 lv2-legacy = []
 
 [dependencies.clack-host]
@@ -90,6 +90,7 @@ branch = "main"
 [dependencies.clack-extensions]
 git = "https://github.com/prokopyl/clack"
 package = "clack-extensions"
+features = ["params"]
 branch = "main"
 optional = true
 

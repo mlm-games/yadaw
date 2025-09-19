@@ -88,6 +88,7 @@ struct TrackProcessor {
     pattern_loop_count: u32,
     notes_triggered_this_loop: Vec<u8>,
     last_block_end_samples: f64,
+    plugin_active_notes: Vec<(u8, u8)>,
 }
 
 impl TrackProcessor {
@@ -105,6 +106,7 @@ impl TrackProcessor {
             pattern_loop_count: 0,
             notes_triggered_this_loop: Vec::new(),
             last_block_end_samples: 0.0,
+            plugin_active_notes: Vec::new(),
         };
         s.ensure_channels(2);
         s
@@ -313,6 +315,7 @@ pub fn run_audio_thread(
                     processor.last_pattern_position = 0.0;
                     processor.pattern_loop_count = 0;
                     processor.notes_triggered_this_loop.clear();
+                    processor.plugin_active_notes.clear();
                 }
             }
 
@@ -1139,6 +1142,7 @@ fn build_block_midi_events(
     loop_start: f64,
     loop_end: f64,
     transport_jump: bool,
+    plugin_active_notes: &mut Vec<(u8, u8)>,
 ) -> Vec<(u8, u8, u8, i64)> {
     let conv = TimeConverter::new(sample_rate as f32, bpm);
 
@@ -1256,6 +1260,29 @@ fn build_block_midi_events(
     }
 
     events.sort_by_key(|e| e.3);
+    let mut new_active = plugin_active_notes.clone();
+
+    for event in &events {
+        let channel = event.0 & 0x0F;
+        let status = event.0 & 0xF0;
+        let key = event.1;
+
+        match status {
+            0x90 if event.2 > 0 => {
+                // Note on - add to active
+                if !new_active.contains(&(channel, key)) {
+                    new_active.push((channel, key));
+                }
+            }
+            0x80 | 0x90 => {
+                // Note off - remove from active
+                new_active.retain(|&(ch, k)| ch != channel || k != key);
+            }
+            _ => {}
+        }
+    }
+
+    *plugin_active_notes = new_active;
     events
 }
 
@@ -1271,6 +1298,24 @@ fn process_track_plugins(
     loop_end_beats: f64,
     plugin_time_ms_accum: &mut f32,
 ) {
+    let contiguous = (processor.last_block_end_samples - block_start_samples).abs() <= f64::EPSILON;
+    let transport_jump = !contiguous;
+
+    let mut all_midi_events: Vec<MidiEvent> = Vec::new();
+
+    // If transport jumped (loop or seek), send note-offs for all active notes
+    if transport_jump && !processor.plugin_active_notes.is_empty() {
+        for &(channel, key) in &processor.plugin_active_notes {
+            all_midi_events.push(MidiEvent {
+                status: 0x80 | channel,
+                data1: key,
+                data2: 0,
+                time_frames: 0, // At start of block
+            });
+        }
+        processor.plugin_active_notes.clear();
+    }
+
     // Build MIDI events for this block if it's a MIDI track
     let mut all_midi_events: Vec<MidiEvent> = Vec::new();
     if track.is_midi {
@@ -1288,6 +1333,7 @@ fn process_track_plugins(
                 loop_start_beats,
                 loop_end_beats,
                 transport_jump,
+                &mut processor.plugin_active_notes,
             );
             all_midi_events.extend(clip_events.into_iter().map(|(st, d1, d2, t)| MidiEvent {
                 status: st,
