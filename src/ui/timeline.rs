@@ -1236,10 +1236,16 @@ impl TimelineView {
         let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
         let playhead_x = current_beat as f32 * self.zoom_x;
 
-        // Playhead within the right 20% of the view
         let view_w = self.last_view_width.max(200.0);
+        let left_margin = view_w * 0.1;
         let right_margin = view_w * 0.2;
-        if playhead_x > self.scroll_x + view_w - right_margin {
+
+        // Allow scrolling backwards when playhead goes off left side
+        if playhead_x < self.scroll_x + left_margin {
+            self.scroll_x = (playhead_x - left_margin).max(0.0);
+        }
+        // Scroll forward when playhead approaches right edge
+        else if playhead_x > self.scroll_x + view_w - right_margin {
             self.scroll_x = playhead_x - (view_w - right_margin);
         }
     }

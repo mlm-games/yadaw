@@ -241,6 +241,7 @@ impl YadawApp {
         if let Some(track) = state.tracks.get(self.selected_track) {
             let new_track = self.track_manager.duplicate_track(track);
             state.tracks.insert(self.selected_track + 1, new_track);
+            state.ensure_ids();
             drop(state);
             let _ = self.command_tx.send(AudioCommand::UpdateTracks);
         }
