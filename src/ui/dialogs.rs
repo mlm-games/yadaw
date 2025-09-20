@@ -1349,6 +1349,7 @@ impl ImportAudioDialog {
                         if let Some(track) = state.tracks.get_mut(app.selected_track) {
                             if !track.is_midi {
                                 track.audio_clips.push(clip);
+                                state.ensure_ids();
                             } else {
                                 app.dialogs
                                     .show_warning("Cannot import audio to MIDI track");

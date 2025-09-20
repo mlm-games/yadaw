@@ -124,6 +124,34 @@ impl PianoRollView {
                     ui.set_clip_rect(lane_rect);
                     self.draw_velocity_lane(ui, lane_rect, app);
                 });
+
+                // Keep velocity lane and roll in sync for wheel/touch interactions
+                if lane_resp.hovered() {
+                    let scroll_delta = ui.input(|i| i.raw_scroll_delta);
+                    if ui.input(|i| i.modifiers.ctrl) {
+                        // Horizontal zoom, anchored like the roll
+                        let old = self.piano_roll.zoom_x;
+                        self.piano_roll.zoom_x = (self.piano_roll.zoom_x
+                            * (1.0 + scroll_delta.y * 0.01))
+                            .clamp(10.0, 500.0);
+                        if (self.piano_roll.zoom_x - old).abs() > f32::EPSILON {
+                            // Anchor zoom to mouse x within the lane grid
+                            if let Some(pos) = lane_resp.hover_pos() {
+                                let grid_left =
+                                    lane_rect.left() + crate::constants::PIANO_KEY_WIDTH;
+                                let cx = (pos.x - grid_left + self.piano_roll.scroll_x) / old;
+                                self.piano_roll.scroll_x =
+                                    (cx * self.piano_roll.zoom_x - (pos.x - grid_left)).max(0.0);
+                            }
+                        }
+                    } else {
+                        // Horizontal pan only (no vertical velocity scroll)
+                        self.piano_roll.scroll_x =
+                            (self.piano_roll.scroll_x - scroll_delta.x).max(0.0);
+                    }
+                }
+                // Touch gestures (pinch, two-finger pan) also apply in the lane
+                self.handle_touch_pan_zoom(ui.ctx(), lane_rect);
             }
 
             if self.show_controller_lanes {

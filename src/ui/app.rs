@@ -426,6 +426,7 @@ impl YadawApp {
             .map(|project| {
                 let mut state = self.state.lock().unwrap();
                 state.load_project(project);
+                state.ensure_ids();
                 drop(state);
 
                 self.project_path = Some(path.to_string_lossy().to_string());

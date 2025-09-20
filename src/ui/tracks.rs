@@ -482,8 +482,9 @@ impl TracksPanel {
             }
             "duplicate" => {
                 if let Some(track) = state.tracks.get(track_idx) {
-                    let new_track = track.clone();
-                    state.tracks.insert(track_idx + 1, new_track);
+                    let dup = app.track_manager.duplicate_track(&track);
+                    state.tracks.insert(track_idx + 1, dup);
+                    state.ensure_ids();
                 }
                 drop(state);
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
