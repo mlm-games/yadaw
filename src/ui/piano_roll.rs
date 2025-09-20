@@ -72,6 +72,20 @@ impl PianoRoll {
         pattern: &mut MidiClip,
         allow_add_on_click: bool,
     ) -> Vec<PianoRollAction> {
+        // duration to use for a newly added note
+        let preferred_duration = {
+            let sel = self.selected_indices(pattern);
+            if let Some(&idx) = sel.last() {
+                if let Some(n) = pattern.notes.get(idx) {
+                    n.duration.max(1e-6)
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            }
+        };
+
         let mut actions = Vec::new();
         let available_rect = ui.available_rect_before_wrap();
 
@@ -361,7 +375,7 @@ impl PianoRoll {
             self.interaction_state = InteractionState::Idle;
         }
 
-        // Double-click
+        // Double-click: delete-on-note or create-on-empty (with preferred duration)
         if response.double_clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 // delete-on-note or create-on-empty
@@ -387,14 +401,19 @@ impl PianoRoll {
                     let pitch = pitch_float.floor().clamp(0.0, 127.0) as u8;
                     let snapped_beat = ((beat / self.grid_snap).round() * self.grid_snap).max(0.0);
                     if (snapped_beat as f64) < pattern.length_beats {
-                        let duration =
-                            (self.grid_snap as f64).min(pattern.length_beats - snapped_beat as f64);
+                        // Use selected duration if available, else grid size
+                        let fallback = (self.grid_snap as f64).max(1e-6);
+                        let use_dur = if preferred_duration > 0.0 {
+                            preferred_duration
+                        } else {
+                            fallback.min(pattern.length_beats - snapped_beat as f64)
+                        };
                         actions.push(PianoRollAction::AddNote(MidiNote {
                             id: 0,
                             pitch,
                             velocity: 100,
                             start: snapped_beat as f64,
-                            duration,
+                            duration: use_dur,
                         }));
                     }
                 }
@@ -403,12 +422,11 @@ impl PianoRoll {
         // Single click (with Alt audition preserved)
         else if response.clicked() && !response.dragged() {
             if let Some(pos) = response.interact_pointer_pos() {
-                // 1) Detect if the tap hit an existing note right now (not relying on hover)
                 let clicked_idx = pattern
                     .notes
                     .iter()
                     .enumerate()
-                    .rev() // top-most first if overlapping
+                    .rev()
                     .find(|(_, n)| self.note_rect(n, grid_rect).contains(pos))
                     .map(|(i, _)| i);
 
@@ -436,11 +454,10 @@ impl PianoRoll {
                     } else {
                         self.select_single(&pattern.notes[idx], idx, false);
                     }
-                    // No AddNote action
                     return actions;
                 }
 
-                // 3) Otherwise it's empty space: only add if allowed (Draw tool), else do nothing
+                // Otherwise empty: add only if allowed (Draw tool)
                 if allow_add_on_click {
                     let grid_pos = pos - grid_rect.min;
                     let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
@@ -457,11 +474,16 @@ impl PianoRoll {
                         pf.floor().clamp(0.0, 127.0) as u8
                     };
 
-                    // Keep duration at grid size (or your minimum)
-                    let duration = if self.grid_snap > 0.0 {
+                    // New-note duration: selected duration if present, else grid or tiny minimum
+                    let grid_len = if self.grid_snap > 0.0 {
                         self.grid_snap as f64
                     } else {
                         0.25f64
+                    };
+                    let use_dur = if preferred_duration > 0.0 {
+                        preferred_duration
+                    } else {
+                        grid_len
                     };
 
                     // Don’t add on top of an existing same-cell note; select it instead.
@@ -479,15 +501,14 @@ impl PianoRoll {
                             pitch,
                             velocity: 100,
                             start: snapped_beat,
-                            duration,
+                            duration: use_dur,
                         }));
                     }
                 }
-                // If not allowed to add (Select tool): do nothing on empty space tap
             }
         }
 
-        // Draw notes using selection by ID or temp index
+        // Draw notes
         for (i, note) in pattern.notes.iter().enumerate() {
             let note_rect = self.note_rect(note, grid_rect);
             let is_selected = (note.id != 0 && self.selected_note_ids.contains(&note.id))
@@ -555,7 +576,7 @@ impl PianoRoll {
             }
         }
 
-        // Context menu delete (ID-aware removal from selection)
+        // Context menu delete (ID-aware)
         if response.secondary_clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let mut delete_selected = false;
