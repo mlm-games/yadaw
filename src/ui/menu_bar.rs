@@ -137,58 +137,66 @@ impl MenuBar {
 
             // CUT
             if ui.button("Cut").clicked() {
-                let handled = if notes_active {
-                    let mut pr = std::mem::take(&mut app.piano_roll_view);
-                    let handled = pr.menu_cut_notes(ui.ctx(), app);
-                    app.piano_roll_view = pr;
-                    handled
+                if notes_active {
+                    let clipboard = app.piano_roll_view.cut_selected_notes(
+                        &app.state,
+                        app.selected_track,
+                        &app.command_tx,
+                    );
+                    if let Some(notes) = clipboard {
+                        app.note_clipboard = Some(notes);
+                        app.push_undo();
+                    }
                 } else {
                     app.cut_selected();
-                    true
-                };
-                if handled {
-                    ui.close();
                 }
+                ui.close();
             }
 
             // COPY
             if ui.button("Copy").clicked() {
-                let handled = if notes_active {
-                    let mut pr = std::mem::take(&mut app.piano_roll_view);
-                    let handled = pr.menu_copy_notes(ui.ctx(), app);
-                    app.piano_roll_view = pr;
-                    handled
+                if notes_active {
+                    let clipboard = app
+                        .piano_roll_view
+                        .copy_selected_notes(&app.state, app.selected_track);
+                    if let Some(notes) = clipboard {
+                        app.note_clipboard = Some(notes);
+                    }
                 } else {
                     app.copy_selected();
-                    true
-                };
-                if handled {
-                    ui.close();
                 }
+                ui.close();
             }
 
             // PASTE
             if ui.button("Paste").clicked() {
-                let handled = if notes_active {
-                    let mut pr = std::mem::take(&mut app.piano_roll_view);
-                    let handled = pr.menu_paste_notes(ui.ctx(), app);
-                    app.piano_roll_view = pr;
-                    handled
+                if notes_active {
+                    if let Some(ref clipboard) = app.note_clipboard.clone() {
+                        app.piano_roll_view.paste_notes(
+                            &app.state,
+                            app.selected_track,
+                            &app.audio_state,
+                            &app.command_tx,
+                            clipboard,
+                        );
+                        app.push_undo();
+                    }
                 } else {
                     app.paste_at_playhead();
-                    true
-                };
-                if handled {
-                    ui.close();
                 }
+                ui.close();
             }
 
             // DELETE
             if ui.button("Delete").clicked() {
                 if notes_active {
-                    let mut pr = std::mem::take(&mut app.piano_roll_view);
-                    let _ = pr.menu_cut_notes(ui.ctx(), app); // delete via cut (no clipboard use)
-                    app.piano_roll_view = pr;
+                    if app.piano_roll_view.delete_selected_notes(
+                        &app.state,
+                        app.selected_track,
+                        &app.command_tx,
+                    ) {
+                        app.push_undo();
+                    }
                 } else {
                     app.delete_selected();
                 }
@@ -199,9 +207,8 @@ impl MenuBar {
 
             if ui.button("Select All").clicked() {
                 if notes_active {
-                    let mut pr = std::mem::take(&mut app.piano_roll_view);
-                    pr.select_all_notes();
-                    app.piano_roll_view = pr;
+                    app.piano_roll_view
+                        .select_all_notes(&app.state, app.selected_track);
                 } else {
                     app.select_all();
                 }

@@ -7,13 +7,6 @@ use crate::model::{
     plugin_api::BackendKind,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum NoteDelta {
-    Set { index: usize, note: MidiNote },
-    Add { index: usize, note: MidiNote },
-    Remove { index: usize },
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AudioCommand {
     Play,
@@ -25,6 +18,7 @@ pub enum AudioCommand {
     SetMasterVolume(f32),
 
     UpdateTracks,
+
     SetTrackVolume(usize, f32),
     SetTrackPan(usize, f32),
     SetTrackMute(usize, bool),
@@ -52,15 +46,16 @@ pub enum AudioCommand {
     SetLoopEnabled(bool),
     SetLoopRegion(f64, f64),
 
+    // MIDI clip management (structure, not content)
     CreateMidiClip(usize, f64, f64),
     CreateMidiClipWithData(usize, MidiClip),
-    UpdateMidiClip(usize, usize, Vec<MidiNote>),
     DeleteMidiClip(usize, usize),
     MoveMidiClip(usize, usize, f64),
     ResizeMidiClip(usize, usize, f64, f64),
     DuplicateMidiClip(usize, usize),
     SplitMidiClip(usize, usize, f64),
 
+    // Audio clips
     MoveAudioClip(usize, usize, f64),
     ResizeAudioClip(usize, usize, f64, f64),
     DuplicateAudioClip(usize, usize),
@@ -70,58 +65,34 @@ pub enum AudioCommand {
     SetAudioClipFadeIn(usize, usize, Option<f64>),
     SetAudioClipFadeOut(usize, usize, Option<f64>),
 
+    // Automation
     AddAutomationPoint(usize, AutomationTarget, f64, f32),
     RemoveAutomationPoint(usize, usize, f64),
     UpdateAutomationPoint(usize, usize, f64, f64, f32),
     SetAutomationMode(usize, usize, AutomationMode),
     ClearAutomationLane(usize, usize),
 
-    AddNote(usize, usize, MidiNote),
-    RemoveNote(usize, usize, usize),
-    UpdateNote(usize, usize, usize, MidiNote),
+    // Preview
     PreviewNote(usize, u8),
     StopPreviewNote,
 
+    // Sends/Groups
     AddSend(usize, usize, f32),
     RemoveSend(usize, usize),
     SetSendAmount(usize, usize, f32),
     SetSendPreFader(usize, usize, bool),
-
     CreateGroup(String, Vec<usize>),
     RemoveGroup(usize),
     AddTrackToGroup(usize, usize),
     RemoveTrackFromGroup(usize),
 
-    BeginMidiEdit {
-        track_id: usize,
-        clip_id: usize,
-        session_id: u64,
-        base_note_count: usize,
-    },
-    ApplyMidiNoteDelta {
-        track_id: usize,
-        clip_id: usize,
-        session_id: u64,
-        delta: NoteDelta,
-    },
-    CommitMidiEdit {
-        track_id: usize,
-        clip_id: usize,
-        session_id: u64,
-        final_notes: Vec<MidiNote>,
-    },
-
-    ReserveNoteIds(usize),
+    // Clip operations
     ToggleClipLoop(usize, usize, bool), // track_id, clip_id, enabled
     MakeClipAlias(usize, usize),        // assign pattern_id, mirror edits
     MakeClipUnique(usize, usize),       // remove pattern_id
     SetClipQuantize(usize, usize, f32, f32, f32, bool), // grid, strength, swing, enabled
     DuplicateMidiClipAsAlias(usize, usize), // track_id, clip_id
     SetClipContentOffset(usize, usize, f64),
-    UpdateMidiClipsSameNotes {
-        targets: Vec<(usize, usize)>, // (track_id, clip_id)
-        notes: Vec<MidiNote>,
-    },
 }
 
 #[derive(Debug, Clone)]

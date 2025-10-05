@@ -7,19 +7,11 @@ use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
 
 use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
-use crate::messages::{AudioCommand, NoteDelta, UIUpdate};
+use crate::messages::{AudioCommand, UIUpdate};
 use crate::model::PluginDescriptor;
 use crate::model::plugin_api::BackendKind;
 use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::AppState;
-
-const MIDI_PREVIEW_THROTTLE_MS: u64 = 30;
-
-struct MidiEditSession {
-    pending: Vec<crate::model::MidiNote>,
-    last_send: Instant,
-    base_count: usize,
-}
 
 pub fn run_command_processor(
     app_state: Arc<std::sync::Mutex<AppState>>,
@@ -28,39 +20,8 @@ pub fn run_command_processor(
     realtime_tx: Sender<RealtimeCommand>,
     ui_tx: Sender<UIUpdate>,
 ) {
-    let mut sessions: HashMap<(usize, usize, u64), MidiEditSession> = HashMap::new();
-
     while let Ok(command) = command_rx.recv() {
-        process_command(
-            &command,
-            &app_state,
-            &audio_state,
-            &realtime_tx,
-            &ui_tx,
-            &mut sessions,
-        );
-    }
-}
-
-fn apply_delta_vec(vec: &mut Vec<crate::model::MidiNote>, delta: &NoteDelta) {
-    match *delta {
-        NoteDelta::Set { index, note } => {
-            if index < vec.len() {
-                vec[index] = note;
-            }
-        }
-        NoteDelta::Add { index, note } => {
-            if index <= vec.len() {
-                vec.insert(index, note);
-            } else {
-                vec.push(note);
-            }
-        }
-        NoteDelta::Remove { index } => {
-            if index < vec.len() {
-                vec.remove(index);
-            }
-        }
+        process_command(&command, &app_state, &audio_state, &realtime_tx, &ui_tx);
     }
 }
 
@@ -82,7 +43,6 @@ fn process_command(
     audio_state: &Arc<AudioState>,
     realtime_tx: &Sender<RealtimeCommand>,
     ui_tx: &Sender<UIUpdate>,
-    sessions: &mut HashMap<(usize, usize, u64), MidiEditSession>,
 ) {
     match command {
         AudioCommand::Play => {
@@ -288,7 +248,6 @@ fn process_command(
 
         // ---------- MIDI CLIPS ----------
         AudioCommand::CreateMidiClip(track_id, start_beat, length_beats) => {
-            // pre-allocate id before borrowing track
             let new_id = {
                 let mut state = app_state.lock().unwrap();
                 state.fresh_id()
@@ -309,6 +268,18 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
+
+        AudioCommand::DeleteMidiClip(track_id, clip_id) => {
+            let mut state = app_state.lock().unwrap();
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                if *clip_id < track.midi_clips.len() {
+                    track.midi_clips.remove(*clip_id);
+                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                }
+            }
+            send_tracks_snapshot_locked(&state, realtime_tx);
+        }
+
         AudioCommand::CreateMidiClipWithData(track_id, clip) => {
             // fix ids before borrowing track
             let mut new_clip = clip.clone();
@@ -331,63 +302,6 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-        AudioCommand::UpdateMidiClip(track_id, clip_id, notes) => {
-            // work on owned vector and assign ids before any track borrow
-            let mut notes_owned = notes.clone();
-            {
-                let mut state = app_state.lock().unwrap();
-                for n in &mut notes_owned {
-                    if n.id == 0 {
-                        n.id = state.fresh_id();
-                    }
-                }
-            }
-            let mut state = app_state.lock().unwrap();
-
-            let pattern_id = state
-                .tracks
-                .get(*track_id)
-                .and_then(|t| t.midi_clips.get(*clip_id))
-                .and_then(|c| c.pattern_id);
-
-            if let Some(pid) = pattern_id {
-                // Mirror to all clips with the same pattern_id
-                for t in &mut state.tracks {
-                    for c in &mut t.midi_clips {
-                        if c.pattern_id == Some(pid) {
-                            c.notes = notes_owned.clone();
-                            c.notes
-                                .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-                        }
-                    }
-                }
-            } else {
-                if let Some(track) = state.tracks.get_mut(*track_id) {
-                    if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                        clip.notes = notes_owned.clone();
-                        clip.notes
-                            .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-                    }
-                }
-            }
-
-            // Send RT narrow update
-            let notes_snapshot: Vec<MidiNoteSnapshot> = notes_owned
-                .iter()
-                .map(|n| MidiNoteSnapshot {
-                    pitch: n.pitch,
-                    velocity: n.velocity,
-                    start: n.start,
-                    duration: n.duration,
-                })
-                .collect();
-            let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
-                track_id: *track_id,
-                clip_id: *clip_id,
-                notes: notes_snapshot,
-            });
-        }
-
         AudioCommand::DeleteMidiClip(track_id, clip_id) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -622,213 +536,6 @@ fn process_command(
         | AudioCommand::AddTrackToGroup(_, _)
         | AudioCommand::RemoveTrackFromGroup(_) => {}
 
-        // ---------- NOTES ----------
-        AudioCommand::AddNote(track_id, clip_id, note_ref) => {
-            // clone and assign id before borrowing track
-            let mut note = note_ref.clone();
-            if note.id == 0 {
-                let mut state = app_state.lock().unwrap();
-                note.id = state.fresh_id();
-            }
-            let mut state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if track.is_midi {
-                    if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                        clip.notes.push(note);
-                        clip.notes
-                            .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-                        let notes_snapshot: Vec<MidiNoteSnapshot> = clip
-                            .notes
-                            .iter()
-                            .map(|n| MidiNoteSnapshot {
-                                pitch: n.pitch,
-                                velocity: n.velocity,
-                                start: n.start,
-                                duration: n.duration,
-                            })
-                            .collect();
-                        let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
-                            track_id: *track_id,
-                            clip_id: *clip_id,
-                            notes: notes_snapshot,
-                        });
-                        return;
-                    }
-                }
-            }
-        }
-        AudioCommand::RemoveNote(track_id, clip_id, note_index) => {
-            let mut state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if track.is_midi {
-                    if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                        if *note_index < clip.notes.len() {
-                            clip.notes.remove(*note_index);
-                            let notes_snapshot: Vec<MidiNoteSnapshot> = clip
-                                .notes
-                                .iter()
-                                .map(|n| MidiNoteSnapshot {
-                                    pitch: n.pitch,
-                                    velocity: n.velocity,
-                                    start: n.start,
-                                    duration: n.duration,
-                                })
-                                .collect();
-                            let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
-                                track_id: *track_id,
-                                clip_id: *clip_id,
-                                notes: notes_snapshot,
-                            });
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        AudioCommand::UpdateNote(track_id, clip_id, note_index, note_ref) => {
-            // clone and assign id before borrowing track
-            let mut new_note = note_ref.clone();
-            if new_note.id == 0 {
-                let mut state = app_state.lock().unwrap();
-                new_note.id = state.fresh_id();
-            }
-            let mut state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if track.is_midi {
-                    if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                        if *note_index < clip.notes.len() {
-                            clip.notes[*note_index] = new_note;
-                            clip.notes
-                                .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-                            let notes_snapshot: Vec<MidiNoteSnapshot> = clip
-                                .notes
-                                .iter()
-                                .map(|n| MidiNoteSnapshot {
-                                    pitch: n.pitch,
-                                    velocity: n.velocity,
-                                    start: n.start,
-                                    duration: n.duration,
-                                })
-                                .collect();
-                            let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
-                                track_id: *track_id,
-                                clip_id: *clip_id,
-                                notes: notes_snapshot,
-                            });
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-
-        // ---------- MIDI EDIT SESSIONS ----------
-        AudioCommand::BeginMidiEdit {
-            track_id,
-            clip_id,
-            session_id,
-            base_note_count,
-        } => {
-            let state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get(*track_id) {
-                if let Some(clip) = track.midi_clips.get(*clip_id) {
-                    sessions.insert(
-                        (*track_id, *clip_id, *session_id),
-                        MidiEditSession {
-                            pending: clip.notes.clone(),
-                            last_send: Instant::now()
-                                .checked_sub(Duration::from_millis(MIDI_PREVIEW_THROTTLE_MS))
-                                .unwrap_or_else(Instant::now),
-                            base_count: *base_note_count,
-                        },
-                    );
-                    let _ = realtime_tx.send(RealtimeCommand::BeginMidiClipEdit {
-                        track_id: *track_id,
-                        clip_id: *clip_id,
-                        session_id: *session_id,
-                    });
-                }
-            }
-        }
-        AudioCommand::ApplyMidiNoteDelta {
-            track_id,
-            clip_id,
-            session_id,
-            delta,
-        } => {
-            if let Some(sess) = sessions.get_mut(&(*track_id, *clip_id, *session_id)) {
-                apply_delta_vec(&mut sess.pending, delta);
-                if sess.last_send.elapsed() >= Duration::from_millis(MIDI_PREVIEW_THROTTLE_MS) {
-                    let mut state = app_state.lock().unwrap();
-                    if let Some(track) = state.tracks.get_mut(*track_id) {
-                        if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                            clip.notes = sess.pending.clone();
-                        }
-                    }
-                    drop(state);
-                    let _ = realtime_tx.send(RealtimeCommand::PreviewMidiClipNotes {
-                        track_id: *track_id,
-                        clip_id: *clip_id,
-                        session_id: *session_id,
-                        notes: notes_to_snapshot(&sess.pending),
-                    });
-                    sess.last_send = Instant::now();
-                }
-            }
-        }
-        AudioCommand::CommitMidiEdit {
-            track_id,
-            clip_id,
-            session_id,
-            final_notes,
-        } => {
-            // assign ids to any new notes before committing
-            let mut final_owned = final_notes.clone();
-            {
-                let mut state = app_state.lock().unwrap();
-                for n in &mut final_owned {
-                    if n.id == 0 {
-                        n.id = state.fresh_id();
-                    }
-                }
-            }
-            let mut state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                    clip.notes = final_owned.clone();
-                    clip.notes
-                        .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-                }
-            }
-            let notes_snapshot: Vec<MidiNoteSnapshot> = final_owned
-                .iter()
-                .map(|n| MidiNoteSnapshot {
-                    pitch: n.pitch,
-                    velocity: n.velocity,
-                    start: n.start,
-                    duration: n.duration,
-                })
-                .collect();
-            let _ = realtime_tx.send(RealtimeCommand::UpdateMidiClipNotes {
-                track_id: *track_id,
-                clip_id: *clip_id,
-                notes: notes_snapshot,
-            });
-            sessions.remove(&(*track_id, *clip_id, *session_id));
-        }
-
-        // ---------- ID RESERVATION ----------
-        AudioCommand::ReserveNoteIds(count) => {
-            let mut ids = Vec::with_capacity(*count);
-            {
-                let mut state = app_state.lock().unwrap();
-                for _ in 0..*count {
-                    ids.push(state.fresh_id());
-                }
-            }
-            let _ = ui_tx.send(UIUpdate::ReservedNoteIds(ids));
-        }
-
         AudioCommand::ToggleClipLoop(track_id, clip_id, enabled) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id) {
@@ -959,33 +666,6 @@ fn process_command(
                     clip.content_offset_beats = ((*new_off % len) + len) % len;
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
-        }
-
-        AudioCommand::UpdateMidiClipsSameNotes { targets, notes } => {
-            let mut state = app_state.lock().unwrap();
-            // Single undo for the whole batch
-            let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
-
-            // Assign ids once if needed
-            let mut notes_owned = notes.clone();
-            for n in &mut notes_owned {
-                if n.id == 0 {
-                    n.id = state.fresh_id();
-                }
-            }
-
-            for (t, c) in targets {
-                if let Some(track) = state.tracks.get_mut(*t) {
-                    if let Some(clip) = track.midi_clips.get_mut(*c) {
-                        // If clip is pooled alias: changing any member will mirror via UpdateMidiClip; but here we set explicitly
-                        clip.notes = notes_owned.clone();
-                        clip.notes
-                            .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-                    }
-                }
-            }
-            // One refresh is enough
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
     }

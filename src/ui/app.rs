@@ -78,7 +78,6 @@ pub struct YadawApp {
 
     pub(super) note_clipboard: Option<Vec<MidiNote>>,
     pub(super) active_edit_target: ActiveEditTarget,
-    pub(crate) reserved_note_ids: Vec<u64>,
     pub(crate) last_real_metrics_at: Option<Instant>,
 }
 
@@ -147,8 +146,6 @@ impl YadawApp {
             clipboard: None,
             midi_clipboard: None,
             note_clipboard: None,
-
-            reserved_note_ids: Vec::new(),
 
             active_edit_target: ActiveEditTarget::Clips,
 
@@ -782,9 +779,6 @@ impl YadawApp {
                 self.performance_monitor.update_metrics(metrics);
                 self.last_real_metrics_at = Some(Instant::now());
             }
-            UIUpdate::ReservedNoteIds(ids) => {
-                self.reserved_note_ids.extend(ids);
-            }
             _ => {}
         }
     }
@@ -1138,7 +1132,6 @@ impl YadawApp {
         if tracks_len == 0 {
             self.selected_track = 0;
             self.piano_roll_view.selected_clip = None;
-            self.piano_roll_view.editing_notes.clear();
             return;
         }
         if self.selected_track >= tracks_len {
@@ -1155,37 +1148,6 @@ impl YadawApp {
                     .and_then(|t| t.midi_clips.get(clip_idx))
                     .map(|c| c.notes.clone())
             };
-            match notes_opt {
-                Some(notes) => {
-                    self.piano_roll_view.editing_notes = notes;
-                    // Clean selection
-                    use std::collections::HashSet;
-                    let ids: HashSet<u64> = self
-                        .piano_roll_view
-                        .editing_notes
-                        .iter()
-                        .map(|n| n.id)
-                        .collect();
-                    self.piano_roll_view
-                        .piano_roll
-                        .selected_note_ids
-                        .retain(|id| ids.contains(id));
-                    self.piano_roll_view
-                        .piano_roll
-                        .temp_selected_indices
-                        .clear();
-                }
-                None => {
-                    // Clip disappeared or index changed
-                    self.piano_roll_view.selected_clip = None;
-                    self.piano_roll_view.editing_notes.clear();
-                    self.piano_roll_view.piano_roll.selected_note_ids.clear();
-                    self.piano_roll_view
-                        .piano_roll
-                        .temp_selected_indices
-                        .clear();
-                }
-            }
         }
     }
 
