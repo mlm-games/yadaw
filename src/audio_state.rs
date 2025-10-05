@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
+use crate::constants::{DEFAULT_LOOP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::lv2_plugin_host::LV2PluginInstance;
 use crate::model::PluginDescriptor;
 use crate::model::plugin_api::BackendKind;
@@ -68,7 +68,7 @@ impl AudioState {
             master_volume: Arc::new(AtomicF32::new(0.8)),
             loop_enabled: Arc::new(AtomicBool::new(true)),
             loop_start: Arc::new(AtomicF64::new(0.0)),
-            loop_end: Arc::new(AtomicF64::new(4.0)),
+            loop_end: Arc::new(AtomicF64::new(DEFAULT_LOOP_LEN)),
         }
     }
 

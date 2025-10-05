@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::{AutomationTarget, track::Track};
 use crate::time_utils::TimeConverter;
 
@@ -32,7 +33,7 @@ impl Default for AppState {
             buffer_size: 512,
             current_position: 0.0,
             loop_start: 0.0,
-            loop_end: 4.0,
+            loop_end: DEFAULT_LOOP_LEN,
             loop_enabled: false,
             time_signature: (4, 4),
             next_id: 1,

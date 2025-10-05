@@ -72,4 +72,5 @@ pub const MIDI_TIMING_SAMPLE_RATE: f32 = 44100.0; // Might need to change later
 pub const DEBUG_PLUGIN_AUDIO: bool = cfg!(debug_assertions);
 
 pub const DEFAULT_MIN_PROJECT_BEATS: f64 = 64.0;
-pub const DEFAULT_MIDI_CLIP_LEN: f64 = 4.0;
+pub const DEFAULT_MIDI_CLIP_LEN: f64 = 64.0;
+pub const DEFAULT_LOOP_LEN: f64 = 4.0;
