@@ -163,7 +163,7 @@ impl PianoRollView {
 
         let clip_idx = self.selected_clip.unwrap();
 
-        // Read from model
+        // ALWAYS read fresh from model
         let (clip_length, current_notes) = {
             let state = app.state.lock().unwrap();
             match state
@@ -173,7 +173,6 @@ impl PianoRollView {
             {
                 Some(clip) => (clip.length_beats, clip.notes.clone()),
                 None => {
-                    // Clip was deleted
                     self.selected_clip = None;
                     self.piano_roll.selected_note_ids.clear();
                     self.piano_roll.temp_selected_indices.clear();
@@ -182,138 +181,152 @@ impl PianoRollView {
             }
         };
 
-        // 2) Build temporary clip for piano roll widget
-        let mut temp_clip = MidiClip {
-            name: "temp".to_string(),
-            start_beat: 0.0,
+        // Build immutable clip for reading/drawing
+        let clip = MidiClip {
             length_beats: clip_length,
-            content_len_beats: clip_length,
-            notes: current_notes.clone(),
-            color: Some((1, 1, 1)),
+            notes: current_notes,
             ..Default::default()
         };
 
-        // 3) Draw overlays from other selected clips
-        {
-            let state = app.state.lock().unwrap();
-            if let Some(track) = state.tracks.get(app.selected_track) {
-                let others: Vec<&MidiClip> = app
-                    .selected_clips
-                    .iter()
-                    .filter(|(t, c)| *t == app.selected_track && *c != clip_idx)
-                    .filter_map(|(_, c)| track.midi_clips.get(*c))
-                    .collect();
-
-                let grid_left = ui.min_rect().left() + PIANO_KEY_WIDTH;
-                for oc in others {
-                    let color = egui::Color32::from_rgba_premultiplied(255, 255, 255, 40);
-                    for n in &oc.notes {
-                        let x = grid_left
-                            + (n.start as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
-                        let w = (n.duration as f32 * self.piano_roll.zoom_x).max(2.0);
-                        let y = ui.min_rect().bottom()
-                            - ((n.pitch as f32 / 127.0) * ui.min_rect().height());
-                        let r =
-                            egui::Rect::from_min_size(egui::pos2(x, y - 2.0), egui::vec2(w, 2.0));
-                        ui.painter().rect_filled(r, 1.0, color);
-                    }
-                }
-            }
-        }
-
-        // 4) Piano roll interaction (returns actions)
+        // Piano roll interaction (reads immutable clip, returns actions)
         let actions = self
             .piano_roll
-            .ui(ui, &mut temp_clip, self.tool_mode == ToolMode::Draw);
+            .ui(ui, &clip, self.tool_mode == ToolMode::Draw);
 
-        // 5) Track drag state for undo grouping
+        // Track pointer state for undo
         let pointer_down = ui.input(|i| i.pointer.any_down());
-        let pointer_released = ui.input(|i| i.pointer.any_released());
-
         if pointer_down && !self.drag_in_progress {
             self.drag_in_progress = true;
-            // Start of interaction - push undo
             app.push_undo();
             self.last_undo_snapshot = Some(std::time::Instant::now());
         }
-
-        if pointer_released && self.drag_in_progress {
+        if ui.input(|i| i.pointer.any_released()) {
             self.drag_in_progress = false;
         }
 
-        // 6) Apply discrete actions immediately to model
+        // Apply actions
         if !actions.is_empty() {
-            // Separate preview actions from state-modifying actions
-            let mut preview_pitch = None;
-            let mut stop_preview = false;
-            let mut state_actions = Vec::new();
+            let mut preview_actions = Vec::new();
+            let mut mutation_actions = Vec::new();
 
             for action in actions {
                 match action {
+                    PianoRollAction::PreviewNote(_) | PianoRollAction::StopPreview => {
+                        preview_actions.push(action);
+                    }
+                    _ => {
+                        mutation_actions.push(action);
+                    }
+                }
+            }
+
+            for action in preview_actions {
+                match action {
                     PianoRollAction::PreviewNote(pitch) => {
-                        preview_pitch = Some(pitch);
+                        let _ = app
+                            .command_tx
+                            .send(AudioCommand::PreviewNote(app.selected_track, pitch));
                     }
                     PianoRollAction::StopPreview => {
-                        stop_preview = true;
+                        let _ = app.command_tx.send(AudioCommand::StopPreviewNote);
                     }
-                    other => state_actions.push(other),
+                    _ => {}
                 }
             }
 
-            // Handle preview actions without holding the lock
-            if let Some(pitch) = preview_pitch {
-                let _ = app
-                    .command_tx
-                    .send(AudioCommand::PreviewNote(app.selected_track, pitch));
-            }
-            if stop_preview {
-                let _ = app.command_tx.send(AudioCommand::StopPreviewNote);
-            }
-
-            // Now handle state modifications
-            if !state_actions.is_empty() {
+            if !mutation_actions.is_empty() {
                 let mut state = app.state.lock().unwrap();
 
-                // Pre-generate IDs for any new notes
-                let mut new_ids = Vec::new();
-                for action in &state_actions {
-                    if let PianoRollAction::AddNote(note) = action {
-                        if note.id == 0 {
-                            new_ids.push(state.fresh_id());
-                        } else {
-                            new_ids.push(0); // Placeholder for notes that already have IDs
+                // Pre-generate any new IDs needed
+                let mut fresh_ids: Vec<u64> = Vec::new();
+                for action in &mutation_actions {
+                    match action {
+                        PianoRollAction::AddNote(note) if note.id == 0 => {
+                            fresh_ids.push(state.fresh_id());
                         }
+                        PianoRollAction::AddNotes(notes) => {
+                            for note in notes {
+                                if note.id == 0 {
+                                    fresh_ids.push(state.fresh_id());
+                                }
+                            }
+                        }
+                        PianoRollAction::DuplicateNotesAndSelect { original_notes, .. } => {
+                            for _ in original_notes {
+                                fresh_ids.push(state.fresh_id());
+                            }
+                        }
+                        _ => {}
                     }
                 }
+                let mut fresh_id_iter = fresh_ids.into_iter();
 
-                let mut id_index = 0;
                 if let Some(track) = state.tracks.get_mut(app.selected_track) {
                     if let Some(clip) = track.midi_clips.get_mut(clip_idx) {
                         let mut changed = false;
 
-                        for action in state_actions {
+                        for action in mutation_actions {
+                            changed = true; // Assume any mutation causes change
                             match action {
                                 PianoRollAction::AddNote(mut note) => {
                                     if note.id == 0 {
-                                        note.id = new_ids[id_index];
+                                        note.id = fresh_id_iter.next().unwrap();
                                     }
-                                    id_index += 1;
                                     clip.notes.push(note);
-                                    changed = true;
+                                }
+                                PianoRollAction::AddNotes(notes) => {
+                                    for mut note in notes {
+                                        if note.id == 0 {
+                                            note.id = fresh_id_iter.next().unwrap();
+                                        }
+                                        clip.notes.push(note);
+                                    }
                                 }
                                 PianoRollAction::RemoveNote(idx) => {
                                     if idx < clip.notes.len() {
                                         clip.notes.remove(idx);
-                                        changed = true;
+                                    }
+                                }
+                                PianoRollAction::RemoveNotes(mut indices) => {
+                                    indices.sort_unstable_by(|a, b| b.cmp(a));
+                                    for idx in indices {
+                                        if idx < clip.notes.len() {
+                                            clip.notes.remove(idx);
+                                        }
                                     }
                                 }
                                 PianoRollAction::UpdateNote(idx, note) => {
                                     if idx < clip.notes.len() {
                                         clip.notes[idx] = note;
-                                        changed = true;
                                     }
                                 }
-                                _ => {} // Preview actions already handled
+                                PianoRollAction::DuplicateNotesAndSelect {
+                                    original_notes,
+                                    drag_offset_beats,
+                                    drag_offset_semitones,
+                                } => {
+                                    let mut new_ids_for_selection = Vec::new();
+                                    for original in original_notes {
+                                        let mut new_note = original;
+                                        new_note.id = fresh_id_iter.next().unwrap();
+                                        new_ids_for_selection.push(new_note.id);
+
+                                        let new_start =
+                                            (original.start + drag_offset_beats).max(0.0);
+                                        let max_start =
+                                            (clip.length_beats - original.duration).max(0.0);
+                                        new_note.start = new_start.min(max_start);
+                                        new_note.pitch = ((original.pitch as i32
+                                            + drag_offset_semitones)
+                                            .clamp(0, 127))
+                                            as u8;
+                                        clip.notes.push(new_note);
+                                    }
+
+                                    self.piano_roll.clear_selection();
+                                    self.piano_roll.selected_note_ids = new_ids_for_selection;
+                                }
+                                _ => changed = false, // Not a mutation action
                             }
                         }
 
@@ -325,28 +338,8 @@ impl PianoRollView {
                 }
 
                 drop(state);
-
-                // Send full snapshot to audio thread
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
             }
-        }
-
-        // 7) Apply continuous edits (drag/resize) from temp_clip
-        if temp_clip.notes != current_notes {
-            let mut state = app.state.lock().unwrap();
-
-            if let Some(track) = state.tracks.get_mut(app.selected_track) {
-                if let Some(clip) = track.midi_clips.get_mut(clip_idx) {
-                    clip.notes = temp_clip.notes;
-                    clip.notes
-                        .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-                }
-            }
-
-            drop(state);
-
-            // Send snapshot on every drag frame (audio thread is lock-free)
-            let _ = app.command_tx.send(AudioCommand::UpdateTracks);
         }
     }
 
