@@ -218,10 +218,33 @@ impl TrackManager {
         builder.build()
     }
 
-    pub fn duplicate_track(&mut self, source_track: &Track) -> Track {
-        let mut new_track = source_track.clone();
-        new_track.name = format!("{} (Copy)", source_track.name);
-        new_track
+    pub fn duplicate_track(&self, src: &crate::model::track::Track) -> crate::model::track::Track {
+        let mut t = src.clone();
+
+        // Reset IDs for fresh ones
+        for c in &mut t.audio_clips {
+            c.id = 0;
+        }
+
+        for c in &mut t.midi_clips {
+            c.id = 0;
+            c.pattern_id = None;
+
+            if !c.content_len_beats.is_finite() || c.content_len_beats <= 0.0 {
+                c.content_len_beats = c.length_beats.max(0.000001);
+            }
+            if !c.content_offset_beats.is_finite() {
+                c.content_offset_beats = 0.0;
+            }
+            c.content_offset_beats = c
+                .content_offset_beats
+                .rem_euclid(c.content_len_beats.max(0.000001));
+
+            for n in &mut c.notes {
+                n.id = 0;
+            }
+        }
+        t
     }
 
     pub fn create_group(&mut self, name: String, track_ids: Vec<usize>) -> usize {

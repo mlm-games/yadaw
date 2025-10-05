@@ -372,8 +372,14 @@ impl YadawApp {
         self.selected_clips.clear();
 
         for (track_idx, track) in state.tracks.iter().enumerate() {
-            for clip_idx in 0..track.audio_clips.len() {
-                self.selected_clips.push((track_idx, clip_idx));
+            if track.is_midi {
+                for clip_idx in 0..track.midi_clips.len() {
+                    self.selected_clips.push((track_idx, clip_idx));
+                }
+            } else {
+                for clip_idx in 0..track.audio_clips.len() {
+                    self.selected_clips.push((track_idx, clip_idx));
+                }
             }
         }
     }

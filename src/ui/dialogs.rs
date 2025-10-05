@@ -566,35 +566,35 @@ impl PluginBrowserDialog {
         let mut open = true;
 
         egui::Window::new("Plugin Browser")
-            .open(&mut open)
-            .resizable(true)
-            .default_size(egui::vec2(420.0, 220.0))
-            .show(ctx, |ui| {
-                // Header controls
-                ui.horizontal(|ui| {
-                    ui.label("Search:");
-                    ui.text_edit_singleline(&mut self.search_text);
-
-                    ui.separator();
-
-                    ui.label("Category:");
-                    egui::ComboBox::from_id_salt("plugin_category")
-                        .selected_text(&self.selected_category)
-                        .show_ui(ui, |ui| {
-                            for category in &self.available_categories {
-                                ui.selectable_value(
-                                    &mut self.selected_category,
-                                    category.clone(),
-                                    category,
-                                );
-                            }
-                        });
-                });
+        .open(&mut open)
+        .resizable(true)
+        .default_size(egui::vec2(420.0, 220.0))
+        .show(ctx, |ui| {
+            // Header controls
+            ui.horizontal(|ui| {
+                ui.label("Search:");
+                ui.text_edit_singleline(&mut self.search_text);
 
                 ui.separator();
 
-                // Plugin list
-                egui::ScrollArea::vertical()
+                ui.label("Category:");
+                egui::ComboBox::from_id_salt("plugin_category")
+                    .selected_text(&self.selected_category)
+                    .show_ui(ui, |ui| {
+                        for category in &self.available_categories {
+                            ui.selectable_value(
+                                &mut self.selected_category,
+                                category.clone(),
+                                category,
+                            );
+                        }
+                    });
+            });
+
+            ui.separator();
+
+            // Plugin list
+            egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .max_height(220.0)
                 .show(ui, |ui| {
@@ -618,8 +618,8 @@ impl PluginBrowserDialog {
 
                         let selected = self.selected_plugin == Some(idx);
 
-                        // Show backend badge
-                        let backend_badge = if plugin.uri.starts_with("file://") { "[CLAP]" } else { "[LV2]" };
+                        let backend_badge =
+                            if plugin.uri.starts_with("file://") { "[CLAP]" } else { "[LV2]" };
 
                         // Show category hint in “All”
                         let display_name = if self.selected_category == "All" {
@@ -637,13 +637,15 @@ impl PluginBrowserDialog {
                             } else {
                                 BackendKind::Lv2
                             };
-                            let track_id = app.selected_track_for_plugin.take().unwrap_or(app.selected_track);
+                            let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
                             let _ = app.command_tx.send(AudioCommand::AddPluginUnified {
                                 track_id,
                                 backend,
                                 uri: plugin.uri.clone(),
                                 display_name: plugin.name.clone(),
                             });
+                            // clear the selection target after adding
+                            app.selected_track_for_plugin = None;
                             self.closed = true;
                         } else if resp.clicked() {
                             self.selected_plugin = Some(idx);
@@ -651,69 +653,66 @@ impl PluginBrowserDialog {
                     }
                 });
 
-                ui.separator();
+            ui.separator();
 
-                // Plugin info
-                if let Some(idx) = self.selected_plugin {
-                    if let Some(plugin) = app.available_plugins.get(idx) {
-                        ui.heading(&plugin.name);
-                        ui.separator();
-                        ui.label(format!("Backend: {}", if plugin.uri.starts_with("file://") { "CLAP" } else { "LV2" }));
-                        ui.label(format!("Type: {}", if plugin.is_instrument { "Instrument" } else { "Effect" }));
-                        ui.label(format!("Audio I/O: {} inputs / {} outputs", plugin.audio_inputs, plugin.audio_outputs));
-                        ui.label(format!("MIDI: {}", if plugin.has_midi { "Yes" } else { "No" }));
-                        ui.separator();
-                        ui.label("Parameters: shown after loading the plugin.");
-                    }
-                } else {
-                    ui.label("Select a plugin to see details.");
+            // Plugin info
+            if let Some(idx) = self.selected_plugin {
+                if let Some(plugin) = app.available_plugins.get(idx) {
+                    ui.heading(&plugin.name);
+                    ui.separator();
+                    ui.label(format!("Backend: {}", if plugin.uri.starts_with("file://") { "CLAP" } else { "LV2" }));
+                    ui.label(format!("Type: {}", if plugin.is_instrument { "Instrument" } else { "Effect" }));
+                    ui.label(format!("Audio I/O: {} inputs / {} outputs", plugin.audio_inputs, plugin.audio_outputs));
+                    ui.label(format!("MIDI: {}", if plugin.has_midi { "Yes" } else { "No" }));
+                    ui.separator();
+                    ui.label("Parameters: shown after loading the plugin.");
                 }
+            } else {
+                ui.label("Select a plugin to see details.");
+            }
 
-                ui.separator();
+            ui.separator();
 
-                // Footer
-                ui.horizontal(|ui| {
-                    let can_add = self.selected_plugin.is_some();
-                    if ui.add_enabled(can_add, egui::Button::new("Add to Track")).clicked() {
-                        if let Some(idx) = self.selected_plugin {
-                            if let Some(plugin) = app.available_plugins.get(idx) {
-                                // Check track type vs plugin kind
-                                let kind = crate::plugin::classify_plugin_uri(&plugin.uri).unwrap_or(crate::plugin::PluginKind::Unknown);
-                                let track_id = app.selected_track_for_plugin.take().unwrap_or(app.selected_track);
+            // Footer
+            ui.horizontal(|ui| {
+                let can_add = self.selected_plugin.is_some();
+                if ui.add_enabled(can_add, egui::Button::new("Add to Track")).clicked() {
+                    if let Some(idx) = self.selected_plugin {
+                        if let Some(plugin) = app.available_plugins.get(idx) {
+                            // Warning for MIDI track with effect
+                            let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
+                            let is_midi = {
+                                let state = app.state.lock().unwrap();
+                                state.tracks.get(track_id).map(|t| t.is_midi).unwrap_or(false)
+                            };
 
-                                // Peek current track type
-                                let is_midi = {
-                                    let state = app.state.lock().unwrap();
-                                    state.tracks.get(track_id).map(|t| t.is_midi).unwrap_or(false)
-                                };
-
-                                if is_midi && matches!(kind, crate::plugin::PluginKind::Effect) {
-                                    app.dialogs.show_message("You are adding an effect plugin to a MIDI track. It will not output audio unless the track is fed with audio. Consider adding it to an audio track or a bus.");
-                                }
-
-                                // Proceed with adding anyway (can choose)
-                                let backend = if plugin.uri.starts_with("file://") {
+                            let backend = if plugin.uri.starts_with("file://") {
                                 BackendKind::Clap
                             } else {
                                 BackendKind::Lv2
                             };
-                            let track_id = app.selected_track_for_plugin.take().unwrap_or(app.selected_track);
+
+                            if is_midi && !plugin.is_instrument {
+                                app.dialogs.show_message("You are adding an effect plugin to a MIDI track. It will not output audio unless the track is fed with audio. Consider adding it to an audio track or a bus.");
+                            }
+
                             let _ = app.command_tx.send(AudioCommand::AddPluginUnified {
                                 track_id,
                                 backend,
                                 uri: plugin.uri.clone(),
                                 display_name: plugin.name.clone(),
                             });
+                            app.selected_track_for_plugin = None;
                             self.closed = true;
-                            }
                         }
                     }
+                }
 
-                    if ui.button("Cancel").clicked() {
-                        self.closed = true;
-                    }
-                });
+                if ui.button("Cancel").clicked() {
+                    self.closed = true;
+                }
             });
+        });
 
         if !open {
             self.closed = true;

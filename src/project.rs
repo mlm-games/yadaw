@@ -169,23 +169,46 @@ impl AppState {
     }
 
     pub fn ensure_ids(&mut self) {
-        // Normalize MIDI clip loop fields
+        // Normalize MIDI clip loop fields and sanitize notes
         for t in &mut self.tracks {
             for c in &mut t.midi_clips {
-                if c.content_len_beats <= 0.0 {
+                // Length for looping source must be finite and > 0
+                if !c.content_len_beats.is_finite() || c.content_len_beats <= 0.0 {
                     c.content_len_beats = c.length_beats.max(0.000001);
                 }
-                if c.content_offset_beats.is_nan() {
+                // Offset must be finite; wrap into [0, content_len)
+                if !c.content_offset_beats.is_finite() {
                     c.content_offset_beats = 0.0;
                 }
-                if c.content_len_beats > 0.0 {
-                    let len = c.content_len_beats;
-                    c.content_offset_beats = ((c.content_offset_beats % len) + len) % len;
+                let len = c.content_len_beats.max(0.000001);
+                c.content_offset_beats = ((c.content_offset_beats % len) + len) % len;
+
+                // Sanitize notes: finite start/duration, positive duration, clamp to clip bounds
+                let clip_len = c.length_beats.max(0.0);
+                for n in &mut c.notes {
+                    if !n.start.is_finite() {
+                        n.start = 0.0;
+                    }
+                    if !n.duration.is_finite() {
+                        n.duration = 0.0;
+                    }
+                    if n.start < 0.0 {
+                        n.start = 0.0;
+                    }
+                    // ensure at least a tiny positive duration
+                    n.duration = n.duration.max(1e-6);
+                    // keep notes within the clip instance
+                    if n.start > clip_len {
+                        n.start = clip_len;
+                    }
+                    if n.start + n.duration > clip_len {
+                        n.duration = (clip_len - n.start).max(1e-6);
+                    }
                 }
             }
         }
 
-        // Find max existing id across all objects
+        // Find max existing id across all clips and notes
         let mut max_id = 0u64;
         for t in &self.tracks {
             for c in &t.audio_clips {

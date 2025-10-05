@@ -213,8 +213,9 @@ impl TracksPanel {
         let (rect, bg_resp) = ui.allocate_exact_size(desired, egui::Sense::click());
 
         if is_selected {
+            let visuals = ui.visuals();
             ui.painter()
-                .rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 60, 100));
+                .rect_filled(rect, 0.0, visuals.selection.bg_fill);
         }
 
         ui.allocate_ui_at_rect(rect, |ui| {
@@ -481,7 +482,7 @@ impl TracksPanel {
                 return;
             }
             "duplicate" => {
-                if let Some(track) = state.tracks.get(track_idx) {
+                if let Some(track) = state.tracks.get(track_idx).cloned() {
                     let dup = app.track_manager.duplicate_track(&track);
                     state.tracks.insert(track_idx + 1, dup);
                     state.ensure_ids();

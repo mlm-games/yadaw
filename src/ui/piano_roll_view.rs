@@ -80,11 +80,6 @@ impl PianoRollView {
                 ui.allocate_painter(egui::vec2(total_w, piano_roll_height), egui::Sense::hover());
             let roll_rect = roll_resp.rect;
 
-            // // Mark notes as the active edit target when the roll is hot
-            // if roll_resp.hovered() || roll_resp.is_pointer_button_down_on() {
-            //     app.active_edit_target = super::app::ActiveEditTarget::Notes;
-            // }
-
             ui.allocate_ui_at_rect(roll_rect, |ui| {
                 ui.set_clip_rect(roll_rect);
                 self.draw_piano_roll(ui, app);
@@ -125,17 +120,15 @@ impl PianoRollView {
                     self.draw_velocity_lane(ui, lane_rect, app);
                 });
 
-                // Keep velocity lane and roll in sync for wheel/touch interactions
+                // Keep lane interactions in sync with piano roll viewport
                 if lane_resp.hovered() {
                     let scroll_delta = ui.input(|i| i.raw_scroll_delta);
                     if ui.input(|i| i.modifiers.ctrl) {
-                        // Horizontal zoom, anchored like the roll
                         let old = self.piano_roll.zoom_x;
                         self.piano_roll.zoom_x = (self.piano_roll.zoom_x
                             * (1.0 + scroll_delta.y * 0.01))
                             .clamp(10.0, 500.0);
                         if (self.piano_roll.zoom_x - old).abs() > f32::EPSILON {
-                            // Anchor zoom to mouse x within the lane grid
                             if let Some(pos) = lane_resp.hover_pos() {
                                 let grid_left =
                                     lane_rect.left() + crate::constants::PIANO_KEY_WIDTH;
@@ -145,18 +138,12 @@ impl PianoRollView {
                             }
                         }
                     } else {
-                        // Horizontal pan only (no vertical velocity scroll)
                         self.piano_roll.scroll_x =
                             (self.piano_roll.scroll_x - scroll_delta.x).max(0.0);
                     }
                 }
-                // Touch gestures (pinch, two-finger pan) also apply in the lane
-                self.handle_touch_pan_zoom(ui.ctx(), lane_rect);
-            }
 
-            if self.show_controller_lanes {
-                ui.separator();
-                self.draw_controller_lanes(ui, app);
+                self.handle_touch_pan_zoom(ui.ctx(), lane_rect);
             }
         });
     }

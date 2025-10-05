@@ -256,14 +256,19 @@ impl TimelineView {
         self.handle_timeline_interaction(&response, ui, app);
     }
 
-    fn draw_grid(&self, painter: &egui::Painter, rect: egui::Rect, bpm: f32) {
+    fn draw_grid(&self, painter: &egui::Painter, rect: egui::Rect, _bpm: f32) {
         let ruler_h = 18.0;
+        let visuals = painter.ctx().style().visuals.clone();
+        let bg = visuals.widgets.noninteractive.bg_fill;
+        let grid_fg = visuals.widgets.noninteractive.fg_stroke.color;
+        let bar_fg =
+            egui::Color32::from_rgba_premultiplied(grid_fg.r(), grid_fg.g(), grid_fg.b(), 220);
 
-        // Ruler background
+        // Ruler background (theme)
         painter.rect_filled(
             egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + ruler_h)),
             0.0,
-            egui::Color32::from_gray(22),
+            bg,
         );
 
         // Vertical lines (beats)
@@ -276,12 +281,7 @@ impl TimelineView {
                 continue;
             }
             let is_bar = beat % 4 == 0;
-            let color = if is_bar {
-                egui::Color32::from_gray(70)
-            } else {
-                egui::Color32::from_gray(45)
-            };
-            // Tick on ruler
+            let color = if is_bar { bar_fg } else { grid_fg };
             painter.line_segment(
                 [
                     egui::pos2(x, rect.top()),
@@ -289,25 +289,12 @@ impl TimelineView {
                 ],
                 egui::Stroke::new(if is_bar { 1.5 } else { 1.0 }, color),
             );
-
-            // Beat numbers on ruler for bars
-            if is_bar {
-                painter.text(
-                    egui::pos2(x + 3.0, rect.top() + 2.0),
-                    egui::Align2::LEFT_TOP,
-                    format!("{}", beat / 4 + 1),
-                    egui::FontId::default(),
-                    egui::Color32::from_gray(160),
-                );
-            }
-
-            // Full-height grid lines in tracks area (below ruler)
             painter.line_segment(
                 [
                     egui::pos2(x, rect.top() + ruler_h),
                     egui::pos2(x, rect.bottom()),
                 ],
-                egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
+                egui::Stroke::new(1.0, grid_fg),
             );
         }
 
@@ -317,7 +304,7 @@ impl TimelineView {
             let y = rect.top() + ruler_h + track as f32 * self.track_height;
             painter.line_segment(
                 [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
+                egui::Stroke::new(1.0, grid_fg),
             );
         }
     }
@@ -331,11 +318,18 @@ impl TimelineView {
         track_idx: usize,
         app: &mut super::app::YadawApp,
     ) {
-        // Track background
+        // Theme-friendly alternating background
+        let vis = ui.visuals();
+        let base = vis.extreme_bg_color;
         let bg_color = if track_idx % 2 == 0 {
-            egui::Color32::from_gray(25)
+            base
         } else {
-            egui::Color32::from_gray(30)
+            egui::Color32::from_rgba_premultiplied(
+                ((base.r() as f32) * 0.93) as u8,
+                ((base.g() as f32) * 0.93) as u8,
+                ((base.b() as f32) * 0.93) as u8,
+                base.a(),
+            )
         };
         painter.rect_filled(rect, 0.0, bg_color);
 
@@ -348,7 +342,7 @@ impl TimelineView {
             egui::Color32::WHITE,
         );
 
-        // Draw clips based on track type
+        // Draw clips
         if track.is_midi {
             for (clip_idx, clip) in track.midi_clips.iter().enumerate() {
                 self.draw_midi_clip(painter, ui, rect, clip, track_idx, clip_idx, app);
@@ -359,7 +353,7 @@ impl TimelineView {
             }
         }
 
-        // Draw automation lanes if visible
+        // Automation lanes
         if self.show_automation {
             self.draw_automation_lanes(ui, rect, track, track_idx, app);
         }
@@ -666,7 +660,7 @@ impl TimelineView {
                 .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
 
-        // Helper to convert X -> beat
+        // Helper beat conversion
         let beat_at = |x: f32, rect_left: f32, scroll_x: f32, zoom_x: f32| -> f64 {
             let rel = (x - rect_left) + scroll_x;
             (rel / zoom_x) as f64
@@ -711,7 +705,6 @@ impl TimelineView {
             let alt = ui.input(|i| i.modifiers.alt);
             if alt && !hover_left && !hover_right {
                 // Slip content (Alt+drag)
-                // Read current offset/content_len once
                 let (start_offset, content_len) = {
                     let state = app.state.lock().unwrap();
                     if let Some(t) = state.tracks.get(track_idx) {
@@ -741,7 +734,6 @@ impl TimelineView {
             }
 
             if hover_left {
-                // Start resizing left edge
                 self.timeline_interaction = Some(TimelineInteraction::ResizeClipLeft {
                     track_id: track_idx,
                     clip_id: clip_idx,
@@ -749,7 +741,6 @@ impl TimelineView {
                 });
                 return;
             } else if hover_right {
-                // Start resizing right edge
                 self.timeline_interaction = Some(TimelineInteraction::ResizeClipRight {
                     track_id: track_idx,
                     clip_id: clip_idx,
@@ -758,11 +749,9 @@ impl TimelineView {
                 return;
             } else {
                 // Drag whole clip (or multi-selection)
-                // Build list of (track_id, clip_id, original_start)
                 let mut clips_and_starts = Vec::new();
                 let state = app.state.lock().unwrap();
 
-                // Use selection if the current clip is selected, else just this one
                 let selected = if app.selected_clips.contains(&(track_idx, clip_idx)) {
                     app.selected_clips.clone()
                 } else {
@@ -900,7 +889,6 @@ impl TimelineView {
         if response.dragged() {
             if let Some(pos) = response.hover_pos() {
                 match &mut self.timeline_interaction {
-                    // Loop start edge drag
                     Some(TimelineInteraction::LoopDragStart { offset_beats }) => {
                         let mut new_start = (beat_at(pos.x) - *offset_beats).max(0.0);
                         new_start = snap(new_start, self.grid_snap);
@@ -912,7 +900,6 @@ impl TimelineView {
                             let _ = app.command_tx.send(AudioCommand::SetLoopEnabled(true));
                         }
                     }
-                    // Loop end edge drag
                     Some(TimelineInteraction::LoopDragEnd { offset_beats }) => {
                         let mut new_end = (beat_at(pos.x) - *offset_beats).max(0.0);
                         new_end = snap(new_end, self.grid_snap);
@@ -924,7 +911,6 @@ impl TimelineView {
                             let _ = app.command_tx.send(AudioCommand::SetLoopEnabled(true));
                         }
                     }
-                    // Loop create drag
                     Some(TimelineInteraction::LoopCreate { anchor_beat }) => {
                         let mut current = beat_at(pos.x).max(0.0);
                         current = snap(current, self.grid_snap);
@@ -938,21 +924,28 @@ impl TimelineView {
                             let _ = app.command_tx.send(AudioCommand::SetLoopEnabled(true));
                         }
                     }
-                    // Clip drag move (multi-clip aware)
                     Some(TimelineInteraction::DragClip {
                         clips_and_starts,
                         start_drag_beat,
                     }) => {
                         let mut current = beat_at(pos.x);
-                        // delta relative to where the drag started in timeline beats
                         let mut delta = current - *start_drag_beat;
                         delta = snap(delta, self.grid_snap);
 
                         for (t_id, c_id, original_start) in clips_and_starts.iter().copied() {
                             let new_start = (original_start + delta).max(0.0);
-                            // Check clip type
+
+                            // Validate
                             let state = app.state.lock().unwrap();
                             if let Some(t) = state.tracks.get(t_id) {
+                                let valid = if t.is_midi {
+                                    c_id < t.midi_clips.len()
+                                } else {
+                                    c_id < t.audio_clips.len()
+                                };
+                                if !valid {
+                                    continue;
+                                }
                                 if t.is_midi {
                                     let _ = app
                                         .command_tx
@@ -965,25 +958,32 @@ impl TimelineView {
                             }
                         }
                     }
-                    // Resize left edge (change start & length)
                     Some(TimelineInteraction::ResizeClipLeft {
                         track_id,
                         clip_id,
                         original_end_beat,
                     }) => {
                         let mut drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
-
-                        // Clamp to end - min_len
                         let new_start = drag_at.min(*original_end_beat - min_len);
                         let new_len = (*original_end_beat - new_start).max(min_len);
 
                         let state = app.state.lock().unwrap();
-                        let is_midi = state
+                        let (is_midi, valid) = state
                             .tracks
                             .get(*track_id)
-                            .map(|t| t.is_midi)
-                            .unwrap_or(false);
+                            .map(|t| {
+                                let ok = if t.is_midi {
+                                    *clip_id < t.midi_clips.len()
+                                } else {
+                                    *clip_id < t.audio_clips.len()
+                                };
+                                (t.is_midi, ok)
+                            })
+                            .unwrap_or((false, false));
                         drop(state);
+                        if !valid {
+                            return;
+                        }
 
                         if is_midi {
                             let _ = app.command_tx.send(AudioCommand::ResizeMidiClip(
@@ -995,25 +995,32 @@ impl TimelineView {
                             ));
                         }
                     }
-                    // Resize right edge (change length only)
                     Some(TimelineInteraction::ResizeClipRight {
                         track_id,
                         clip_id,
                         original_start_beat,
                     }) => {
                         let mut drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
-
-                        // Enforce minimum length
                         let new_end = drag_at.max(*original_start_beat + min_len);
                         let new_len = (new_end - *original_start_beat).max(min_len);
 
                         let state = app.state.lock().unwrap();
-                        let is_midi = state
+                        let (is_midi, valid) = state
                             .tracks
                             .get(*track_id)
-                            .map(|t| t.is_midi)
-                            .unwrap_or(false);
+                            .map(|t| {
+                                let ok = if t.is_midi {
+                                    *clip_id < t.midi_clips.len()
+                                } else {
+                                    *clip_id < t.audio_clips.len()
+                                };
+                                (t.is_midi, ok)
+                            })
+                            .unwrap_or((false, false));
                         drop(state);
+                        if !valid {
+                            return;
+                        }
 
                         if is_midi {
                             let _ = app.command_tx.send(AudioCommand::ResizeMidiClip(
@@ -1041,7 +1048,6 @@ impl TimelineView {
                             let cur =
                                 ((pos.x - response.rect.left()) + self.scroll_x) / self.zoom_x;
                             let delta = (cur as f64) - *start_mouse_beat;
-                            // Throttle sends like you do elsewhere (30 ms)
                             let mem_root = egui::Id::new(("slip", *track_id, *clip_id));
                             let due = {
                                 let last =
@@ -1051,7 +1057,24 @@ impl TimelineView {
                                 })
                             };
                             if due {
-                                // Get content_len once to wrap server-side too, but send raw desired
+                                // Validate existence before sending
+                                let st = app.state.lock().unwrap();
+                                let ok = st
+                                    .tracks
+                                    .get(*track_id)
+                                    .map(|t| {
+                                        if t.is_midi {
+                                            *clip_id < t.midi_clips.len()
+                                        } else {
+                                            *clip_id < t.audio_clips.len()
+                                        }
+                                    })
+                                    .unwrap_or(false);
+                                drop(st);
+                                if !ok {
+                                    return;
+                                }
+
                                 let new_off = *start_offset + delta;
                                 let _ = app.command_tx.send(
                                     crate::messages::AudioCommand::SetClipContentOffset(
@@ -1080,7 +1103,6 @@ impl TimelineView {
                 if on_ruler {
                     let mut beat = beat_at(pos.x).max(0.0);
                     beat = snap(beat, self.grid_snap);
-                    // Convert beats -> samples and set position
                     let sr = app.audio_state.sample_rate.load() as f64;
                     let bpm = app.audio_state.bpm.load() as f64;
                     if bpm > 0.0 && sr > 0.0 {
@@ -1092,7 +1114,7 @@ impl TimelineView {
             }
         }
 
-        // Existing “click on empty to create MIDI clip with Ctrl” behavior
+        // Existing create MIDI clip on Ctrl+click empty area
         if response.clicked() && self.timeline_interaction.is_none() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let grid_pos = pos - response.rect.min;
