@@ -199,26 +199,27 @@ impl LV2PluginInstance {
         use_midi: bool,
         samples: usize,
     ) -> Result<()> {
-        // 1) Apply control inputs
+        let len = samples.min(self.max_block_size);
+        let need_ai = self.port_counts.audio_inputs;
+        let need_ao = self.port_counts.audio_outputs;
+        let ai = self.port_counts.atom_sequence_inputs;
+
+        // 1) Apply control parameters
         for entry in self.params.iter() {
             if let Some(&pi) = self.control_port_indices.get(entry.key()) {
                 self.instance.set_control_input(pi, *entry.value());
             }
         }
 
-        // 2) Prepare lengths and take mutable self fields out to avoid aliasing
-        let need_ai = self.port_counts.audio_inputs;
-        let need_ao = self.port_counts.audio_outputs;
-        let ai = self.port_counts.atom_sequence_inputs;
-        let len = samples.min(self.max_block_size);
+        let mut atom_outputs = std::mem::take(&mut self.atom_outputs);
+        let mut scratch_audio = std::mem::take(&mut self.scratch_audio_out);
 
-        // Take atom outputs out of self so we can borrow scratch and atom outs independently
-        let mut atom_outs = std::mem::take(&mut self.atom_outputs);
-        for seq in atom_outs.iter_mut() {
+        // Clear atom outputs
+        for seq in atom_outputs.iter_mut() {
             seq.clear_as_chunk();
         }
 
-        // 3) Audio inputs (pad with silence)
+        // 3) Build audio input refs (read-only, no conflicts)
         let mut in_refs: Vec<&[f32]> = Vec::with_capacity(need_ai);
         for i in 0..need_ai {
             let src = audio_inputs
@@ -228,82 +229,64 @@ impl LV2PluginInstance {
             in_refs.push(&src[..len.min(src.len())]);
         }
 
-        // 4) Zero any provided outputs the plugin will not write to (beyond need_ao)
-        if audio_outputs.len() > need_ao {
-            for extra in &mut audio_outputs[need_ao..] {
-                let l = extra.len().min(len);
-                extra[..l].fill(0.0);
-            }
+        // 4) Ensure scratch buffers exist and are zeroed
+        if scratch_audio.len() < need_ao {
+            scratch_audio.resize(need_ao, vec![0.0; self.max_block_size]);
+        }
+        for buf in scratch_audio.iter_mut().take(need_ao) {
+            buf[..len].fill(0.0);
         }
 
-        // 5) Audio outputs: use provided ones first, then scratch for extras
-        let take_n = need_ao.min(audio_outputs.len());
+        let provided_count = audio_outputs.len().min(need_ao);
         let mut out_refs: Vec<&mut [f32]> = Vec::with_capacity(need_ao);
 
-        // Provided outputs first (no indexing, use iter_mut)
-        {
-            let mut it = audio_outputs.iter_mut().take(take_n);
-            for _ in 0..take_n {
-                if let Some(dst) = it.next() {
-                    let l = dst.len().min(len);
-                    out_refs.push(&mut dst[..l]);
-                }
+        // Split audio_outputs to avoid aliasing
+        if provided_count > 0 {
+            // Use split_at_mut to safely get non-overlapping slices
+            let (provided, _rest) = audio_outputs.split_at_mut(provided_count);
+            for out_buf in provided.iter_mut() {
+                let l = out_buf.len().min(len);
+                out_refs.push(&mut out_buf[..l]);
             }
         }
 
-        // Scratch for extras
-        let extra_out = need_ao - take_n;
-        let mut scratch = std::mem::take(&mut self.scratch_audio_out);
-
-        if extra_out > 0 {
-            if scratch.len() < extra_out {
-                scratch.extend(
-                    (0..(extra_out - scratch.len())).map(|_| vec![0.0; self.max_block_size]),
-                );
-            }
-            let (head, _) = scratch.split_at_mut(extra_out);
-            for buf in head.iter_mut() {
-                buf[..len].fill(0.0);
-                out_refs.push(&mut buf[..len]);
-            }
+        // Add scratch buffers for remaining outputs
+        let extra_needed = need_ao.saturating_sub(provided_count);
+        for buf in scratch_audio.iter_mut().take(extra_needed) {
+            out_refs.push(&mut buf[..len]);
         }
 
-        // 6) Atom inputs: build exact-length iterator after we’re done with other mut borrows
-        let mut atom_in_vec: Vec<&LV2AtomSequence> = Vec::with_capacity(ai);
-        if ai > 0 {
+        // 6) Build atom input refs
+        let atom_in_refs: Vec<&LV2AtomSequence> = if ai > 0 {
             let atom = if use_midi && self.has_midi_events() {
                 self.midi_sequence.as_ref().unwrap()
             } else {
                 &self.empty_atom_in
             };
-            for _ in 0..ai {
-                atom_in_vec.push(atom);
-            }
-        }
+            vec![atom; ai]
+        } else {
+            Vec::new()
+        };
 
-        // 7) Build ports in one expression (no reassignments)
+        // 7) Build ports in ONE expression (no intermediate borrows)
         let ports = livi::EmptyPortConnections::new()
             .with_audio_inputs(in_refs.into_iter())
             .with_audio_outputs(out_refs.into_iter())
-            .with_atom_sequence_inputs(atom_in_vec.into_iter())
-            .with_atom_sequence_outputs(atom_outs.iter_mut());
+            .with_atom_sequence_inputs(atom_in_refs.into_iter())
+            .with_atom_sequence_outputs(atom_outputs.iter_mut());
 
-        // 8) Run
-        unsafe {
-            if let Err(e) = self.instance.run(samples, ports) {
-                eprintln!("[LV2] run() error: {}", e);
-                // Move fields back before returning
-                self.atom_outputs = atom_outs;
-                self.scratch_audio_out = scratch;
-                return Err(e.into());
-            }
-        }
+        // 8) Run plugin
+        let result = unsafe {
+            self.instance
+                .run(samples, ports)
+                .map_err(|e| anyhow!("[LV2] run() error: {}", e))
+        };
 
-        // 9) Move taken fields back into self
-        self.atom_outputs = atom_outs;
-        self.scratch_audio_out = scratch;
+        // 9) Move fields back into self
+        self.atom_outputs = atom_outputs;
+        self.scratch_audio_out = scratch_audio;
 
-        Ok(())
+        result
     }
 
     // Keep stereo convenience; auto-enable MIDI if events exist

@@ -96,7 +96,9 @@ impl TracksPanel {
     fn draw_track_list(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         let mut track_actions = Vec::new();
         let mut selected_track_changed = None;
+        let mut automation_actions = Vec::new(); // ← NEW: collect automation actions
 
+        // Sanitize groups
         {
             let len = app.state.lock().unwrap().tracks.len();
             app.track_manager.sanitize(len);
@@ -107,6 +109,7 @@ impl TracksPanel {
             self.collapsed_groups.push(false);
         }
 
+        // Build grouped set
         use std::collections::HashSet;
         let mut grouped: HashSet<usize> = HashSet::new();
         for g in &groups {
@@ -127,22 +130,24 @@ impl TracksPanel {
                 &mut collapsed,
                 &mut track_actions,
                 &mut selected_track_changed,
+                &mut automation_actions,
             );
 
             if self.collapsed_groups.len() <= gidx {
                 self.collapsed_groups.resize(gidx + 1, false);
             }
             self.collapsed_groups[gidx] = collapsed;
-
             ui.add_space(6.0);
         }
 
         // Ungrouped tracks
+        let command_tx = app.command_tx.clone();
+
         {
             let binding = app.state.clone();
             let mut state = binding.lock().unwrap();
-
             let num_tracks = state.tracks.len();
+
             for track_idx in 0..num_tracks {
                 if grouped.contains(&track_idx) {
                     continue;
@@ -167,12 +172,18 @@ impl TracksPanel {
                             &mut state.tracks[track_idx],
                             track_idx,
                             &mut track_actions,
-                            app,
+                            &command_tx,
                         );
                     }
+
                     if self.show_automation_buttons {
-                        self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx, app);
+                        if let Some(action) =
+                            self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx)
+                        {
+                            automation_actions.push(action); // ← Collect for later
+                        }
                     }
+
                     self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
                 });
 
@@ -189,11 +200,17 @@ impl TracksPanel {
             }
         }
 
+        // Apply automation actions
+        for (idx, target) in automation_actions {
+            app.add_automation_lane(idx, target);
+        }
+
+        // Handle selection change
         if let Some((track_idx, is_midi)) = selected_track_changed {
-            println!("Track {} clicked, is_midi: {}", track_idx, is_midi);
             app.selected_track = track_idx;
         }
 
+        // Apply track actions
         for (action, track_idx) in track_actions {
             self.apply_track_action(app, action, track_idx);
         }
@@ -268,7 +285,7 @@ impl TracksPanel {
         track: &mut Track,
         idx: usize,
         actions: &mut Vec<(&str, usize)>,
-        app: &mut super::app::YadawApp,
+        command_tx: &Sender<AudioCommand>,
     ) {
         ui.horizontal(|ui| {
             if ui
@@ -300,9 +317,8 @@ impl TracksPanel {
                 {
                     // Toggle and notify audio thread
                     track.monitor_enabled = !track.monitor_enabled;
-                    let _ = app
-                        .command_tx
-                        .send(AudioCommand::SetTrackMonitor(idx, track.monitor_enabled));
+                    let _ =
+                        command_tx.send(AudioCommand::SetTrackMonitor(idx, track.monitor_enabled));
                 }
             }
         });
@@ -333,17 +349,17 @@ impl TracksPanel {
         ui: &mut egui::Ui,
         track: &Track,
         idx: usize,
-        app: &mut super::app::YadawApp,
-    ) {
+    ) -> Option<(usize, AutomationTarget)> {
+        let mut action = None;
         ui.horizontal(|ui| {
             ui.label("Automation:");
             ui.menu_button("➕", |ui| {
                 if ui.button("Volume").clicked() {
-                    app.add_automation_lane(idx, AutomationTarget::TrackVolume);
+                    action = Some((idx, AutomationTarget::TrackVolume));
                     ui.close();
                 }
                 if ui.button("Pan").clicked() {
-                    app.add_automation_lane(idx, AutomationTarget::TrackPan);
+                    action = Some((idx, AutomationTarget::TrackPan));
                     ui.close();
                 }
                 ui.separator();
@@ -351,13 +367,13 @@ impl TracksPanel {
                     ui.menu_button(&plugin.name, |ui| {
                         for (param_name, _val) in &plugin.params {
                             if ui.button(param_name).clicked() {
-                                app.add_automation_lane(
+                                action = Some((
                                     idx,
                                     AutomationTarget::PluginParam {
                                         plugin_idx,
                                         param_name: param_name.clone(),
                                     },
-                                );
+                                ));
                                 ui.close();
                             }
                         }
@@ -368,6 +384,7 @@ impl TracksPanel {
                 ui.label(format!("({} lanes)", track.automation_lanes.len()));
             }
         });
+        action
     }
 
     fn draw_plugin_chain(
@@ -515,6 +532,7 @@ impl TracksPanel {
         collapsed: &mut bool,
         track_actions: &mut Vec<(&str, usize)>,
         selected_track_changed: &mut Option<(usize, bool)>,
+        automation_actions: &mut Vec<(usize, AutomationTarget)>, // ← ADD THIS
     ) {
         // Header
         let hdr = ui.collapsing(name, |_ui| {});
@@ -536,7 +554,9 @@ impl TracksPanel {
             return;
         }
 
-        // Rows for each track id
+        // Extract command_tx before locking
+        let command_tx = app.command_tx.clone();
+
         let binding = app.state.clone();
         let mut state = binding.lock().unwrap();
 
@@ -564,12 +584,18 @@ impl TracksPanel {
                         &mut state.tracks[track_idx],
                         track_idx,
                         track_actions,
-                        app,
+                        &command_tx,
                     );
                 }
+
                 if self.show_automation_buttons {
-                    self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx, app);
+                    if let Some(action) =
+                        self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx)
+                    {
+                        automation_actions.push(action);
+                    }
                 }
+
                 self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
             });
 

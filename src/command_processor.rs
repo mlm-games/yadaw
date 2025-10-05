@@ -895,40 +895,31 @@ fn process_command(
         }
 
         AudioCommand::DuplicateMidiClipAsAlias(track_id, clip_id) => {
-            // 0) Push a single undo snapshot (no mutation here)
-            {
-                let state = app_state.lock().unwrap();
-                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
-            }
+            let mut state = app_state.lock().unwrap();
 
-            // 1) Snapshot source details without holding &mut borrows
-            let (src_clone, src_pid, src_len, src_name) = {
-                let state = app_state.lock().unwrap();
+            // 1) Snapshot undo ONCE at start
+            let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+
+            // 2) Get source clip (borrow checker safe - we own state)
+            let (src_clip, src_pid) = {
                 let track = match state.tracks.get(*track_id) {
                     Some(t) => t,
                     None => return,
                 };
-                let src = match track.midi_clips.get(*clip_id) {
+                let clip = match track.midi_clips.get(*clip_id) {
                     Some(c) => c,
                     None => return,
                 };
-                (
-                    src.clone(),
-                    src.pattern_id,
-                    src.length_beats,
-                    src.name.clone(),
-                )
+                (clip.clone(), clip.pattern_id)
             };
 
-            // 2) Ensure the source has a pattern_id (do this in its own scope)
-            let pid_final = if src_pid.is_none() {
-                let mut state = app_state.lock().unwrap();
-                let new_pid = state.fresh_id(); // safe: no clip borrowed now
+            // 3) Assign pattern_id to source if needed
+            let final_pid = if src_pid.is_none() {
+                let new_pid = state.fresh_id();
+                // Safe: we still hold state lock
                 if let Some(track) = state.tracks.get_mut(*track_id) {
                     if let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                        if clip.pattern_id.is_none() {
-                            clip.pattern_id = Some(new_pid);
-                        }
+                        clip.pattern_id = Some(new_pid);
                     }
                 }
                 new_pid
@@ -936,31 +927,27 @@ fn process_command(
                 src_pid.unwrap()
             };
 
-            // 3) Build duplicate from the cloned source (no outstanding borrows)
-            let mut dup = src_clone;
-            {
-                let mut state = app_state.lock().unwrap();
-                dup.id = state.fresh_id();
-            }
-            dup.start_beat = dup.start_beat + src_len;
-            dup.pattern_id = Some(pid_final);
-            dup.name = format!("{} (alias)", src_name);
+            // 4) Build duplicate
+            let mut dup = src_clip;
+            dup.id = state.fresh_id();
+            dup.start_beat += dup.length_beats;
+            dup.pattern_id = Some(final_pid);
+            dup.name = format!("{} (alias)", dup.name);
 
-            // Ensure note ids if you rely on global uniqueness
-            {
-                let mut state = app_state.lock().unwrap();
-                for n in &mut dup.notes {
-                    if n.id == 0 {
-                        n.id = state.fresh_id();
-                    }
+            // Assign note IDs
+            for n in &mut dup.notes {
+                if n.id == 0 {
+                    n.id = state.fresh_id();
                 }
-                if let Some(track) = state.tracks.get_mut(*track_id) {
-                    let insert_at = (*clip_id + 1).min(track.midi_clips.len());
-                    track.midi_clips.insert(insert_at, dup);
-                }
-                // 4) Refresh audio thread once
-                send_tracks_snapshot_locked(&state, realtime_tx);
             }
+
+            // 5) Insert duplicate
+            if let Some(track) = state.tracks.get_mut(*track_id) {
+                let insert_at = (*clip_id + 1).min(track.midi_clips.len());
+                track.midi_clips.insert(insert_at, dup);
+            }
+
+            send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::SetClipContentOffset(track_id, clip_id, new_off) => {
