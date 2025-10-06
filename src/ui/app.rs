@@ -868,15 +868,15 @@ impl YadawApp {
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        // Respect focused text inputs for the rest
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+
         // Space is truly global.
         let sc_space = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Space);
         if ctx.input_mut(|i| i.consume_shortcut(&sc_space)) {
             self.transport_ui.toggle_playback(&self.command_tx);
-        }
-
-        // Respect focused text inputs for the rest
-        if ctx.wants_keyboard_input() {
-            return;
         }
 
         ctx.input_mut(|i| {
