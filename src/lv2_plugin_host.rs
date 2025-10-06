@@ -4,11 +4,9 @@ use livi::event::LV2AtomSequence;
 use livi::{
     EmptyPortConnections, Features, FeaturesBuilder, Instance, PortCounts, PortType, World,
 };
-use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::constants::MAX_BUFFER_SIZE;
 
 #[derive(Clone, Debug)]
 pub struct PluginInfo {

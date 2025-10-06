@@ -15,6 +15,6 @@ pub use theme::{Theme, ThemeManager};
 
 // Re-export commonly used types
 use crate::messages::{AudioCommand, UIUpdate};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use eframe::egui;
 use std::sync::{Arc, Mutex};

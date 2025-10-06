@@ -1,9 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::fs::read_to_string;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
 use egui::scroll_area::ScrollSource;
-use rayon::vec;
 
 use super::*;
 use crate::audio_state::AudioState;
@@ -655,66 +650,66 @@ impl PianoRollView {
         }
     }
 
-    fn draw_controller_lanes(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        ui.group(|ui| {
-            ui.set_min_height(100.0);
+    // fn draw_controller_lanes(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
+    //     ui.group(|ui| {
+    //         ui.set_min_height(100.0);
 
-            ui.horizontal(|ui| {
-                ui.label("Controller:");
+    //         ui.horizontal(|ui| {
+    //             ui.label("Controller:");
 
-                egui::ComboBox::from_id_salt("controller_select")
-                    .selected_text("Modulation")
-                    .show_ui(ui, |ui| {
-                        ui.selectable_label(false, "Modulation (CC1)");
-                        ui.selectable_label(false, "Expression (CC11)");
-                        ui.selectable_label(false, "Pan (CC10)");
-                        ui.selectable_label(false, "Volume (CC7)");
-                        ui.separator();
-                        ui.selectable_label(false, "Pitch Bend");
-                        ui.selectable_label(false, "Aftertouch");
-                    });
+    //             egui::ComboBox::from_id_salt("controller_select")
+    //                 .selected_text("Modulation")
+    //                 .show_ui(ui, |ui| {
+    //                     ui.selectable_label(false, "Modulation (CC1)");
+    //                     ui.selectable_label(false, "Expression (CC11)");
+    //                     ui.selectable_label(false, "Pan (CC10)");
+    //                     ui.selectable_label(false, "Volume (CC7)");
+    //                     ui.separator();
+    //                     ui.selectable_label(false, "Pitch Bend");
+    //                     ui.selectable_label(false, "Aftertouch");
+    //                 });
 
-                if ui
-                    .button("➕")
-                    .on_hover_text("Add Controller Lane")
-                    .clicked()
-                {
-                    // Add new controller lane
-                }
-            });
+    //             if ui
+    //                 .button("➕")
+    //                 .on_hover_text("Add Controller Lane")
+    //                 .clicked()
+    //             {
+    //                 // Add new controller lane
+    //             }
+    //         });
 
-            ui.separator();
+    //         ui.separator();
 
-            // Draw controller data
-            let (response, painter) = ui.allocate_painter(
-                egui::vec2(ui.available_width(), 80.0),
-                egui::Sense::click_and_drag(),
-            );
+    //         // Draw controller data
+    //         let (response, painter) = ui.allocate_painter(
+    //             egui::vec2(ui.available_width(), 80.0),
+    //             egui::Sense::click_and_drag(),
+    //         );
 
-            let rect = response.rect;
+    //         let rect = response.rect;
 
-            // Background
-            painter.rect_filled(rect, 0.0, egui::Color32::from_gray(20));
+    //         // Background
+    //         painter.rect_filled(rect, 0.0, egui::Color32::from_gray(20));
 
-            // Grid
-            for i in 0..=4 {
-                let y = rect.top() + (i as f32 / 4.0) * rect.height();
-                painter.line_segment(
-                    [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                    egui::Stroke::new(1.0, egui::Color32::from_gray(35)),
-                );
-            }
+    //         // Grid
+    //         for i in 0..=4 {
+    //             let y = rect.top() + (i as f32 / 4.0) * rect.height();
+    //             painter.line_segment(
+    //                 [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+    //                 egui::Stroke::new(1.0, egui::Color32::from_gray(35)),
+    //             );
+    //         }
 
-            // Placeholder text
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Controller data will be displayed here",
-                egui::FontId::default(),
-                egui::Color32::from_gray(100),
-            );
-        });
-    }
+    //         // Placeholder text
+    //         painter.text(
+    //             rect.center(),
+    //             egui::Align2::CENTER_CENTER,
+    //             "Controller data will be displayed here",
+    //             egui::FontId::default(),
+    //             egui::Color32::from_gray(100),
+    //         );
+    //     });
+    // }
 
     fn handle_touch_pan_zoom(&mut self, ctx: &egui::Context, roll_rect: egui::Rect) {
         let id_centroid = egui::Id::new(("pr_gesture", "centroid"));

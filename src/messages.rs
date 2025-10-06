@@ -1,9 +1,8 @@
-use rayon::vec;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
     automation::{AutomationMode, AutomationTarget},
-    clip::{AudioClip, MidiClip, MidiNote},
+    clip::{AudioClip, MidiClip},
     plugin_api::BackendKind,
 };
 

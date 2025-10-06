@@ -5,7 +5,6 @@ use crate::{
     config::Config,
     constants,
     messages::{AudioCommand, UIUpdate},
-    plugin::PluginScanner,
     plugin_host, ui,
 };
 use std::sync::{Arc, Mutex};

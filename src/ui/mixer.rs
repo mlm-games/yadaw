@@ -333,7 +333,7 @@ impl MixerWindow {
                 // Channel controls
                 ui.horizontal(|ui| {
                     // Mute
-                    let mut muted = track.muted;
+                    let muted = track.muted;
                     if ui
                         .selectable_label(muted, if muted { "M" } else { "m" })
                         .on_hover_text("Mute")
@@ -343,7 +343,7 @@ impl MixerWindow {
                     }
 
                     // Solo
-                    let mut solo = track.solo;
+                    let solo = track.solo;
                     if ui
                         .selectable_label(solo, if solo { "S" } else { "s" })
                         .on_hover_text("Solo")

@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow};
-use std::sync::Arc;
 
 use crate::model::plugin_api::{
     BackendKind, HostConfig, MidiEvent, ParamKey, PluginBackend, PluginInstance, ProcessCtx,
@@ -47,7 +46,7 @@ impl PluginBackend for Lv2HostBackend {
 
     fn instantiate(&self, uri: &str) -> Result<Box<dyn PluginInstance>> {
         // Instantiate LV2 instance using your existing API
-        let mut instance = crate::plugin_host::instantiate(uri)
+        let instance = crate::plugin_host::instantiate(uri)
             .map_err(|e| anyhow!("LV2 instantiate failed: {e}"))?;
 
         // Build parameter metadata once from the scan results

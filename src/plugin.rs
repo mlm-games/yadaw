@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 
 use crate::lv2_plugin_host::{ControlPortInfo, PluginInfo};
 use crate::messages::AudioCommand;
-use crate::model::plugin::{PluginDescriptor, PluginParam};
+use crate::model::plugin::PluginDescriptor;
 use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::track::Track;
 use crate::plugin_host::{get_available_plugins, with_host};

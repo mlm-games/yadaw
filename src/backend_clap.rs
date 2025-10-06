@@ -1,7 +1,7 @@
 #[cfg(feature = "clap-host")]
 mod clap_impl {
     use anyhow::{Result, anyhow};
-    use std::collections::HashMap;
+    
     use std::path::{Path, PathBuf};
 
     // Core clack-host types
@@ -302,7 +302,7 @@ mod clap_impl {
                 ),
             }];
 
-            let mut in_audio = in_ports.with_input_buffers(in_buffers.into_iter());
+            let in_audio = in_ports.with_input_buffers(in_buffers.into_iter());
             let mut out_audio = out_ports.with_output_buffers(out_buffers.into_iter());
 
             let proc = self.started.as_mut().unwrap();

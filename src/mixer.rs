@@ -1,7 +1,5 @@
 use crate::audio_utils::{calculate_stereo_gains, soft_clip};
-use crate::constants::{DEFAULT_TRACK_VOLUME, NORMALIZE_TARGET_LINEAR};
-use parking_lot::RwLock;
-use std::sync::Arc;
+use crate::constants::DEFAULT_TRACK_VOLUME;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelStrip {

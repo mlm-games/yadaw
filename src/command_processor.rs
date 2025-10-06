@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use dashmap::DashMap;
 
 use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, UIUpdate};
@@ -298,16 +296,6 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(*track_id) {
                 if track.is_midi {
                     track.midi_clips.push(new_clip);
-                }
-            }
-            send_tracks_snapshot_locked(&state, realtime_tx);
-        }
-        AudioCommand::DeleteMidiClip(track_id, clip_id) => {
-            let mut state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if *clip_id < track.midi_clips.len() {
-                    track.midi_clips.remove(*clip_id);
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             send_tracks_snapshot_locked(&state, realtime_tx);

@@ -3,9 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::constants::{DEFAULT_LOOP_LEN, DEFAULT_MIN_PROJECT_BEATS};
-use crate::lv2_plugin_host::LV2PluginInstance;
-use crate::model::PluginDescriptor;
+use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::plugin_api::BackendKind;
 
 pub struct AtomicF64 {

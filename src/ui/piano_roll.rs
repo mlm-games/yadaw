@@ -4,8 +4,7 @@ use crate::{
     constants::PIANO_KEY_WIDTH,
     model::{MidiClip, MidiNote},
 };
-use eframe::{egui, egui_glow::painter};
-use egui::generate_loader_id;
+use eframe::egui;
 
 pub struct PianoRoll {
     pub zoom_x: f32,

@@ -7,7 +7,6 @@ use crate::messages::AudioCommand;
 use crate::model::{AudioClip, MidiClip, Track};
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
 use egui::scroll_area::ScrollSource;
-use smallvec::SmallVec;
 
 pub struct TimelineView {
     pub zoom_x: f32,
@@ -928,7 +927,7 @@ impl TimelineView {
                         clips_and_starts,
                         start_drag_beat,
                     }) => {
-                        let mut current = beat_at(pos.x);
+                        let current = beat_at(pos.x);
                         let mut delta = current - *start_drag_beat;
                         delta = snap(delta, self.grid_snap);
 
@@ -963,7 +962,7 @@ impl TimelineView {
                         clip_id,
                         original_end_beat,
                     }) => {
-                        let mut drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
+                        let drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
                         let new_start = drag_at.min(*original_end_beat - min_len);
                         let new_len = (*original_end_beat - new_start).max(min_len);
 
@@ -1000,7 +999,7 @@ impl TimelineView {
                         clip_id,
                         original_start_beat,
                     }) => {
-                        let mut drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
+                        let drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
                         let new_end = drag_at.max(*original_start_beat + min_len);
                         let new_len = (new_end - *original_start_beat).max(min_len);
 
@@ -1145,7 +1144,7 @@ impl TimelineView {
         app: &mut super::app::YadawApp,
     ) {
         // Compute total height of visible lanes
-        let mut visible_lanes: Vec<(usize, f32)> = track
+        let visible_lanes: Vec<(usize, f32)> = track
             .automation_lanes
             .iter()
             .enumerate()
@@ -1388,7 +1387,7 @@ impl TimelineView {
                         }
 
                         // Make Unique (only enabled if this clip is currently an alias)
-                        let mut make_unique_btn = egui::Button::new("Make Unique");
+                        let make_unique_btn = egui::Button::new("Make Unique");
                         if ui.add_enabled(is_alias, make_unique_btn).clicked() {
                             if let (Some(t), Some(c)) = (track_id, clip_id) {
                                 let _ = app

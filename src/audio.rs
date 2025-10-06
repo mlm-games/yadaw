@@ -6,16 +6,14 @@ use crate::audio_utils::{calculate_stereo_gains, soft_clip};
 use crate::constants::{
     DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION, RECORDING_BUFFER_SIZE,
 };
-use crate::lv2_plugin_host::LV2PluginInstance;
 use crate::messages::UIUpdate;
-use crate::midi_utils::{MidiNoteUtils, generate_sine_for_note};
+use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::{ChannelStrip, MixerEngine};
 use crate::model::clip::AudioClip;
 use crate::model::plugin_api::{
     BackendKind, HostConfig, MidiEvent, ParamKey, PluginInstance, ProcessCtx, RtMidiEvent,
 };
 use crate::plugin_facade::HostFacade;
-use crate::plugin_host;
 use crate::time_utils::TimeConverter;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -471,7 +469,7 @@ impl AudioEngine {
                 if let Some(proc) = self.track_processors.get_mut(track_id) {
                     // instantiate on audio thread, then put into thread‑local store
                     match self.host_facade.instantiate(backend, &uri) {
-                        Ok(mut inst) => {
+                        Ok(inst) => {
                             let mut name_to_key = std::collections::HashMap::new();
                             for p in inst.params() {
                                 name_to_key.insert(p.name.clone(), p.key.clone());

@@ -1,5 +1,4 @@
-use crate::constants::{DEFAULT_GRID_SNAP, NORMALIZE_TARGET_LINEAR};
-use crate::model::{AudioClip, MidiNote, Track};
+use crate::model::{AudioClip, MidiNote};
 
 #[derive(Debug, Clone)]
 pub enum EditAction {

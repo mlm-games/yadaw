@@ -1,14 +1,11 @@
-use std::path::PathBuf;
 
 use egui_file_dialog::FileDialog;
 
 use super::*;
-use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::messages::AudioCommand;
 use crate::model::plugin_api::BackendKind;
-use crate::plugin::{categorize_plugin, categorize_unified_plugin};
-use crate::ui::app::FileDialogPurpose;
+use crate::plugin::categorize_unified_plugin;
 use crate::ui::theme;
 
 macro_rules! simple_dialog {

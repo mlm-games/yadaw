@@ -1,24 +1,20 @@
 use super::*;
 use crate::audio_state::AudioState;
 use crate::config::Config;
-use crate::constants::{DEFAULT_MIN_PROJECT_BEATS, MAX_BUFFER_SIZE};
+use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
-use crate::level_meter::LevelMeter;
 use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::{AudioClip, MidiNote};
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project::{AppState, AppStateSnapshot};
 use crate::project_manager::ProjectManager;
-use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
-use crate::ui::piano_roll::{PianoRoll, PianoRollAction};
 
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
-use egui_file_dialog::FileDialog;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};

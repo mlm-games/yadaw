@@ -4,7 +4,7 @@ use egui::scroll_area::ScrollSource;
 
 use super::*;
 use crate::messages::AudioCommand;
-use crate::transport::{LoopMode, Transport, TransportState};
+use crate::transport::Transport;
 
 pub struct TransportUI {
     pub transport: Option<Transport>,
