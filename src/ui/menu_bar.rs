@@ -56,10 +56,11 @@ impl MenuBar {
                 } else {
                     for path in recent {
                         if let Some(name) = path.file_stem().and_then(|s| s.to_str())
-                            && ui.button(name).clicked() {
-                                app.load_project_from_path(&path);
-                                ui.close();
-                            }
+                            && ui.button(name).clicked()
+                        {
+                            app.load_project_from_path(&path);
+                            ui.close();
+                        }
                     }
 
                     ui.separator();

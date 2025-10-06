@@ -216,9 +216,10 @@ impl ProjectManager {
             let recent_file = dirs.config_dir().join("recent_projects.json");
             if recent_file.exists()
                 && let Ok(contents) = fs::read_to_string(recent_file)
-                    && let Ok(recent) = serde_json::from_str(&contents) {
-                        return recent;
-                    }
+                && let Ok(recent) = serde_json::from_str(&contents)
+            {
+                return recent;
+            }
         }
         Vec::new()
     }

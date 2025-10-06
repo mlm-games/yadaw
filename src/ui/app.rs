@@ -442,15 +442,16 @@ impl YadawApp {
         let mut state = self.state.lock().unwrap();
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    let peak = clip.samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-                    if peak > 0.0 {
-                        let gain = crate::constants::NORMALIZE_TARGET_LINEAR / peak;
-                        for s in &mut clip.samples {
-                            *s *= gain;
-                        }
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id)
+            {
+                let peak = clip.samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+                if peak > 0.0 {
+                    let gain = crate::constants::NORMALIZE_TARGET_LINEAR / peak;
+                    for s in &mut clip.samples {
+                        *s *= gain;
                     }
                 }
+            }
         }
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -464,9 +465,10 @@ impl YadawApp {
         let mut state = self.state.lock().unwrap();
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    clip.samples.reverse();
-                }
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id)
+            {
+                clip.samples.reverse();
+            }
         }
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -481,9 +483,10 @@ impl YadawApp {
         let bpm = state.bpm;
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    EditProcessor::apply_fade_in(clip, 0.25, bpm);
-                }
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id)
+            {
+                EditProcessor::apply_fade_in(clip, 0.25, bpm);
+            }
         }
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -498,9 +501,10 @@ impl YadawApp {
         let bpm = state.bpm;
         for (track_id, clip_id) in &self.selected_clips {
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                    EditProcessor::apply_fade_out(clip, 0.25, bpm);
-                }
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id)
+            {
+                EditProcessor::apply_fade_out(clip, 0.25, bpm);
+            }
         }
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -523,12 +527,12 @@ impl YadawApp {
         for (track_id, clip_id) in selected_clips {
             if let Some(track) = state.tracks.get_mut(track_id)
                 && let Some(clip) = track.audio_clips.get(clip_id)
-                    && let Some((first_half, second_half)) =
-                        EditProcessor::split_clip(clip, current_beat, bpm)
-                    {
-                        track.audio_clips[clip_id] = first_half;
-                        track.audio_clips.insert(clip_id + 1, second_half);
-                    }
+                && let Some((first_half, second_half)) =
+                    EditProcessor::split_clip(clip, current_beat, bpm)
+            {
+                track.audio_clips[clip_id] = first_half;
+                track.audio_clips.insert(clip_id + 1, second_half);
+            }
         }
         drop(state);
         self.selected_clips.clear();
@@ -541,13 +545,14 @@ impl YadawApp {
 
         let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track)
-            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
-                EditProcessor::quantize_notes(
-                    &mut clip.notes,
-                    crate::constants::DEFAULT_GRID_SNAP as f64,
-                    strength,
-                );
-            }
+            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern)
+        {
+            EditProcessor::quantize_notes(
+                &mut clip.notes,
+                crate::constants::DEFAULT_GRID_SNAP as f64,
+                strength,
+            );
+        }
     }
 
     pub fn quantize_selected_notes_with_params(&mut self, strength: f32, grid: f32, _swing: f32) {
@@ -555,9 +560,10 @@ impl YadawApp {
 
         let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track)
-            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
-                EditProcessor::quantize_notes(&mut clip.notes, grid as f64, strength);
-            }
+            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern)
+        {
+            EditProcessor::quantize_notes(&mut clip.notes, grid as f64, strength);
+        }
     }
 
     pub fn transpose_selected_notes(&mut self, semitones: i32) {
@@ -565,9 +571,10 @@ impl YadawApp {
 
         let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track)
-            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
-                EditProcessor::transpose_notes(&mut clip.notes, semitones);
-            }
+            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern)
+        {
+            EditProcessor::transpose_notes(&mut clip.notes, semitones);
+        }
     }
 
     pub fn humanize_selected_notes(&mut self, amount: f32) {
@@ -575,9 +582,10 @@ impl YadawApp {
 
         let mut state = self.state.lock().unwrap();
         if let Some(track) = state.tracks.get_mut(self.selected_track)
-            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
-                EditProcessor::humanize_notes(&mut clip.notes, amount);
-            }
+            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern)
+        {
+            EditProcessor::humanize_notes(&mut clip.notes, amount);
+        }
     }
 
     // UI operations
@@ -900,9 +908,10 @@ impl YadawApp {
 
             // Transport / loop
             if i.consume_key(egui::Modifiers::NONE, egui::Key::Home)
-                && let Some(transport) = &mut self.transport_ui.transport {
-                    transport.set_position(0.0);
-                }
+                && let Some(transport) = &mut self.transport_ui.transport
+            {
+                transport.set_position(0.0);
+            }
             if i.consume_key(egui::Modifiers::NONE, egui::Key::L) && !i.modifiers.ctrl {
                 // Toggle loop
                 let enabled = !self.audio_state.loop_enabled.load(Ordering::Relaxed);
@@ -925,9 +934,10 @@ impl YadawApp {
 
             // Delete clips
             if i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
-                && !self.selected_clips.is_empty() {
-                    self.delete_selected();
-                }
+                && !self.selected_clips.is_empty()
+            {
+                self.delete_selected();
+            }
 
             // View
             if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::M)) {
@@ -945,54 +955,53 @@ impl YadawApp {
                 } else {
                     None
                 }
-            })
-                && let egui::Event::Touch {
-                    device_id: _,
-                    id: _,
-                    phase,
-                    pos,
-                    force: _,
-                } = touch
-                {
-                    match phase {
-                        egui::TouchPhase::Start => {
+            }) && let egui::Event::Touch {
+                device_id: _,
+                id: _,
+                phase,
+                pos,
+                force: _,
+            } = touch
+            {
+                match phase {
+                    egui::TouchPhase::Start => {
+                        self.touch_state.last_touch_pos = Some(*pos);
+                        self.touch_state.gesture_start_time = Some(Instant::now());
+                    }
+                    egui::TouchPhase::Move => {
+                        if let Some(last_pos) = self.touch_state.last_touch_pos {
+                            let delta = *pos - last_pos;
+
+                            // Pan gesture
+                            if delta.length() > 5.0 {
+                                self.timeline_ui.scroll_x -= delta.x;
+                                self.timeline_ui.scroll_y -= delta.y;
+                            }
+
                             self.touch_state.last_touch_pos = Some(*pos);
-                            self.touch_state.gesture_start_time = Some(Instant::now());
-                        }
-                        egui::TouchPhase::Move => {
-                            if let Some(last_pos) = self.touch_state.last_touch_pos {
-                                let delta = *pos - last_pos;
-
-                                // Pan gesture
-                                if delta.length() > 5.0 {
-                                    self.timeline_ui.scroll_x -= delta.x;
-                                    self.timeline_ui.scroll_y -= delta.y;
-                                }
-
-                                self.touch_state.last_touch_pos = Some(*pos);
-                            }
-                        }
-                        egui::TouchPhase::End => {
-                            // Check for tap vs long press
-                            if let Some(start_time) = self.touch_state.gesture_start_time {
-                                let duration = Instant::now().duration_since(start_time);
-
-                                if duration.as_millis() < 200 {
-                                    // Tap - treat as click
-                                } else {
-                                    // Long press - show context menu
-                                }
-                            }
-
-                            self.touch_state.last_touch_pos = None;
-                            self.touch_state.gesture_start_time = None;
-                        }
-                        egui::TouchPhase::Cancel => {
-                            self.touch_state.last_touch_pos = None;
-                            self.touch_state.gesture_start_time = None;
                         }
                     }
+                    egui::TouchPhase::End => {
+                        // Check for tap vs long press
+                        if let Some(start_time) = self.touch_state.gesture_start_time {
+                            let duration = Instant::now().duration_since(start_time);
+
+                            if duration.as_millis() < 200 {
+                                // Tap - treat as click
+                            } else {
+                                // Long press - show context menu
+                            }
+                        }
+
+                        self.touch_state.last_touch_pos = None;
+                        self.touch_state.gesture_start_time = None;
+                    }
+                    egui::TouchPhase::Cancel => {
+                        self.touch_state.last_touch_pos = None;
+                        self.touch_state.gesture_start_time = None;
+                    }
                 }
+            }
 
             // Handle multi-touch (pinch zoom)
             let touches: Vec<_> = i

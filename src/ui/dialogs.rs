@@ -1,4 +1,3 @@
-
 use egui_file_dialog::FileDialog;
 
 use super::*;
@@ -391,9 +390,10 @@ impl DialogManager {
             d.show(ctx, app);
         }
         if let Some(d) = &self.import_audio
-            && !d.is_open() {
-                self.import_audio = None;
-            }
+            && !d.is_open()
+        {
+            self.import_audio = None;
+        }
     }
 
     pub fn show_project_settings(&mut self) {
@@ -764,11 +764,7 @@ impl Dialog for TransposeContent {
                 return true;
             }
 
-            if ui.button("Cancel").clicked() {
-                true
-            } else {
-                false
-            }
+            ui.button("Cancel").clicked()
         });
 
         false
@@ -1428,11 +1424,12 @@ impl LayoutManagerDialog {
 
                     if ui.button("Delete").clicked()
                         && let Some(idx) = self.selected_layout
-                            && idx >= 4 {
-                                // Don't delete built-in layouts
-                                self.layouts.remove(idx);
-                                self.selected_layout = None;
-                            }
+                        && idx >= 4
+                    {
+                        // Don't delete built-in layouts
+                        self.layouts.remove(idx);
+                        self.selected_layout = None;
+                    }
 
                     if ui.button("Cancel").clicked() {
                         self.closed = true;
@@ -1480,10 +1477,9 @@ impl ProgressBar {
                 ui.label(&self.message);
                 ui.add(egui::ProgressBar::new(self.progress));
 
-                if self.progress >= 1.0
-                    && ui.button("OK").clicked() {
-                        self.closed = true;
-                    }
+                if self.progress >= 1.0 && ui.button("OK").clicked() {
+                    self.closed = true;
+                }
             });
     }
 
@@ -1574,15 +1570,14 @@ impl TrackGroupingDialog {
                     }
                     drop(state);
 
-                    if ui.button("Create Group").clicked()
-                        && !self.selected_tracks.is_empty() {
-                            app.track_manager.create_group(
-                                self.new_group_name.clone(),
-                                self.selected_tracks.clone(),
-                            );
-                            self.selected_tracks.clear();
-                            self.new_group_name = String::from("New Group");
-                        }
+                    if ui.button("Create Group").clicked() && !self.selected_tracks.is_empty() {
+                        app.track_manager.create_group(
+                            self.new_group_name.clone(),
+                            self.selected_tracks.clone(),
+                        );
+                        self.selected_tracks.clear();
+                        self.new_group_name = String::from("New Group");
+                    }
                 });
 
                 ui.separator();

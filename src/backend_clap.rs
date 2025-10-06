@@ -1,7 +1,7 @@
 #[cfg(feature = "clap-host")]
 mod clap_impl {
     use anyhow::{Result, anyhow};
-    
+
     use std::path::{Path, PathBuf};
 
     // Core clack-host types
@@ -60,56 +60,58 @@ mod clap_impl {
             if path.is_file() {
                 libs.push(path.to_path_buf());
             } else if path.is_dir()
-                && let Ok(rd) = std::fs::read_dir(path) {
-                    for e in rd.flatten() {
-                        let p = e.path();
-                        if p.extension()
-                            .and_then(|e| e.to_str())
-                            .map(|e| e == "so" || e == "dylib" || e == "dll")
-                            .unwrap_or(false)
-                        {
-                            libs.push(p);
-                        }
+                && let Ok(rd) = std::fs::read_dir(path)
+            {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e == "so" || e == "dylib" || e == "dll")
+                        .unwrap_or(false)
+                    {
+                        libs.push(p);
                     }
                 }
+            }
 
             for lib in libs {
                 unsafe {
                     if let Ok(bundle) = PluginBundle::load(lib.to_string_lossy().as_ref())
-                        && let Some(factory) = bundle.get_plugin_factory() {
-                            for d in factory.plugin_descriptors() {
-                                let name = d
-                                    .name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .or_else(|| {
-                                        lib.file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .map(|s| s.to_string())
-                                    })
-                                    .unwrap_or_else(|| "Unknown CLAP".to_string());
+                        && let Some(factory) = bundle.get_plugin_factory()
+                    {
+                        for d in factory.plugin_descriptors() {
+                            let name = d
+                                .name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .or_else(|| {
+                                    lib.file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .map(|s| s.to_string())
+                                })
+                                .unwrap_or_else(|| "Unknown CLAP".to_string());
 
-                                let id = d
-                                    .id()
-                                    .map(|id| id.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| "unknown_id".to_string());
+                            let id = d
+                                .id()
+                                .map(|id| id.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "unknown_id".to_string());
 
-                                let is_instr =
-                                    d.features().any(|f| f.to_string_lossy() == "instrument");
+                            let is_instr =
+                                d.features().any(|f| f.to_string_lossy() == "instrument");
 
-                                let (audio_inputs, audio_outputs) =
-                                    if is_instr { (0, 2) } else { (2, 2) };
+                            let (audio_inputs, audio_outputs) =
+                                if is_instr { (0, 2) } else { (2, 2) };
 
-                                out.push(UnifiedPluginInfo {
-                                    backend: BackendKind::Clap,
-                                    uri: format!("file://{}#{}", lib.display(), id),
-                                    name,
-                                    is_instrument: is_instr,
-                                    audio_inputs,
-                                    audio_outputs,
-                                    has_midi: true,
-                                });
-                            }
+                            out.push(UnifiedPluginInfo {
+                                backend: BackendKind::Clap,
+                                uri: format!("file://{}#{}", lib.display(), id),
+                                name,
+                                is_instrument: is_instr,
+                                audio_inputs,
+                                audio_outputs,
+                                has_midi: true,
+                            });
                         }
+                    }
                 }
             }
         }

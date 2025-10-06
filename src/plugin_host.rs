@@ -14,7 +14,7 @@
 //!   - Avoid calling `instantiate` on the realtime audio thread; do it on a
 //!     setup/control thread and pass the instance handle into the audio graph.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::sync::Arc;

@@ -167,10 +167,11 @@ fn process_command(
         AudioCommand::RemovePlugin(track_id, plugin_idx) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && *plugin_idx < track.plugin_chain.len() {
-                    track.plugin_chain.remove(*plugin_idx);
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
-                }
+                && *plugin_idx < track.plugin_chain.len()
+            {
+                track.plugin_chain.remove(*plugin_idx);
+                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+            }
             let _ = realtime_tx.send(RealtimeCommand::RemovePluginInstance {
                 track_id: *track_id,
                 plugin_idx: *plugin_idx,
@@ -181,9 +182,10 @@ fn process_command(
         AudioCommand::SetPluginBypass(track_id, plugin_idx, bypass) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(plugin) = track.plugin_chain.get_mut(*plugin_idx) {
-                    plugin.bypass = *bypass;
-                }
+                && let Some(plugin) = track.plugin_chain.get_mut(*plugin_idx)
+            {
+                plugin.bypass = *bypass;
+            }
             let _ = realtime_tx.send(RealtimeCommand::UpdatePluginBypass(
                 *track_id,
                 *plugin_idx,
@@ -214,9 +216,10 @@ fn process_command(
             // Update model
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(plugin) = track.plugin_chain.get_mut(*plugin_idx) {
-                    plugin.params.insert(param_name.clone(), v);
-                }
+                && let Some(plugin) = track.plugin_chain.get_mut(*plugin_idx)
+            {
+                plugin.params.insert(param_name.clone(), v);
+            }
 
             // RT update
             let _ = realtime_tx.send(RealtimeCommand::UpdatePluginParam(
@@ -267,10 +270,11 @@ fn process_command(
         AudioCommand::DeleteMidiClip(track_id, clip_id) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && *clip_id < track.midi_clips.len() {
-                    track.midi_clips.remove(*clip_id);
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
-                }
+                && *clip_id < track.midi_clips.len()
+            {
+                track.midi_clips.remove(*clip_id);
+                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
@@ -290,27 +294,30 @@ fn process_command(
             }
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && track.is_midi {
-                    track.midi_clips.push(new_clip);
-                }
+                && track.is_midi
+            {
+                track.midi_clips.push(new_clip);
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
         AudioCommand::MoveMidiClip(track_id, clip_id, new_start_beat) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                    clip.start_beat = *new_start_beat;
-                }
+                && let Some(clip) = track.midi_clips.get_mut(*clip_id)
+            {
+                clip.start_beat = *new_start_beat;
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
         AudioCommand::ResizeMidiClip(track_id, clip_id, new_start, new_length) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
                 && track.is_midi
-                    && let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                        clip.start_beat = *new_start;
-                        clip.length_beats = (*new_length).max(0.0);
-                    }
+                && let Some(clip) = track.midi_clips.get_mut(*clip_id)
+            {
+                clip.start_beat = *new_start;
+                clip.length_beats = (*new_length).max(0.0);
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
         AudioCommand::DuplicateMidiClip(track_id, clip_id) => {
@@ -348,9 +355,10 @@ fn process_command(
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
                 && !track.is_midi
-                    && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                        clip.start_beat = *new_start;
-                    }
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id)
+            {
+                clip.start_beat = *new_start;
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
         AudioCommand::ResizeAudioClip(track_id, clip_id, new_start, new_length) => {
@@ -358,39 +366,39 @@ fn process_command(
             let bpm = state.bpm;
             if let Some(track) = state.tracks.get_mut(*track_id)
                 && !track.is_midi
-                    && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
-                        let spb = (clip.sample_rate as f64) * (60.0 / bpm as f64);
-                        if *new_start > clip.start_beat {
-                            let delta_beats = *new_start - clip.start_beat;
-                            let drop_samples = (delta_beats * spb).round() as usize;
-                            if drop_samples >= clip.samples.len() {
-                                clip.samples.clear();
-                            } else {
-                                clip.samples.drain(0..drop_samples);
-                            }
-                        } else if *new_start < clip.start_beat {
-                            let delta_beats = clip.start_beat - *new_start;
-                            let pad_samples = (delta_beats * spb).round() as usize;
-                            if pad_samples > 0 {
-                                let mut padded =
-                                    Vec::with_capacity(pad_samples + clip.samples.len());
-                                padded.resize(pad_samples, 0.0);
-                                padded.extend_from_slice(&clip.samples);
-                                clip.samples = padded;
-                            }
-                        }
-                        let target_samples = (*new_length * spb).round() as usize;
-                        match target_samples.cmp(&clip.samples.len()) {
-                            std::cmp::Ordering::Less => clip.samples.truncate(target_samples),
-                            std::cmp::Ordering::Greater => {
-                                let pad = target_samples - clip.samples.len();
-                                clip.samples.extend(std::iter::repeat_n(0.0, pad));
-                            }
-                            _ => {}
-                        }
-                        clip.start_beat = *new_start;
-                        clip.length_beats = new_length.max(0.0);
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id)
+            {
+                let spb = (clip.sample_rate as f64) * (60.0 / bpm as f64);
+                if *new_start > clip.start_beat {
+                    let delta_beats = *new_start - clip.start_beat;
+                    let drop_samples = (delta_beats * spb).round() as usize;
+                    if drop_samples >= clip.samples.len() {
+                        clip.samples.clear();
+                    } else {
+                        clip.samples.drain(0..drop_samples);
                     }
+                } else if *new_start < clip.start_beat {
+                    let delta_beats = clip.start_beat - *new_start;
+                    let pad_samples = (delta_beats * spb).round() as usize;
+                    if pad_samples > 0 {
+                        let mut padded = Vec::with_capacity(pad_samples + clip.samples.len());
+                        padded.resize(pad_samples, 0.0);
+                        padded.extend_from_slice(&clip.samples);
+                        clip.samples = padded;
+                    }
+                }
+                let target_samples = (*new_length * spb).round() as usize;
+                match target_samples.cmp(&clip.samples.len()) {
+                    std::cmp::Ordering::Less => clip.samples.truncate(target_samples),
+                    std::cmp::Ordering::Greater => {
+                        let pad = target_samples - clip.samples.len();
+                        clip.samples.extend(std::iter::repeat_n(0.0, pad));
+                    }
+                    _ => {}
+                }
+                clip.start_beat = *new_start;
+                clip.length_beats = new_length.max(0.0);
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
         AudioCommand::DuplicateAudioClip(track_id, clip_id) => {
@@ -425,9 +433,11 @@ fn process_command(
         AudioCommand::DeleteAudioClip(track_id, clip_id) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && !track.is_midi && *clip_id < track.audio_clips.len() {
-                    track.audio_clips.remove(*clip_id);
-                }
+                && !track.is_midi
+                && *clip_id < track.audio_clips.len()
+            {
+                track.audio_clips.remove(*clip_id);
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
@@ -469,10 +479,11 @@ fn process_command(
         AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(lane) = track.automation_lanes.get_mut(*lane_idx) {
-                    lane.points.retain(|p| (p.beat - beat).abs() > 0.001);
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
-                }
+                && let Some(lane) = track.automation_lanes.get_mut(*lane_idx)
+            {
+                lane.points.retain(|p| (p.beat - beat).abs() > 0.001);
+                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
         AudioCommand::UpdateAutomationPoint(_, _, _, _, _)
@@ -513,12 +524,13 @@ fn process_command(
         AudioCommand::ToggleClipLoop(track_id, clip_id, enabled) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                    clip.loop_enabled = *enabled;
-                    if clip.content_len_beats <= 0.0 {
-                        clip.content_len_beats = clip.length_beats.max(0.000001);
-                    }
+                && let Some(clip) = track.midi_clips.get_mut(*clip_id)
+            {
+                clip.loop_enabled = *enabled;
+                if clip.content_len_beats <= 0.0 {
+                    clip.content_len_beats = clip.length_beats.max(0.000001);
                 }
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
@@ -541,33 +553,36 @@ fn process_command(
             let mut state = app_state.lock().unwrap();
             let new_id = state.fresh_id(); // safe (no field borrows yet)
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                    // Double-check in case of races
-                    if clip.pattern_id.is_none() {
-                        clip.pattern_id = Some(new_id);
-                    }
+                && let Some(clip) = track.midi_clips.get_mut(*clip_id)
+            {
+                // Double-check in case of races
+                if clip.pattern_id.is_none() {
+                    clip.pattern_id = Some(new_id);
                 }
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::MakeClipUnique(track_id, clip_id) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                    clip.pattern_id = None;
-                }
+                && let Some(clip) = track.midi_clips.get_mut(*clip_id)
+            {
+                clip.pattern_id = None;
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
         AudioCommand::SetClipQuantize(tid, cid, grid, strength, swing, enabled) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*tid)
-                && let Some(clip) = track.midi_clips.get_mut(*cid) {
-                    clip.quantize_grid = *grid;
-                    clip.quantize_strength = strength.clamp(0.0, 1.0);
-                    clip.swing = *swing;
-                    clip.quantize_enabled = *enabled;
-                }
+                && let Some(clip) = track.midi_clips.get_mut(*cid)
+            {
+                clip.quantize_grid = *grid;
+                clip.quantize_strength = strength.clamp(0.0, 1.0);
+                clip.swing = *swing;
+                clip.quantize_enabled = *enabled;
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
 
@@ -595,9 +610,10 @@ fn process_command(
                 let new_pid = state.fresh_id();
                 // Safe: we still hold state lock
                 if let Some(track) = state.tracks.get_mut(*track_id)
-                    && let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                        clip.pattern_id = Some(new_pid);
-                    }
+                    && let Some(clip) = track.midi_clips.get_mut(*clip_id)
+                {
+                    clip.pattern_id = Some(new_pid);
+                }
                 new_pid
             } else {
                 src_pid.unwrap()
@@ -629,11 +645,12 @@ fn process_command(
         AudioCommand::SetClipContentOffset(track_id, clip_id, new_off) => {
             let mut state = app_state.lock().unwrap();
             if let Some(track) = state.tracks.get_mut(*track_id)
-                && let Some(clip) = track.midi_clips.get_mut(*clip_id) {
-                    let len = clip.content_len_beats.max(0.000001);
-                    // Wrap offset into [0, len)
-                    clip.content_offset_beats = ((*new_off % len) + len) % len;
-                }
+                && let Some(clip) = track.midi_clips.get_mut(*clip_id)
+            {
+                let len = clip.content_len_beats.max(0.000001);
+                // Wrap offset into [0, len)
+                clip.content_offset_beats = ((*new_off % len) + len) % len;
+            }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
     }

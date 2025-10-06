@@ -121,178 +121,177 @@ impl PianoRoll {
         self.hover_edge = None;
 
         if matches!(self.interaction_state, InteractionState::Idle)
-            && let Some(pos) = response.hover_pos() {
-                let edge_threshold = 8.0;
+            && let Some(pos) = response.hover_pos()
+        {
+            let edge_threshold = 8.0;
 
-                for (i, note) in pattern.notes.iter().enumerate() {
-                    let note_rect = self.note_rect(note, grid_rect);
-                    if note_rect.contains(pos) {
-                        self.hover_note = Some(i);
-                        if (pos.x - note_rect.left()).abs() < edge_threshold {
-                            self.hover_edge = Some(ResizeEdge::Left);
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                        } else if (note_rect.right() - pos.x).abs() < edge_threshold {
-                            self.hover_edge = Some(ResizeEdge::Right);
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                        } else {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                        }
-                        break;
+            for (i, note) in pattern.notes.iter().enumerate() {
+                let note_rect = self.note_rect(note, grid_rect);
+                if note_rect.contains(pos) {
+                    self.hover_note = Some(i);
+                    if (pos.x - note_rect.left()).abs() < edge_threshold {
+                        self.hover_edge = Some(ResizeEdge::Left);
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    } else if (note_rect.right() - pos.x).abs() < edge_threshold {
+                        self.hover_edge = Some(ResizeEdge::Right);
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    } else {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                     }
+                    break;
                 }
             }
+        }
 
         // Begin drag (supports Alt+Drag duplicate)
         if response.drag_started()
-            && let Some(pos) = response.interact_pointer_pos() {
-                if let InteractionState::Idle = &self.interaction_state {
-                    if let Some(hover_idx) = self.hover_note {
-                        let alt_held = ui.input(|i| i.modifiers.alt);
+            && let Some(pos) = response.interact_pointer_pos()
+            && let InteractionState::Idle = &self.interaction_state
+        {
+            if let Some(hover_idx) = self.hover_note {
+                let alt_held = ui.input(|i| i.modifiers.alt);
 
-                        if let Some(edge) = self.hover_edge {
-                            let selected = self.selected_indices(pattern);
-                            let indices_to_resize =
-                                if selected.contains(&hover_idx) && selected.len() > 1 {
-                                    selected
-                                } else {
-                                    vec![hover_idx]
-                                };
-
-                            self.interaction_state = InteractionState::ResizingNotes {
-                                note_indices: indices_to_resize,
-                                edge,
-                                start_pos: pos,
-                                current_delta_beats: 0.0,
-                            };
-                            return actions;
-                        }
-
-                        // keep multi-selection if hover is already in the current selection
-                        let current_sel = self.selected_indices(pattern);
-                        let hovered_in_selection = current_sel.contains(&hover_idx);
-                        if !hovered_in_selection {
-                            let additive = ui.input(|i| i.modifiers.shift || i.modifiers.ctrl);
-                            self.select_single(&pattern.notes[hover_idx], hover_idx, additive);
-                        }
-                        let current_sel = self.selected_indices(pattern);
-
-                        // Compute click offset from first dragged
-                        let first_selected = current_sel[0];
-                        let first_rect =
-                            self.note_rect(&pattern.notes[first_selected], grid_rect);
-                        let click_offset = pos - first_rect.left_top();
-
-                        self.interaction_state = InteractionState::DraggingNotes {
-                            note_indices: current_sel, // We drag the originals
-                            click_offset,
-                            drag_offset_beats: 0.0,
-                            drag_offset_semitones: 0,
-                            is_duplicating: alt_held, // The flag is set here
-                        };
+                if let Some(edge) = self.hover_edge {
+                    let selected = self.selected_indices(pattern);
+                    let indices_to_resize = if selected.contains(&hover_idx) && selected.len() > 1 {
+                        selected
                     } else {
-                        // ... (empty space click logic unchanged)
-                        if ui.input(|i| i.modifiers.shift) {
-                            self.interaction_state =
-                                InteractionState::SelectionBox { start_pos: pos };
-                        } else if !ui.input(|i| i.modifiers.ctrl) {
-                            self.clear_selection();
-                        }
-                    }
+                        vec![hover_idx]
+                    };
+
+                    self.interaction_state = InteractionState::ResizingNotes {
+                        note_indices: indices_to_resize,
+                        edge,
+                        start_pos: pos,
+                        current_delta_beats: 0.0,
+                    };
+                    return actions;
+                }
+
+                // keep multi-selection if hover is already in the current selection
+                let current_sel = self.selected_indices(pattern);
+                let hovered_in_selection = current_sel.contains(&hover_idx);
+                if !hovered_in_selection {
+                    let additive = ui.input(|i| i.modifiers.shift || i.modifiers.ctrl);
+                    self.select_single(&pattern.notes[hover_idx], hover_idx, additive);
+                }
+                let current_sel = self.selected_indices(pattern);
+
+                // Compute click offset from first dragged
+                let first_selected = current_sel[0];
+                let first_rect = self.note_rect(&pattern.notes[first_selected], grid_rect);
+                let click_offset = pos - first_rect.left_top();
+
+                self.interaction_state = InteractionState::DraggingNotes {
+                    note_indices: current_sel, // We drag the originals
+                    click_offset,
+                    drag_offset_beats: 0.0,
+                    drag_offset_semitones: 0,
+                    is_duplicating: alt_held, // The flag is set here
+                };
+            } else {
+                // ... (empty space click logic unchanged)
+                if ui.input(|i| i.modifiers.shift) {
+                    self.interaction_state = InteractionState::SelectionBox { start_pos: pos };
+                } else if !ui.input(|i| i.modifiers.ctrl) {
+                    self.clear_selection();
                 }
             }
+        }
 
         // Drag move
         if response.dragged()
-            && let Some(current_pos) = response.hover_pos() {
-                match &mut self.interaction_state {
-                    InteractionState::DraggingNotes {
-                        note_indices,
-                        drag_offset_beats,
-                        drag_offset_semitones,
-                        click_offset,
-                        ..
-                    } => {
-                        let grid_pos = current_pos - grid_rect.min;
-                        let beat = (grid_pos.x - click_offset.x + self.scroll_x) / self.zoom_x;
-                        let snapped_beat = (beat / self.grid_snap).round() * self.grid_snap;
+            && let Some(current_pos) = response.hover_pos()
+        {
+            match &mut self.interaction_state {
+                InteractionState::DraggingNotes {
+                    note_indices,
+                    drag_offset_beats,
+                    drag_offset_semitones,
+                    click_offset,
+                    ..
+                } => {
+                    let grid_pos = current_pos - grid_rect.min;
+                    let beat = (grid_pos.x - click_offset.x + self.scroll_x) / self.zoom_x;
+                    let snapped_beat = (beat / self.grid_snap).round() * self.grid_snap;
 
-                        let pitch_y = grid_pos.y - click_offset.y + self.scroll_y;
-                        let pitch_float = 127.0 - (pitch_y / self.zoom_y);
-                        let pitch = pitch_float.floor().clamp(0.0, 127.0) as i32;
+                    let pitch_y = grid_pos.y - click_offset.y + self.scroll_y;
+                    let pitch_float = 127.0 - (pitch_y / self.zoom_y);
+                    let pitch = pitch_float.floor().clamp(0.0, 127.0) as i32;
 
-                        if let Some(&first_idx) = note_indices.first()
-                            && let Some(first_original) = pattern.notes.get(first_idx) {
-                                let beat_delta = snapped_beat as f64 - first_original.start;
-                                let pitch_delta = pitch - first_original.pitch as i32;
+                    if let Some(&first_idx) = note_indices.first()
+                        && let Some(first_original) = pattern.notes.get(first_idx)
+                    {
+                        let beat_delta = snapped_beat as f64 - first_original.start;
+                        let pitch_delta = pitch - first_original.pitch as i32;
 
-                                if pitch_delta != *drag_offset_semitones {
-                                    let preview_pitch =
-                                        ((first_original.pitch as i32 + pitch_delta).clamp(0, 127))
-                                            as u8;
-                                    actions.push(PianoRollAction::PreviewNote(preview_pitch));
-                                }
-
-                                *drag_offset_beats = beat_delta;
-                                *drag_offset_semitones = pitch_delta;
-                            }
-                    }
-                    InteractionState::ResizingNotes {
-                        note_indices,
-                        edge,
-                        current_delta_beats,
-                        ..
-                    } => {
-                        let grid_x =
-                            (current_pos.x - grid_rect.left() + self.scroll_x) / self.zoom_x;
-                        let snapped_beat =
-                            ((grid_x / self.grid_snap).round() * self.grid_snap).max(0.0);
-
-                        if let Some(&first_idx) = note_indices.first()
-                            && let Some(first_original) = pattern.notes.get(first_idx) {
-                                let resize_amount = match edge {
-                                    ResizeEdge::Left => snapped_beat as f64 - first_original.start,
-                                    ResizeEdge::Right => {
-                                        snapped_beat as f64
-                                            - (first_original.start + first_original.duration)
-                                    }
-                                };
-                                *current_delta_beats = resize_amount;
-                            }
-                    }
-                    InteractionState::SelectionBox { start_pos } => {
-                        let rect = egui::Rect::from_two_pos(*start_pos, current_pos);
-                        ui.painter().rect_filled(
-                            rect,
-                            0.0,
-                            egui::Color32::from_rgba_premultiplied(100, 150, 255, 20),
-                        );
-                        ui.painter().rect_stroke(
-                            rect,
-                            0.0,
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
-                            egui::StrokeKind::Inside,
-                        );
-
-                        // Update selection
-                        if !ui.input(|i| i.modifiers.ctrl) {
-                            self.clear_selection();
+                        if pitch_delta != *drag_offset_semitones {
+                            let preview_pitch =
+                                ((first_original.pitch as i32 + pitch_delta).clamp(0, 127)) as u8;
+                            actions.push(PianoRollAction::PreviewNote(preview_pitch));
                         }
-                        for (i, note) in pattern.notes.iter().enumerate() {
-                            let note_rect = self.note_rect(note, grid_rect);
-                            if rect.intersects(note_rect) {
-                                if note.id != 0 {
-                                    if !self.selected_note_ids.contains(&note.id) {
-                                        self.selected_note_ids.push(note.id);
-                                    }
-                                } else if !self.temp_selected_indices.contains(&i) {
-                                    self.temp_selected_indices.push(i);
-                                }
-                            }
-                        }
+
+                        *drag_offset_beats = beat_delta;
+                        *drag_offset_semitones = pitch_delta;
                     }
-                    _ => {}
                 }
+                InteractionState::ResizingNotes {
+                    note_indices,
+                    edge,
+                    current_delta_beats,
+                    ..
+                } => {
+                    let grid_x = (current_pos.x - grid_rect.left() + self.scroll_x) / self.zoom_x;
+                    let snapped_beat =
+                        ((grid_x / self.grid_snap).round() * self.grid_snap).max(0.0);
+
+                    if let Some(&first_idx) = note_indices.first()
+                        && let Some(first_original) = pattern.notes.get(first_idx)
+                    {
+                        let resize_amount = match edge {
+                            ResizeEdge::Left => snapped_beat as f64 - first_original.start,
+                            ResizeEdge::Right => {
+                                snapped_beat as f64
+                                    - (first_original.start + first_original.duration)
+                            }
+                        };
+                        *current_delta_beats = resize_amount;
+                    }
+                }
+                InteractionState::SelectionBox { start_pos } => {
+                    let rect = egui::Rect::from_two_pos(*start_pos, current_pos);
+                    ui.painter().rect_filled(
+                        rect,
+                        0.0,
+                        egui::Color32::from_rgba_premultiplied(100, 150, 255, 20),
+                    );
+                    ui.painter().rect_stroke(
+                        rect,
+                        0.0,
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
+                        egui::StrokeKind::Inside,
+                    );
+
+                    // Update selection
+                    if !ui.input(|i| i.modifiers.ctrl) {
+                        self.clear_selection();
+                    }
+                    for (i, note) in pattern.notes.iter().enumerate() {
+                        let note_rect = self.note_rect(note, grid_rect);
+                        if rect.intersects(note_rect) {
+                            if note.id != 0 {
+                                if !self.selected_note_ids.contains(&note.id) {
+                                    self.selected_note_ids.push(note.id);
+                                }
+                            } else if !self.temp_selected_indices.contains(&i) {
+                                self.temp_selected_indices.push(i);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
+        }
 
         // Mouse up
         if response.drag_stopped() {
@@ -414,92 +413,93 @@ impl PianoRoll {
             }
         }
         // Single click (with Alt audition preserved)
-        else if response.clicked() && !response.dragged()
-            && let Some(pos) = response.interact_pointer_pos() {
-                let clicked_idx = pattern
-                    .notes
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, n)| self.note_rect(n, grid_rect).contains(pos))
-                    .map(|(i, _)| i);
+        else if response.clicked()
+            && !response.dragged()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let clicked_idx = pattern
+                .notes
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, n)| self.note_rect(n, grid_rect).contains(pos))
+                .map(|(i, _)| i);
 
-                if ui.input(|i| i.modifiers.alt) {
-                    // Alt = preview
-                    if let Some(idx) = clicked_idx {
-                        if let Some(n) = pattern.notes.get(idx) {
-                            actions.push(PianoRollAction::PreviewNote(n.pitch));
-                        }
-                    } else {
-                        let pitch = {
-                            let pf =
-                                127.0 - ((pos.y - grid_rect.min.y + self.scroll_y) / self.zoom_y);
-                            pf.floor().clamp(0.0, 127.0) as u8
-                        };
-                        actions.push(PianoRollAction::PreviewNote(pitch));
-                    }
-                    return actions;
-                }
-
+            if ui.input(|i| i.modifiers.alt) {
+                // Alt = preview
                 if let Some(idx) = clicked_idx {
-                    // Selection behavior (respect multi-select modifiers)
-                    if ui.input(|i| i.modifiers.ctrl || i.modifiers.command) {
-                        self.toggle_single(&pattern.notes[idx], idx);
-                    } else {
-                        self.select_single(&pattern.notes[idx], idx, false);
+                    if let Some(n) = pattern.notes.get(idx) {
+                        actions.push(PianoRollAction::PreviewNote(n.pitch));
                     }
-                    return actions;
-                }
-
-                // Otherwise empty: add only if allowed (Draw tool)
-                if allow_add_on_click {
-                    let grid_pos = pos - grid_rect.min;
-                    let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
-                    let snapped_beat = if self.grid_snap > 0.0 {
-                        ((beat / self.grid_snap) as f64).round() * self.grid_snap as f64
-                    } else {
-                        beat as f64
-                    }
-                    .max(0.0);
-
-                    // compute pitch with floor (so tap matches visual row)
+                } else {
                     let pitch = {
-                        let pf = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
+                        let pf = 127.0 - ((pos.y - grid_rect.min.y + self.scroll_y) / self.zoom_y);
                         pf.floor().clamp(0.0, 127.0) as u8
                     };
+                    actions.push(PianoRollAction::PreviewNote(pitch));
+                }
+                return actions;
+            }
 
-                    // New-note duration: selected duration if present, else grid or tiny minimum
-                    let grid_len = if self.grid_snap > 0.0 {
-                        self.grid_snap as f64
-                    } else {
-                        0.25f64
-                    };
-                    let use_dur = if preferred_duration > 0.0 {
-                        preferred_duration
-                    } else {
-                        grid_len
-                    };
+            if let Some(idx) = clicked_idx {
+                // Selection behavior (respect multi-select modifiers)
+                if ui.input(|i| i.modifiers.ctrl || i.modifiers.command) {
+                    self.toggle_single(&pattern.notes[idx], idx);
+                } else {
+                    self.select_single(&pattern.notes[idx], idx, false);
+                }
+                return actions;
+            }
 
-                    // Don’t add on top of an existing same-cell note; select it instead.
-                    const EPS: f64 = 1e-6;
-                    if let Some(existing_idx) = pattern
-                        .notes
-                        .iter()
-                        .position(|n| n.pitch == pitch && (n.start - snapped_beat).abs() < EPS)
-                    {
-                        // Select existing
-                        self.select_single(&pattern.notes[existing_idx], existing_idx, false);
-                    } else {
-                        actions.push(PianoRollAction::AddNote(MidiNote {
-                            id: 0,
-                            pitch,
-                            velocity: 100,
-                            start: snapped_beat,
-                            duration: use_dur,
-                        }));
-                    }
+            // Otherwise empty: add only if allowed (Draw tool)
+            if allow_add_on_click {
+                let grid_pos = pos - grid_rect.min;
+                let beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
+                let snapped_beat = if self.grid_snap > 0.0 {
+                    ((beat / self.grid_snap) as f64).round() * self.grid_snap as f64
+                } else {
+                    beat as f64
+                }
+                .max(0.0);
+
+                // compute pitch with floor (so tap matches visual row)
+                let pitch = {
+                    let pf = 127.0 - ((grid_pos.y + self.scroll_y) / self.zoom_y);
+                    pf.floor().clamp(0.0, 127.0) as u8
+                };
+
+                // New-note duration: selected duration if present, else grid or tiny minimum
+                let grid_len = if self.grid_snap > 0.0 {
+                    self.grid_snap as f64
+                } else {
+                    0.25f64
+                };
+                let use_dur = if preferred_duration > 0.0 {
+                    preferred_duration
+                } else {
+                    grid_len
+                };
+
+                // Don’t add on top of an existing same-cell note; select it instead.
+                const EPS: f64 = 1e-6;
+                if let Some(existing_idx) = pattern
+                    .notes
+                    .iter()
+                    .position(|n| n.pitch == pitch && (n.start - snapped_beat).abs() < EPS)
+                {
+                    // Select existing
+                    self.select_single(&pattern.notes[existing_idx], existing_idx, false);
+                } else {
+                    actions.push(PianoRollAction::AddNote(MidiNote {
+                        id: 0,
+                        pitch,
+                        velocity: 100,
+                        start: snapped_beat,
+                        duration: use_dur,
+                    }));
                 }
             }
+        }
 
         // Draw notes
         for (i, note) in pattern.notes.iter().enumerate() {
@@ -510,12 +510,14 @@ impl PianoRoll {
                 is_duplicating,
                 ..
             } = &self.interaction_state
-                && *is_duplicating && note_indices.contains(&i) {
-                    let original_note_rect = self.note_rect(note, grid_rect);
-                    let faded_color = egui::Color32::from_rgba_premultiplied(80, 120, 200, 60);
-                    ui.painter()
-                        .rect_filled(original_note_rect, 2.0, faded_color);
-                }
+                && *is_duplicating
+                && note_indices.contains(&i)
+            {
+                let original_note_rect = self.note_rect(note, grid_rect);
+                let faded_color = egui::Color32::from_rgba_premultiplied(80, 120, 200, 60);
+                ui.painter()
+                    .rect_filled(original_note_rect, 2.0, faded_color);
+            }
 
             match &self.interaction_state {
                 InteractionState::DraggingNotes {
@@ -620,41 +622,42 @@ impl PianoRoll {
 
         // Context menu delete (ID-aware)
         if response.secondary_clicked()
-            && let Some(pos) = response.interact_pointer_pos() {
-                let mut delete_selected = false;
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let mut delete_selected = false;
+            for (i, note) in pattern.notes.iter().enumerate() {
+                if ((note.id != 0 && self.selected_note_ids.contains(&note.id))
+                    || (note.id == 0 && self.temp_selected_indices.contains(&i)))
+                    && self.note_rect(note, grid_rect).contains(pos)
+                {
+                    delete_selected = true;
+                    break;
+                }
+            }
+
+            if delete_selected {
+                let mut del = self.selected_indices(pattern);
+                del.sort_unstable_by(|a, b| b.cmp(a));
+                for idx in del {
+                    if idx < pattern.notes.len() {
+                        actions.push(PianoRollAction::RemoveNote(idx));
+                    }
+                }
+                self.clear_selection();
+            } else {
                 for (i, note) in pattern.notes.iter().enumerate() {
-                    if ((note.id != 0 && self.selected_note_ids.contains(&note.id))
-                        || (note.id == 0 && self.temp_selected_indices.contains(&i)))
-                        && self.note_rect(note, grid_rect).contains(pos)
-                    {
-                        delete_selected = true;
+                    if self.note_rect(note, grid_rect).contains(pos) {
+                        actions.push(PianoRollAction::RemoveNote(i));
+                        if note.id != 0 {
+                            self.selected_note_ids.retain(|&id| id != note.id);
+                        } else {
+                            self.temp_selected_indices.retain(|&j| j != i);
+                        }
                         break;
                     }
                 }
-
-                if delete_selected {
-                    let mut del = self.selected_indices(pattern);
-                    del.sort_unstable_by(|a, b| b.cmp(a));
-                    for idx in del {
-                        if idx < pattern.notes.len() {
-                            actions.push(PianoRollAction::RemoveNote(idx));
-                        }
-                    }
-                    self.clear_selection();
-                } else {
-                    for (i, note) in pattern.notes.iter().enumerate() {
-                        if self.note_rect(note, grid_rect).contains(pos) {
-                            actions.push(PianoRollAction::RemoveNote(i));
-                            if note.id != 0 {
-                                self.selected_note_ids.retain(|&id| id != note.id);
-                            } else {
-                                self.temp_selected_indices.retain(|&j| j != i);
-                            }
-                            break;
-                        }
-                    }
-                }
             }
+        }
 
         // in-roll playhead
         if let Some(current_beat) = ui
@@ -743,19 +746,21 @@ impl PianoRoll {
         }
 
         // Delete
-        if allow && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
-            && !sel_idx.is_empty() {
-                let mut sel = sel_idx.clone();
-                sel.sort_unstable_by(|a, b| b.cmp(a));
-                let mut indices_to_remove = Vec::new();
-                for idx in sel {
-                    if idx < pattern.notes.len() {
-                        indices_to_remove.push(idx);
-                    }
+        if allow
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
+            && !sel_idx.is_empty()
+        {
+            let mut sel = sel_idx.clone();
+            sel.sort_unstable_by(|a, b| b.cmp(a));
+            let mut indices_to_remove = Vec::new();
+            for idx in sel {
+                if idx < pattern.notes.len() {
+                    indices_to_remove.push(idx);
                 }
-                actions.push(PianoRollAction::RemoveNotes(indices_to_remove));
-                self.clear_selection();
             }
+            actions.push(PianoRollAction::RemoveNotes(indices_to_remove));
+            self.clear_selection();
+        }
 
         // Velocity with COMMAND
         if allow && ui.input_mut(|i| i.consume_shortcut(&sc_v_up)) {
@@ -878,61 +883,59 @@ impl PianoRoll {
         }
 
         // COPY
-        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_copy))
-            && !sel_idx.is_empty() {
-                let mut to_copy = Vec::with_capacity(sel_idx.len());
-                let mut min_start = f64::INFINITY;
-                for &idx in &sel_idx {
-                    if let Some(n) = pattern.notes.get(idx) {
-                        min_start = min_start.min(n.start);
-                    }
+        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_copy)) && !sel_idx.is_empty() {
+            let mut to_copy = Vec::with_capacity(sel_idx.len());
+            let mut min_start = f64::INFINITY;
+            for &idx in &sel_idx {
+                if let Some(n) = pattern.notes.get(idx) {
+                    min_start = min_start.min(n.start);
                 }
-                for &idx in &sel_idx {
-                    if let Some(n) = pattern.notes.get(idx) {
-                        let mut nn = *n;
-                        nn.start = (nn.start - min_start).max(0.0);
-                        to_copy.push(nn);
-                    }
-                }
-                self.note_clipboard = Some(to_copy.clone());
-                ui.ctx()
-                    .memory_mut(|m| m.data.insert_persisted(CLIP_ID, to_copy));
             }
+            for &idx in &sel_idx {
+                if let Some(n) = pattern.notes.get(idx) {
+                    let mut nn = *n;
+                    nn.start = (nn.start - min_start).max(0.0);
+                    to_copy.push(nn);
+                }
+            }
+            self.note_clipboard = Some(to_copy.clone());
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_persisted(CLIP_ID, to_copy));
+        }
 
         // CUT
-        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_cut))
-            && !sel_idx.is_empty() {
-                // Copy
-                let mut to_copy = Vec::with_capacity(sel_idx.len());
-                let mut min_start = f64::INFINITY;
-                for &idx in &sel_idx {
-                    if let Some(n) = pattern.notes.get(idx) {
-                        min_start = min_start.min(n.start);
-                    }
+        if allow && ui.input_mut(|i| i.consume_shortcut(&sc_cut)) && !sel_idx.is_empty() {
+            // Copy
+            let mut to_copy = Vec::with_capacity(sel_idx.len());
+            let mut min_start = f64::INFINITY;
+            for &idx in &sel_idx {
+                if let Some(n) = pattern.notes.get(idx) {
+                    min_start = min_start.min(n.start);
                 }
-                for &idx in &sel_idx {
-                    if let Some(n) = pattern.notes.get(idx) {
-                        let mut nn = *n;
-                        nn.start = (nn.start - min_start).max(0.0);
-                        to_copy.push(nn);
-                    }
-                }
-                self.note_clipboard = Some(to_copy.clone());
-                ui.ctx()
-                    .memory_mut(|m| m.data.insert_persisted(CLIP_ID, to_copy));
-
-                // Delete selected notes by index (reverse order)
-                let mut del = sel_idx.clone();
-                del.sort_unstable_by(|a, b| b.cmp(a));
-                let mut indices_to_remove = Vec::new();
-                for idx in del {
-                    if idx < pattern.notes.len() {
-                        indices_to_remove.push(idx);
-                    }
-                }
-                actions.push(PianoRollAction::RemoveNotes(indices_to_remove));
-                self.clear_selection();
             }
+            for &idx in &sel_idx {
+                if let Some(n) = pattern.notes.get(idx) {
+                    let mut nn = *n;
+                    nn.start = (nn.start - min_start).max(0.0);
+                    to_copy.push(nn);
+                }
+            }
+            self.note_clipboard = Some(to_copy.clone());
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_persisted(CLIP_ID, to_copy));
+
+            // Delete selected notes by index (reverse order)
+            let mut del = sel_idx.clone();
+            del.sort_unstable_by(|a, b| b.cmp(a));
+            let mut indices_to_remove = Vec::new();
+            for idx in del {
+                if idx < pattern.notes.len() {
+                    indices_to_remove.push(idx);
+                }
+            }
+            actions.push(PianoRollAction::RemoveNotes(indices_to_remove));
+            self.clear_selection();
+        }
 
         // PASTE
         if allow && ui.input_mut(|i| i.consume_shortcut(&sc_paste)) {

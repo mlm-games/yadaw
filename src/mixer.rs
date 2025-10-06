@@ -106,9 +106,10 @@ impl MixerEngine {
 
     pub fn route_track_to_bus(&mut self, track_id: usize, bus_id: usize) {
         if let Some(bus) = self.buses.get_mut(bus_id)
-            && !bus.input_tracks.contains(&track_id) {
-                bus.input_tracks.push(track_id);
-            }
+            && !bus.input_tracks.contains(&track_id)
+        {
+            bus.input_tracks.push(track_id);
+        }
     }
 
     pub fn process_mix(

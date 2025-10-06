@@ -179,9 +179,9 @@ impl TracksPanel {
                     if self.show_automation_buttons
                         && let Some(action) =
                             self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx)
-                        {
-                            automation_actions.push(action); // ← Collect for later
-                        }
+                    {
+                        automation_actions.push(action); // ← Collect for later
+                    }
 
                     self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
                 });
@@ -313,12 +313,11 @@ impl TracksPanel {
                     .selectable_label(track.monitor_enabled, "🎧")
                     .on_hover_text("Input Monitoring")
                     .clicked()
-                {
-                    // Toggle and notify audio thread
-                    track.monitor_enabled = !track.monitor_enabled;
-                    let _ =
-                        command_tx.send(AudioCommand::SetTrackMonitor(idx, track.monitor_enabled));
-                }
+            {
+                // Toggle and notify audio thread
+                track.monitor_enabled = !track.monitor_enabled;
+                let _ = command_tx.send(AudioCommand::SetTrackMonitor(idx, track.monitor_enabled));
+            }
         });
 
         ui.horizontal(|ui| {
@@ -585,9 +584,9 @@ impl TracksPanel {
                 if self.show_automation_buttons
                     && let Some(action) =
                         self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx)
-                    {
-                        automation_actions.push(action);
-                    }
+                {
+                    automation_actions.push(action);
+                }
 
                 self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
             });

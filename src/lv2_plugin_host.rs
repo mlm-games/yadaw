@@ -7,7 +7,6 @@ use livi::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-
 #[derive(Clone, Debug)]
 pub struct PluginInfo {
     pub uri: String,

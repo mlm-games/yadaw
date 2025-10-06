@@ -123,12 +123,13 @@ impl PianoRollView {
                             * (1.0 + scroll_delta.y * 0.01))
                             .clamp(10.0, 500.0);
                         if (self.piano_roll.zoom_x - old).abs() > f32::EPSILON
-                            && let Some(pos) = lane_resp.hover_pos() {
-                                let grid_left = lane_rect.left() + PIANO_KEY_WIDTH;
-                                let cx = (pos.x - grid_left + self.piano_roll.scroll_x) / old;
-                                self.piano_roll.scroll_x =
-                                    (cx * self.piano_roll.zoom_x - (pos.x - grid_left)).max(0.0);
-                            }
+                            && let Some(pos) = lane_resp.hover_pos()
+                        {
+                            let grid_left = lane_rect.left() + PIANO_KEY_WIDTH;
+                            let cx = (pos.x - grid_left + self.piano_roll.scroll_x) / old;
+                            self.piano_roll.scroll_x =
+                                (cx * self.piano_roll.zoom_x - (pos.x - grid_left)).max(0.0);
+                        }
                     } else {
                         self.piano_roll.scroll_x =
                             (self.piano_roll.scroll_x - scroll_delta.x).max(0.0);
@@ -256,79 +257,79 @@ impl PianoRollView {
                 let mut fresh_id_iter = fresh_ids.into_iter();
 
                 if let Some(track) = state.tracks.get_mut(app.selected_track)
-                    && let Some(clip) = track.midi_clips.get_mut(clip_idx) {
-                        let mut changed = false;
+                    && let Some(clip) = track.midi_clips.get_mut(clip_idx)
+                {
+                    let mut changed = false;
 
-                        for action in mutation_actions {
-                            changed = true; // Assume any mutation causes change
-                            match action {
-                                PianoRollAction::AddNote(mut note) => {
+                    for action in mutation_actions {
+                        changed = true; // Assume any mutation causes change
+                        match action {
+                            PianoRollAction::AddNote(mut note) => {
+                                if note.id == 0 {
+                                    note.id = fresh_id_iter.next().unwrap();
+                                }
+                                clip.notes.push(note);
+                            }
+                            PianoRollAction::AddNotes(notes) => {
+                                for mut note in notes {
                                     if note.id == 0 {
                                         note.id = fresh_id_iter.next().unwrap();
                                     }
                                     clip.notes.push(note);
                                 }
-                                PianoRollAction::AddNotes(notes) => {
-                                    for mut note in notes {
-                                        if note.id == 0 {
-                                            note.id = fresh_id_iter.next().unwrap();
-                                        }
-                                        clip.notes.push(note);
-                                    }
+                            }
+                            PianoRollAction::RemoveNote(idx) => {
+                                if idx < clip.notes.len() {
+                                    clip.notes.remove(idx);
                                 }
-                                PianoRollAction::RemoveNote(idx) => {
+                            }
+                            PianoRollAction::RemoveNotes(mut indices) => {
+                                indices.sort_unstable_by(|a, b| b.cmp(a));
+                                for idx in indices {
                                     if idx < clip.notes.len() {
                                         clip.notes.remove(idx);
                                     }
                                 }
-                                PianoRollAction::RemoveNotes(mut indices) => {
-                                    indices.sort_unstable_by(|a, b| b.cmp(a));
-                                    for idx in indices {
-                                        if idx < clip.notes.len() {
-                                            clip.notes.remove(idx);
-                                        }
-                                    }
-                                }
-                                PianoRollAction::UpdateNote(idx, note) => {
-                                    if idx < clip.notes.len() {
-                                        clip.notes[idx] = note;
-                                    }
-                                }
-                                PianoRollAction::DuplicateNotesAndSelect {
-                                    original_notes,
-                                    drag_offset_beats,
-                                    drag_offset_semitones,
-                                } => {
-                                    let mut new_ids_for_selection = Vec::new();
-                                    for original in original_notes {
-                                        let mut new_note = original;
-                                        new_note.id = fresh_id_iter.next().unwrap();
-                                        new_ids_for_selection.push(new_note.id);
-
-                                        let new_start =
-                                            (original.start + drag_offset_beats).max(0.0);
-                                        let max_start =
-                                            (clip.length_beats - original.duration).max(0.0);
-                                        new_note.start = new_start.min(max_start);
-                                        new_note.pitch = ((original.pitch as i32
-                                            + drag_offset_semitones)
-                                            .clamp(0, 127))
-                                            as u8;
-                                        clip.notes.push(new_note);
-                                    }
-
-                                    self.piano_roll.clear_selection();
-                                    self.piano_roll.selected_note_ids = new_ids_for_selection;
-                                }
-                                _ => changed = false, // Not a mutation action
                             }
-                        }
+                            PianoRollAction::UpdateNote(idx, note) => {
+                                if idx < clip.notes.len() {
+                                    clip.notes[idx] = note;
+                                }
+                            }
+                            PianoRollAction::DuplicateNotesAndSelect {
+                                original_notes,
+                                drag_offset_beats,
+                                drag_offset_semitones,
+                            } => {
+                                let mut new_ids_for_selection = Vec::new();
+                                for original in original_notes {
+                                    let mut new_note = original;
+                                    new_note.id = fresh_id_iter.next().unwrap();
+                                    new_ids_for_selection.push(new_note.id);
 
-                        if changed {
-                            clip.notes
-                                .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                                    let new_start = (original.start + drag_offset_beats).max(0.0);
+                                    let max_start =
+                                        (clip.length_beats - original.duration).max(0.0);
+                                    new_note.start = new_start.min(max_start);
+                                    new_note.pitch = ((original.pitch as i32
+                                        + drag_offset_semitones)
+                                        .clamp(0, 127))
+                                        as u8;
+                                    clip.notes.push(new_note);
+                                }
+
+                                self.piano_roll.clear_selection();
+                                self.piano_roll.selected_note_ids = new_ids_for_selection;
+                            }
+                            _ => changed = false, // Not a mutation action
                         }
                     }
+
+                    if changed {
+                        clip.notes
+                            .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                    }
+                }
 
                 drop(state);
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
@@ -422,33 +423,35 @@ impl PianoRollView {
                         .button("➕")
                         .on_hover_text("Create New MIDI Clip")
                         .clicked()
-                        && let Some(current_beat) = create_clip_data {
-                            let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
-                                app.selected_track,
-                                current_beat,
-                                DEFAULT_MIDI_CLIP_LEN,
-                            ));
-                        }
+                        && let Some(current_beat) = create_clip_data
+                    {
+                        let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
+                            app.selected_track,
+                            current_beat,
+                            DEFAULT_MIDI_CLIP_LEN,
+                        ));
+                    }
 
                     // Duplicate clip
                     if ui.button("⎘").on_hover_text("Duplicate Clip").clicked()
-                        && let Some(new_clip) = duplicate_clip_data {
-                            let _ = app.command_tx.send(AudioCommand::CreateMidiClipWithData(
-                                app.selected_track,
-                                new_clip,
-                            ));
-                        }
+                        && let Some(new_clip) = duplicate_clip_data
+                    {
+                        let _ = app.command_tx.send(AudioCommand::CreateMidiClipWithData(
+                            app.selected_track,
+                            new_clip,
+                        ));
+                    }
 
                     // Delete clip
                     if can_delete
                         && ui.button("🗑").on_hover_text("Delete Clip").clicked()
-                            && let Some(clip_idx) = self.selected_clip {
-                                let _ = app.command_tx.send(AudioCommand::DeleteMidiClip(
-                                    app.selected_track,
-                                    clip_idx,
-                                ));
-                                self.selected_clip = None;
-                            }
+                        && let Some(clip_idx) = self.selected_clip
+                    {
+                        let _ = app
+                            .command_tx
+                            .send(AudioCommand::DeleteMidiClip(app.selected_track, clip_idx));
+                        self.selected_clip = None;
+                    }
 
                     ui.separator();
 
@@ -621,22 +624,24 @@ impl PianoRollView {
             );
 
             if resp.dragged()
-                && let Some(pos) = resp.interact_pointer_pos() {
-                    let new_velocity = ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
-                        .round()
-                        .clamp(0.0, 127.0) as u8;
+                && let Some(pos) = resp.interact_pointer_pos()
+            {
+                let new_velocity = ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
+                    .round()
+                    .clamp(0.0, 127.0) as u8;
 
-                    if new_velocity != note.velocity {
-                        let mut state = app.state.lock().unwrap();
-                        if let Some(track) = state.tracks.get_mut(app.selected_track)
-                            && let Some(clip) = track.midi_clips.get_mut(clip_idx)
-                                && let Some(n) = clip.notes.get_mut(i) {
-                                    n.velocity = new_velocity;
-                                }
-                        drop(state);
-                        let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                if new_velocity != note.velocity {
+                    let mut state = app.state.lock().unwrap();
+                    if let Some(track) = state.tracks.get_mut(app.selected_track)
+                        && let Some(clip) = track.midi_clips.get_mut(clip_idx)
+                        && let Some(n) = clip.notes.get_mut(i)
+                    {
+                        n.velocity = new_velocity;
                     }
+                    drop(state);
+                    let _ = app.command_tx.send(AudioCommand::UpdateTracks);
                 }
+            }
         }
     }
 
@@ -825,19 +830,20 @@ impl PianoRollView {
         // Then delete from model
         let mut state_guard = state.lock().unwrap();
         if let Some(track) = state_guard.tracks.get_mut(selected_track)
-            && let Some(clip) = track.midi_clips.get_mut(clip_idx) {
-                let mut sel_idx = self.piano_roll.selected_indices(clip);
-                sel_idx.sort_unstable_by(|a, b| b.cmp(a));
+            && let Some(clip) = track.midi_clips.get_mut(clip_idx)
+        {
+            let mut sel_idx = self.piano_roll.selected_indices(clip);
+            sel_idx.sort_unstable_by(|a, b| b.cmp(a));
 
-                for idx in sel_idx {
-                    if idx < clip.notes.len() {
-                        clip.notes.remove(idx);
-                    }
+            for idx in sel_idx {
+                if idx < clip.notes.len() {
+                    clip.notes.remove(idx);
                 }
-
-                self.piano_roll.selected_note_ids.clear();
-                self.piano_roll.temp_selected_indices.clear();
             }
+
+            self.piano_roll.selected_note_ids.clear();
+            self.piano_roll.temp_selected_indices.clear();
+        }
         drop(state_guard);
 
         // Don't call push_undo here - caller will do it
@@ -884,24 +890,25 @@ impl PianoRollView {
         // Now modify the clip with pre-generated IDs
         let mut state_guard = state.lock().unwrap();
         if let Some(track) = state_guard.tracks.get_mut(selected_track)
-            && let Some(clip) = track.midi_clips.get_mut(clip_idx) {
-                for (note, &new_id) in clipboard.iter().zip(new_ids.iter()) {
-                    let mut new_note = *note;
-                    new_note.id = new_id;
-                    new_note.start = (snapped_target + new_note.start).max(0.0);
+            && let Some(clip) = track.midi_clips.get_mut(clip_idx)
+        {
+            for (note, &new_id) in clipboard.iter().zip(new_ids.iter()) {
+                let mut new_note = *note;
+                new_note.id = new_id;
+                new_note.start = (snapped_target + new_note.start).max(0.0);
 
-                    if new_note.start < clip.length_beats {
-                        new_note.duration = new_note
-                            .duration
-                            .min(clip.length_beats - new_note.start)
-                            .max(0.01);
-                        clip.notes.push(new_note);
-                    }
+                if new_note.start < clip.length_beats {
+                    new_note.duration = new_note
+                        .duration
+                        .min(clip.length_beats - new_note.start)
+                        .max(0.01);
+                    clip.notes.push(new_note);
                 }
-
-                clip.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
             }
+
+            clip.notes
+                .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+        }
         drop(state_guard);
 
         let _ = command_tx.send(AudioCommand::UpdateTracks);
@@ -921,23 +928,24 @@ impl PianoRollView {
 
         let mut state_guard = state.lock().unwrap();
         if let Some(track) = state_guard.tracks.get_mut(selected_track)
-            && let Some(clip) = track.midi_clips.get_mut(clip_idx) {
-                let mut sel_idx = self.piano_roll.selected_indices(clip);
-                if sel_idx.is_empty() {
-                    return false;
-                }
-
-                sel_idx.sort_unstable_by(|a, b| b.cmp(a));
-
-                for idx in sel_idx {
-                    if idx < clip.notes.len() {
-                        clip.notes.remove(idx);
-                    }
-                }
-
-                self.piano_roll.selected_note_ids.clear();
-                self.piano_roll.temp_selected_indices.clear();
+            && let Some(clip) = track.midi_clips.get_mut(clip_idx)
+        {
+            let mut sel_idx = self.piano_roll.selected_indices(clip);
+            if sel_idx.is_empty() {
+                return false;
             }
+
+            sel_idx.sort_unstable_by(|a, b| b.cmp(a));
+
+            for idx in sel_idx {
+                if idx < clip.notes.len() {
+                    clip.notes.remove(idx);
+                }
+            }
+
+            self.piano_roll.selected_note_ids.clear();
+            self.piano_roll.temp_selected_indices.clear();
+        }
         drop(state_guard);
 
         let _ = command_tx.send(AudioCommand::UpdateTracks);
@@ -952,18 +960,19 @@ impl PianoRollView {
 
         let state_guard = state.lock().unwrap();
         if let Some(track) = state_guard.tracks.get(selected_track)
-            && let Some(clip) = track.midi_clips.get(clip_idx) {
-                self.piano_roll.selected_note_ids.clear();
-                self.piano_roll.temp_selected_indices.clear();
+            && let Some(clip) = track.midi_clips.get(clip_idx)
+        {
+            self.piano_roll.selected_note_ids.clear();
+            self.piano_roll.temp_selected_indices.clear();
 
-                for (i, note) in clip.notes.iter().enumerate() {
-                    if note.id != 0 {
-                        self.piano_roll.selected_note_ids.push(note.id);
-                    } else {
-                        self.piano_roll.temp_selected_indices.push(i);
-                    }
+            for (i, note) in clip.notes.iter().enumerate() {
+                if note.id != 0 {
+                    self.piano_roll.selected_note_ids.push(note.id);
+                } else {
+                    self.piano_roll.temp_selected_indices.push(i);
                 }
             }
+        }
     }
 }
 

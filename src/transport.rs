@@ -1,8 +1,8 @@
 use crate::audio_state::AudioState;
 use crate::messages::AudioCommand;
 use crossbeam_channel::Sender;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransportState {

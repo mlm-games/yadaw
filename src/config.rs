@@ -88,10 +88,11 @@ impl Default for Config {
 impl Config {
     pub fn load() -> Result<Self> {
         if let Some(config_path) = Self::config_path()
-            && config_path.exists() {
-                let contents = std::fs::read_to_string(config_path)?;
-                return Ok(serde_json::from_str(&contents)?);
-            }
+            && config_path.exists()
+        {
+            let contents = std::fs::read_to_string(config_path)?;
+            return Ok(serde_json::from_str(&contents)?);
+        }
         Ok(Self::default())
     }
 

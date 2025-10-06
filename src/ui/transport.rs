@@ -41,14 +41,16 @@ impl TransportUI {
                     ui.horizontal(|ui| {
                         // Transport buttons
                         if ui.button("⏮").on_hover_text("Go to Start").clicked()
-                            && let Some(transport) = &self.transport {
-                                transport.rewind();
-                            }
+                            && let Some(transport) = &self.transport
+                        {
+                            transport.rewind();
+                        }
 
                         if ui.button("⏪").on_hover_text("Rewind").clicked()
-                            && let Some(transport) = &self.transport {
-                                transport.rewind_beats(4.0);
-                            }
+                            && let Some(transport) = &self.transport
+                        {
+                            transport.rewind_beats(4.0);
+                        }
 
                         let is_playing = self
                             .transport
@@ -62,9 +64,10 @@ impl TransportUI {
                         }
 
                         if ui.button("⏹").on_hover_text("Stop").clicked()
-                            && let Some(transport) = &self.transport {
-                                transport.stop();
-                            }
+                            && let Some(transport) = &self.transport
+                        {
+                            transport.stop();
+                        }
 
                         let is_recording = self
                             .transport
@@ -86,14 +89,16 @@ impl TransportUI {
                             }))
                             .on_hover_text("Record")
                             .clicked()
-                            && let Some(transport) = &self.transport {
-                                transport.record();
-                            }
+                            && let Some(transport) = &self.transport
+                        {
+                            transport.record();
+                        }
 
                         if ui.button("⏩").on_hover_text("Fast Forward").clicked()
-                            && let Some(transport) = &self.transport {
-                                transport.fast_forward(4.0);
-                            }
+                            && let Some(transport) = &self.transport
+                        {
+                            transport.fast_forward(4.0);
+                        }
 
                         ui.separator();
 
@@ -121,9 +126,10 @@ impl TransportUI {
                         {
                             if let Ok(bpm) = self.bpm_input.parse::<f32>()
                                 && (20.0..=999.0).contains(&bpm)
-                                    && let Some(transport) = &self.transport {
-                                        transport.set_bpm(bpm);
-                                    }
+                                && let Some(transport) = &self.transport
+                            {
+                                transport.set_bpm(bpm);
+                            }
                         }
 
                         ui.separator();
@@ -192,9 +198,10 @@ impl TransportUI {
                             .unwrap_or(false);
 
                         if ui.checkbox(&mut metronome, "Click").clicked()
-                            && let Some(transport) = &mut self.transport {
-                                transport.metronome_enabled = metronome;
-                            }
+                            && let Some(transport) = &mut self.transport
+                        {
+                            transport.metronome_enabled = metronome;
+                        }
                     });
                 });
         });
