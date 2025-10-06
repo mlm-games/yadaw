@@ -58,7 +58,7 @@ impl MidiNoteUtils {
         let octave: i32 = octave_part.parse().ok()?;
         let midi_note = (octave + 1) * 12 + note_offset;
 
-        if midi_note >= 0 && midi_note <= 127 {
+        if (0..=127).contains(&midi_note) {
             Some(midi_note as u8)
         } else {
             None

@@ -13,6 +13,12 @@ pub struct PluginScanner {
     pub(crate) plugins: Vec<PluginInfo>,
 }
 
+impl Default for PluginScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginScanner {
     pub fn new() -> Self {
         Self {

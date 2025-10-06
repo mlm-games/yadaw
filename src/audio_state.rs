@@ -55,6 +55,12 @@ pub struct AudioState {
     pub loop_end: Arc<AtomicF64>,
 }
 
+impl Default for AudioState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioState {
     pub fn new() -> Self {
         Self {

@@ -59,8 +59,8 @@ mod clap_impl {
             let mut libs = Vec::new();
             if path.is_file() {
                 libs.push(path.to_path_buf());
-            } else if path.is_dir() {
-                if let Ok(rd) = std::fs::read_dir(path) {
+            } else if path.is_dir()
+                && let Ok(rd) = std::fs::read_dir(path) {
                     for e in rd.flatten() {
                         let p = e.path();
                         if p.extension()
@@ -72,12 +72,11 @@ mod clap_impl {
                         }
                     }
                 }
-            }
 
             for lib in libs {
                 unsafe {
-                    if let Ok(bundle) = PluginBundle::load(lib.to_string_lossy().as_ref()) {
-                        if let Some(factory) = bundle.get_plugin_factory() {
+                    if let Ok(bundle) = PluginBundle::load(lib.to_string_lossy().as_ref())
+                        && let Some(factory) = bundle.get_plugin_factory() {
                             for d in factory.plugin_descriptors() {
                                 let name = d
                                     .name()
@@ -111,7 +110,6 @@ mod clap_impl {
                                 });
                             }
                         }
-                    }
                 }
             }
         }
@@ -302,8 +300,8 @@ mod clap_impl {
                 ),
             }];
 
-            let in_audio = in_ports.with_input_buffers(in_buffers.into_iter());
-            let mut out_audio = out_ports.with_output_buffers(out_buffers.into_iter());
+            let in_audio = in_ports.with_input_buffers(in_buffers);
+            let mut out_audio = out_ports.with_output_buffers(out_buffers);
 
             let proc = self.started.as_mut().unwrap();
             let mut out_buffer = EventBuffer::new();

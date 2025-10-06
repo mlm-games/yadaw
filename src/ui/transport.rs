@@ -40,17 +40,15 @@ impl TransportUI {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         // Transport buttons
-                        if ui.button("⏮").on_hover_text("Go to Start").clicked() {
-                            if let Some(transport) = &self.transport {
+                        if ui.button("⏮").on_hover_text("Go to Start").clicked()
+                            && let Some(transport) = &self.transport {
                                 transport.rewind();
                             }
-                        }
 
-                        if ui.button("⏪").on_hover_text("Rewind").clicked() {
-                            if let Some(transport) = &self.transport {
+                        if ui.button("⏪").on_hover_text("Rewind").clicked()
+                            && let Some(transport) = &self.transport {
                                 transport.rewind_beats(4.0);
                             }
-                        }
 
                         let is_playing = self
                             .transport
@@ -63,11 +61,10 @@ impl TransportUI {
                             self.toggle_playback(&app.command_tx);
                         }
 
-                        if ui.button("⏹").on_hover_text("Stop").clicked() {
-                            if let Some(transport) = &self.transport {
+                        if ui.button("⏹").on_hover_text("Stop").clicked()
+                            && let Some(transport) = &self.transport {
                                 transport.stop();
                             }
-                        }
 
                         let is_recording = self
                             .transport
@@ -89,17 +86,14 @@ impl TransportUI {
                             }))
                             .on_hover_text("Record")
                             .clicked()
-                        {
-                            if let Some(transport) = &self.transport {
+                            && let Some(transport) = &self.transport {
                                 transport.record();
                             }
-                        }
 
-                        if ui.button("⏩").on_hover_text("Fast Forward").clicked() {
-                            if let Some(transport) = &self.transport {
+                        if ui.button("⏩").on_hover_text("Fast Forward").clicked()
+                            && let Some(transport) = &self.transport {
                                 transport.fast_forward(4.0);
                             }
-                        }
 
                         ui.separator();
 
@@ -125,13 +119,11 @@ impl TransportUI {
                         ui.label("BPM:");
                         ui.add(egui::TextEdit::singleline(&mut self.bpm_input).desired_width(60.0));
                         {
-                            if let Ok(bpm) = self.bpm_input.parse::<f32>() {
-                                if bpm >= 20.0 && bpm <= 999.0 {
-                                    if let Some(transport) = &self.transport {
+                            if let Ok(bpm) = self.bpm_input.parse::<f32>()
+                                && (20.0..=999.0).contains(&bpm)
+                                    && let Some(transport) = &self.transport {
                                         transport.set_bpm(bpm);
                                     }
-                                }
-                            }
                         }
 
                         ui.separator();
@@ -199,11 +191,10 @@ impl TransportUI {
                             .map(|t| t.metronome_enabled)
                             .unwrap_or(false);
 
-                        if ui.checkbox(&mut metronome, "Click").clicked() {
-                            if let Some(transport) = &mut self.transport {
+                        if ui.checkbox(&mut metronome, "Click").clicked()
+                            && let Some(transport) = &mut self.transport {
                                 transport.metronome_enabled = metronome;
                             }
-                        }
                     });
                 });
         });

@@ -193,6 +193,12 @@ pub struct TrackManager {
     groups: Vec<TrackGroup>,
 }
 
+impl Default for TrackManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TrackManager {
     pub fn new() -> Self {
         Self {
@@ -259,11 +265,10 @@ impl TrackManager {
     }
 
     pub fn add_to_group(&mut self, group_id: usize, track_id: usize) {
-        if let Some(group) = self.groups.get_mut(group_id) {
-            if !group.track_ids.contains(&track_id) {
+        if let Some(group) = self.groups.get_mut(group_id)
+            && !group.track_ids.contains(&track_id) {
                 group.track_ids.push(track_id);
             }
-        }
     }
 
     pub fn remove_from_group(&mut self, group_id: usize, track_id: usize) {

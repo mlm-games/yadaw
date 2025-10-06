@@ -320,7 +320,7 @@ impl TimelineView {
         // Theme-friendly alternating background
         let vis = ui.visuals();
         let base = vis.extreme_bg_color;
-        let bg_color = if track_idx % 2 == 0 {
+        let bg_color = if track_idx.is_multiple_of(2) {
             base
         } else {
             egui::Color32::from_rgba_premultiplied(
@@ -553,7 +553,7 @@ impl TimelineView {
             }
 
             for note in &clip.notes {
-                let s_loc = (note.start + offset as f64).rem_euclid(content_len);
+                let s_loc = (note.start + offset).rem_euclid(content_len);
                 let e_loc_raw = s_loc + note.duration;
                 let mut segs: smallvec::SmallVec<[(f64, f64); 2]> = smallvec::smallvec![];
                 if e_loc_raw <= content_len {
@@ -625,14 +625,13 @@ impl TimelineView {
         app: &mut super::app::YadawApp,
     ) {
         // Select on click
-        if response.clicked() {
-            if !app.selected_clips.contains(&(track_idx, clip_idx)) {
+        if response.clicked()
+            && !app.selected_clips.contains(&(track_idx, clip_idx)) {
                 if !response.ctx.input(|i| i.modifiers.ctrl) {
                     app.selected_clips.clear();
                 }
                 app.selected_clips.push((track_idx, clip_idx));
             }
-        }
 
         // Context menu on right-click
         if response.secondary_clicked() {
@@ -648,10 +647,10 @@ impl TimelineView {
         let edge_threshold = 5.0;
         let hover_left = response
             .hover_pos()
-            .map_or(false, |p| (p.x - clip_rect.left()).abs() < edge_threshold);
+            .is_some_and(|p| (p.x - clip_rect.left()).abs() < edge_threshold);
         let hover_right = response
             .hover_pos()
-            .map_or(false, |p| (clip_rect.right() - p.x).abs() < edge_threshold);
+            .is_some_and(|p| (clip_rect.right() - p.x).abs() < edge_threshold);
 
         if hover_left || hover_right {
             response
@@ -683,12 +682,10 @@ impl TimelineView {
                     } else {
                         (0.0, 0.0)
                     }
+                } else if let Some(c) = track.audio_clips.get(clip_idx) {
+                    (c.start_beat, c.length_beats)
                 } else {
-                    if let Some(c) = track.audio_clips.get(clip_idx) {
-                        (c.start_beat, c.length_beats)
-                    } else {
-                        (0.0, 0.0)
-                    }
+                    (0.0, 0.0)
                 }
             } else {
                 (0.0, 0.0)
@@ -763,10 +760,8 @@ impl TimelineView {
                             if let Some(c) = t.midi_clips.get(c_id) {
                                 clips_and_starts.push((t_id, c_id, c.start_beat));
                             }
-                        } else {
-                            if let Some(c) = t.audio_clips.get(c_id) {
-                                clips_and_starts.push((t_id, c_id, c.start_beat));
-                            }
+                        } else if let Some(c) = t.audio_clips.get(c_id) {
+                            clips_and_starts.push((t_id, c_id, c.start_beat));
                         }
                     }
                 }
@@ -852,8 +847,8 @@ impl TimelineView {
         let min_len = (self.grid_snap.max(0.03125)) as f64; // at least 1/32 note
 
         // Start drag: handle ruler (loop) interactions first
-        if response.drag_started() && self.timeline_interaction.is_none() {
-            if let Some(pos) = response.interact_pointer_pos() {
+        if response.drag_started() && self.timeline_interaction.is_none()
+            && let Some(pos) = response.interact_pointer_pos() {
                 let on_ruler = pos.y >= rect.top() && pos.y <= rect.top() + ruler_h;
                 if on_ruler {
                     let lb = app.audio_state.loop_start.load();
@@ -882,11 +877,10 @@ impl TimelineView {
                     return;
                 }
             }
-        }
 
         // During drag
-        if response.dragged() {
-            if let Some(pos) = response.hover_pos() {
+        if response.dragged()
+            && let Some(pos) = response.hover_pos() {
                 match &mut self.timeline_interaction {
                     Some(TimelineInteraction::LoopDragStart { offset_beats }) => {
                         let mut new_start = (beat_at(pos.x) - *offset_beats).max(0.0);
@@ -1051,7 +1045,7 @@ impl TimelineView {
                             let due = {
                                 let last =
                                     ui.ctx().memory(|m| m.data.get_temp::<Instant>(mem_root));
-                                last.map_or(true, |t| {
+                                last.is_none_or(|t| {
                                     Instant::now().duration_since(t) >= Duration::from_millis(30)
                                 })
                             };
@@ -1088,7 +1082,6 @@ impl TimelineView {
                     _ => {}
                 }
             }
-        }
 
         // End interactions
         if response.drag_stopped() {
@@ -1096,8 +1089,8 @@ impl TimelineView {
         }
 
         // Click on ruler to set playhead (without loop changes)
-        if response.clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
+        if response.clicked()
+            && let Some(pos) = response.interact_pointer_pos() {
                 let on_ruler = pos.y >= rect.top() && pos.y <= rect.top() + ruler_h;
                 if on_ruler {
                     let mut beat = beat_at(pos.x).max(0.0);
@@ -1111,28 +1104,25 @@ impl TimelineView {
                     return;
                 }
             }
-        }
 
         // Existing create MIDI clip on Ctrl+click empty area
-        if response.clicked() && self.timeline_interaction.is_none() {
-            if let Some(pos) = response.interact_pointer_pos() {
+        if response.clicked() && self.timeline_interaction.is_none()
+            && let Some(pos) = response.interact_pointer_pos() {
                 let grid_pos = pos - response.rect.min;
                 let mut beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
                 beat = snap(beat as f64, self.grid_snap) as f32;
                 let track_idx = (grid_pos.y / self.track_height) as usize;
 
                 let state = app.state.lock().unwrap();
-                if let Some(track) = state.tracks.get(track_idx) {
-                    if track.is_midi && ui.input(|i| i.modifiers.ctrl) {
+                if let Some(track) = state.tracks.get(track_idx)
+                    && track.is_midi && ui.input(|i| i.modifiers.ctrl) {
                         let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
                             track_idx,
                             beat as f64,
                             DEFAULT_MIDI_CLIP_LEN,
                         ));
                     }
-                }
             }
-        }
     }
 
     fn draw_automation_lanes(
@@ -1168,7 +1158,7 @@ impl TimelineView {
             // Ensure widget exists
             while self.automation_widgets.len() <= lane_idx {
                 self.automation_widgets
-                    .push(AutomationLaneWidget::default());
+                    .push(AutomationLaneWidget);
             }
 
             // Draw label strip on the left (80 px)

@@ -9,6 +9,12 @@ use crate::model::plugin_api::{
 pub struct Lv2HostBackend;
 
 #[cfg(feature = "lv2-legacy")]
+impl Default for Lv2HostBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Lv2HostBackend {
     pub fn new() -> Self {
         Self

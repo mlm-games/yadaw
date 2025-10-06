@@ -58,7 +58,7 @@ impl AutomationLaneWidget {
             if x < lane_rect.left() - 8.0 || x > lane_rect.right() + 8.0 {
                 continue;
             }
-            let y = lane_rect.bottom() - (p.value.clamp(0.0, 1.0) as f32 * lane_rect.height());
+            let y = lane_rect.bottom() - (p.value.clamp(0.0, 1.0) * lane_rect.height());
             pts_screen.push((i, egui::pos2(x, y)));
         }
 
@@ -96,11 +96,11 @@ impl AutomationLaneWidget {
             painter.circle_stroke(pos, handle_r, egui::Stroke::new(1.0, egui::Color32::BLACK));
 
             // Drag to move
-            if resp.dragged() {
-                if let Some(pointer) = resp.interact_pointer_pos() {
+            if resp.dragged()
+                && let Some(pointer) = resp.interact_pointer_pos() {
                     let beat = ((pointer.x - lane_rect.left()) + scroll_x) / zoom_x;
                     let value = ((lane_rect.bottom() - pointer.y) / lane_rect.height())
-                        .clamp(0.0, 1.0) as f32;
+                        .clamp(0.0, 1.0);
 
                     let old_beat = lane.points[i].beat;
                     actions.push(AutomationAction::MovePoint {
@@ -109,7 +109,6 @@ impl AutomationLaneWidget {
                         new_value: value,
                     });
                 }
-            }
 
             // Right-click to remove
             if resp.secondary_clicked() {
@@ -123,17 +122,16 @@ impl AutomationLaneWidget {
             ui.id().with(("auto_lane_bg", lane as *const _ as usize)),
             egui::Sense::click(),
         );
-        if lane_resp.clicked() && !hovered_any {
-            if let Some(pos) = lane_resp.interact_pointer_pos() {
+        if lane_resp.clicked() && !hovered_any
+            && let Some(pos) = lane_resp.interact_pointer_pos() {
                 let beat = ((pos.x - lane_rect.left()) + scroll_x) / zoom_x;
                 let value =
-                    ((lane_rect.bottom() - pos.y) / lane_rect.height()).clamp(0.0, 1.0) as f32;
+                    ((lane_rect.bottom() - pos.y) / lane_rect.height()).clamp(0.0, 1.0);
                 actions.push(AutomationAction::AddPoint {
                     beat: beat as f64,
                     value,
                 });
             }
-        }
 
         actions
     }

@@ -25,6 +25,12 @@ pub struct ProjectManager {
     last_auto_save: Instant,
 }
 
+impl Default for ProjectManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProjectManager {
     pub fn new() -> Self {
         Self {
@@ -208,13 +214,11 @@ impl ProjectManager {
     fn load_recent_projects() -> Vec<PathBuf> {
         if let Some(dirs) = directories::ProjectDirs::from("com", "yadaw", "yadaw") {
             let recent_file = dirs.config_dir().join("recent_projects.json");
-            if recent_file.exists() {
-                if let Ok(contents) = fs::read_to_string(recent_file) {
-                    if let Ok(recent) = serde_json::from_str(&contents) {
+            if recent_file.exists()
+                && let Ok(contents) = fs::read_to_string(recent_file)
+                    && let Ok(recent) = serde_json::from_str(&contents) {
                         return recent;
                     }
-                }
-            }
         }
         Vec::new()
     }

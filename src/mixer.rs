@@ -71,6 +71,12 @@ pub enum HeadphoneSource {
     Custom(Vec<(usize, f32)>), // Track IDs with amounts
 }
 
+impl Default for MixerEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MixerEngine {
     pub fn new() -> Self {
         Self {
@@ -99,11 +105,10 @@ impl MixerEngine {
     }
 
     pub fn route_track_to_bus(&mut self, track_id: usize, bus_id: usize) {
-        if let Some(bus) = self.buses.get_mut(bus_id) {
-            if !bus.input_tracks.contains(&track_id) {
+        if let Some(bus) = self.buses.get_mut(bus_id)
+            && !bus.input_tracks.contains(&track_id) {
                 bus.input_tracks.push(track_id);
             }
-        }
     }
 
     pub fn process_mix(

@@ -273,10 +273,8 @@ impl YadawApp {
                     if let Some(clip) = track.midi_clips.get(*clip_id) {
                         midi.push(clip.clone());
                     }
-                } else {
-                    if let Some(clip) = track.audio_clips.get(*clip_id) {
-                        audio.push(clip.clone());
-                    }
+                } else if let Some(clip) = track.audio_clips.get(*clip_id) {
+                    audio.push(clip.clone());
                 }
             }
         }
@@ -305,13 +303,11 @@ impl YadawApp {
                         track.midi_clips.push(new_clip);
                     }
                 }
-            } else {
-                if let Some(clips) = &self.clipboard {
-                    for clip in clips {
-                        let mut new_clip = clip.clone();
-                        new_clip.start_beat = current_beat;
-                        track.audio_clips.push(new_clip);
-                    }
+            } else if let Some(clips) = &self.clipboard {
+                for clip in clips {
+                    let mut new_clip = clip.clone();
+                    new_clip.start_beat = current_beat;
+                    track.audio_clips.push(new_clip);
                 }
             }
         }
@@ -345,10 +341,8 @@ impl YadawApp {
                     if clip_id < track.midi_clips.len() {
                         track.midi_clips.remove(clip_id);
                     }
-                } else {
-                    if clip_id < track.audio_clips.len() {
-                        track.audio_clips.remove(clip_id);
-                    }
+                } else if clip_id < track.audio_clips.len() {
+                    track.audio_clips.remove(clip_id);
                 }
             }
         }
@@ -409,7 +403,7 @@ impl YadawApp {
     pub fn save_project_to_path(&mut self, path: &Path) {
         let state = self.state.lock().unwrap();
         self.project_manager
-            .save_project(&*state, path)
+            .save_project(&state, path)
             .map_err(common::project_save_failed)
             .map(|_| {
                 self.project_path = Some(path.to_string_lossy().to_string());
@@ -447,8 +441,8 @@ impl YadawApp {
         self.push_undo();
         let mut state = self.state.lock().unwrap();
         for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+            if let Some(track) = state.tracks.get_mut(*track_id)
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
                     let peak = clip.samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                     if peak > 0.0 {
                         let gain = crate::constants::NORMALIZE_TARGET_LINEAR / peak;
@@ -457,7 +451,6 @@ impl YadawApp {
                         }
                     }
                 }
-            }
         }
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -470,11 +463,10 @@ impl YadawApp {
         self.push_undo();
         let mut state = self.state.lock().unwrap();
         for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+            if let Some(track) = state.tracks.get_mut(*track_id)
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
                     clip.samples.reverse();
                 }
-            }
         }
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -488,11 +480,10 @@ impl YadawApp {
         let mut state = self.state.lock().unwrap();
         let bpm = state.bpm;
         for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+            if let Some(track) = state.tracks.get_mut(*track_id)
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
                     EditProcessor::apply_fade_in(clip, 0.25, bpm);
                 }
-            }
         }
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -506,11 +497,10 @@ impl YadawApp {
         let mut state = self.state.lock().unwrap();
         let bpm = state.bpm;
         for (track_id, clip_id) in &self.selected_clips {
-            if let Some(track) = state.tracks.get_mut(*track_id) {
-                if let Some(clip) = track.audio_clips.get_mut(*clip_id) {
+            if let Some(track) = state.tracks.get_mut(*track_id)
+                && let Some(clip) = track.audio_clips.get_mut(*clip_id) {
                     EditProcessor::apply_fade_out(clip, 0.25, bpm);
                 }
-            }
         }
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -531,16 +521,14 @@ impl YadawApp {
         let bpm = state.bpm;
         let selected_clips = self.selected_clips.clone();
         for (track_id, clip_id) in selected_clips {
-            if let Some(track) = state.tracks.get_mut(track_id) {
-                if let Some(clip) = track.audio_clips.get(clip_id) {
-                    if let Some((first_half, second_half)) =
+            if let Some(track) = state.tracks.get_mut(track_id)
+                && let Some(clip) = track.audio_clips.get(clip_id)
+                    && let Some((first_half, second_half)) =
                         EditProcessor::split_clip(clip, current_beat, bpm)
                     {
                         track.audio_clips[clip_id] = first_half;
                         track.audio_clips.insert(clip_id + 1, second_half);
                     }
-                }
-            }
         }
         drop(state);
         self.selected_clips.clear();
@@ -552,48 +540,44 @@ impl YadawApp {
         self.push_undo();
 
         let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
+        if let Some(track) = state.tracks.get_mut(self.selected_track)
+            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
                 EditProcessor::quantize_notes(
                     &mut clip.notes,
                     crate::constants::DEFAULT_GRID_SNAP as f64,
                     strength,
                 );
             }
-        }
     }
 
     pub fn quantize_selected_notes_with_params(&mut self, strength: f32, grid: f32, _swing: f32) {
         self.push_undo();
 
         let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
+        if let Some(track) = state.tracks.get_mut(self.selected_track)
+            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
                 EditProcessor::quantize_notes(&mut clip.notes, grid as f64, strength);
             }
-        }
     }
 
     pub fn transpose_selected_notes(&mut self, semitones: i32) {
         self.push_undo();
 
         let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
+        if let Some(track) = state.tracks.get_mut(self.selected_track)
+            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
                 EditProcessor::transpose_notes(&mut clip.notes, semitones);
             }
-        }
     }
 
     pub fn humanize_selected_notes(&mut self, amount: f32) {
         self.push_undo();
 
         let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(self.selected_track) {
-            if let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
+        if let Some(track) = state.tracks.get_mut(self.selected_track)
+            && let Some(clip) = track.midi_clips.get_mut(self.selected_pattern) {
                 EditProcessor::humanize_notes(&mut clip.notes, amount);
             }
-        }
     }
 
     // UI operations
@@ -915,11 +899,10 @@ impl YadawApp {
             }
 
             // Transport / loop
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
-                if let Some(transport) = &mut self.transport_ui.transport {
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Home)
+                && let Some(transport) = &mut self.transport_ui.transport {
                     transport.set_position(0.0);
                 }
-            }
             if i.consume_key(egui::Modifiers::NONE, egui::Key::L) && !i.modifiers.ctrl {
                 // Toggle loop
                 let enabled = !self.audio_state.loop_enabled.load(Ordering::Relaxed);
@@ -941,11 +924,10 @@ impl YadawApp {
             }
 
             // Delete clips
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) {
-                if !self.selected_clips.is_empty() {
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                && !self.selected_clips.is_empty() {
                     self.delete_selected();
                 }
-            }
 
             // View
             if i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::M)) {
@@ -963,8 +945,8 @@ impl YadawApp {
                 } else {
                     None
                 }
-            }) {
-                if let egui::Event::Touch {
+            })
+                && let egui::Event::Touch {
                     device_id: _,
                     id: _,
                     phase,
@@ -1011,7 +993,6 @@ impl YadawApp {
                         }
                     }
                 }
-            }
 
             // Handle multi-touch (pinch zoom)
             let touches: Vec<_> = i

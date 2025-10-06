@@ -176,13 +176,12 @@ impl TracksPanel {
                         );
                     }
 
-                    if self.show_automation_buttons {
-                        if let Some(action) =
+                    if self.show_automation_buttons
+                        && let Some(action) =
                             self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx)
                         {
                             automation_actions.push(action); // ← Collect for later
                         }
-                    }
 
                     self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
                 });
@@ -309,8 +308,8 @@ impl TracksPanel {
             {
                 actions.push(("arm", idx));
             }
-            if !track.is_midi {
-                if ui
+            if !track.is_midi
+                && ui
                     .selectable_label(track.monitor_enabled, "🎧")
                     .on_hover_text("Input Monitoring")
                     .clicked()
@@ -320,7 +319,6 @@ impl TracksPanel {
                     let _ =
                         command_tx.send(AudioCommand::SetTrackMonitor(idx, track.monitor_enabled));
                 }
-            }
         });
 
         ui.horizontal(|ui| {
@@ -365,7 +363,7 @@ impl TracksPanel {
                 ui.separator();
                 for (plugin_idx, plugin) in track.plugin_chain.iter().enumerate() {
                     ui.menu_button(&plugin.name, |ui| {
-                        for (param_name, _val) in &plugin.params {
+                        for param_name in plugin.params.keys() {
                             if ui.button(param_name).clicked() {
                                 action = Some((
                                     idx,
@@ -484,7 +482,6 @@ impl TracksPanel {
                     .unwrap_or_default();
                 drop(state);
                 app.dialogs.show_rename_track(track_idx, current);
-                return;
             }
             "mute" => {
                 mute_track(&mut state.tracks, track_idx, &app.command_tx);
@@ -496,7 +493,6 @@ impl TracksPanel {
                 arm_track_exclusive(&mut state.tracks, track_idx);
                 drop(state);
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
-                return;
             }
             "duplicate" => {
                 if let Some(track) = state.tracks.get(track_idx).cloned() {
@@ -506,7 +502,6 @@ impl TracksPanel {
                 }
                 drop(state);
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
-                return;
             }
             "delete" => {
                 if state.tracks.len() > 1 {
@@ -517,7 +512,6 @@ impl TracksPanel {
                 }
                 drop(state);
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
-                return;
             }
             _ => {}
         }
@@ -588,13 +582,12 @@ impl TracksPanel {
                     );
                 }
 
-                if self.show_automation_buttons {
-                    if let Some(action) =
+                if self.show_automation_buttons
+                    && let Some(action) =
                         self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx)
                     {
                         automation_actions.push(action);
                     }
-                }
 
                 self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
             });

@@ -204,45 +204,45 @@ pub fn run_audio_thread(
 
     std::thread::spawn(move || {
         let host = cpal::default_host();
-        if let Some(input_device) = host.default_input_device() {
-            if let Ok(input_config) = input_device.default_input_config() {
-                let channels = input_config.channels() as usize;
-                let recording_producer = recording_producer.clone();
+        if let Some(input_device) = host.default_input_device()
+            && let Ok(input_config) = input_device.default_input_config()
+        {
+            let channels = input_config.channels() as usize;
+            let recording_producer = recording_producer.clone();
 
-                let mut last_meter = std::time::Instant::now();
-                let mut peak_acc: f32 = 0.0;
+            let mut last_meter = std::time::Instant::now();
+            let mut peak_acc: f32 = 0.0;
 
-                let input_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    // Always push to the ring for monitoring/recording
-                    let mut producer = recording_producer.lock();
-                    for frame in data.chunks(channels) {
-                        let mono_sample = frame.iter().sum::<f32>() / channels as f32;
-                        let _ = producer.push(mono_sample);
+            let input_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                // Always push to the ring for monitoring/recording
+                let mut producer = recording_producer.lock();
+                for frame in data.chunks(channels) {
+                    let mono_sample = frame.iter().sum::<f32>() / channels as f32;
+                    let _ = producer.push(mono_sample);
 
-                        // accumulate peak for throttled metering
-                        peak_acc = peak_acc.max(mono_sample.abs());
-                    }
-
-                    let elapsed = last_meter.elapsed();
-                    if elapsed >= std::time::Duration::from_millis(50) {
-                        let level = peak_acc;
-                        peak_acc = 0.0;
-                        last_meter = std::time::Instant::now();
-                        let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
-                    }
-                };
-
-                if let Ok(input_stream) = input_device.build_input_stream(
-                    &input_config.config(),
-                    input_callback,
-                    |err| eprintln!("Input stream error: {}", err),
-                    None,
-                ) {
-                    if let Err(e) = input_stream.play() {
-                        eprintln!("Failed to play input stream: {}", e);
-                    }
-                    std::thread::park();
+                    // accumulate peak for throttled metering
+                    peak_acc = peak_acc.max(mono_sample.abs());
                 }
+
+                let elapsed = last_meter.elapsed();
+                if elapsed >= std::time::Duration::from_millis(50) {
+                    let level = peak_acc;
+                    peak_acc = 0.0;
+                    last_meter = std::time::Instant::now();
+                    let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
+                }
+            };
+
+            if let Ok(input_stream) = input_device.build_input_stream(
+                &input_config.config(),
+                input_callback,
+                |err| eprintln!("Input stream error: {}", err),
+                None,
+            ) {
+                if let Err(e) = input_stream.play() {
+                    eprintln!("Failed to play input stream: {}", e);
+                }
+                std::thread::park();
             }
         }
     });
@@ -280,28 +280,28 @@ pub fn run_audio_thread(
         {
             engine.recording_state.is_recording = false;
 
-            if let Some(track_id) = engine.recording_state.recording_track {
-                if !engine.recording_state.accumulated_samples.is_empty() {
-                    let converter =
-                        TimeConverter::new(sample_rate as f32, engine.audio_state.bpm.load());
-                    let start_beat =
-                        converter.samples_to_beats(engine.recording_state.recording_start_position);
-                    let end_beat = converter.samples_to_beats(engine.audio_state.get_position());
+            if let Some(track_id) = engine.recording_state.recording_track
+                && !engine.recording_state.accumulated_samples.is_empty()
+            {
+                let converter =
+                    TimeConverter::new(sample_rate as f32, engine.audio_state.bpm.load());
+                let start_beat =
+                    converter.samples_to_beats(engine.recording_state.recording_start_position);
+                let end_beat = converter.samples_to_beats(engine.audio_state.get_position());
 
-                    let clip = AudioClip {
-                        name: format!("Recording {}", chrono::Local::now().format("%H:%M:%S")),
-                        start_beat,
-                        length_beats: end_beat - start_beat,
-                        samples: engine.recording_state.accumulated_samples.clone(),
-                        sample_rate: sample_rate as f32,
-                        ..Default::default()
-                    };
+                let clip = AudioClip {
+                    name: format!("Recording {}", chrono::Local::now().format("%H:%M:%S")),
+                    start_beat,
+                    length_beats: end_beat - start_beat,
+                    samples: engine.recording_state.accumulated_samples.clone(),
+                    sample_rate: sample_rate as f32,
+                    ..Default::default()
+                };
 
-                    let _ = engine
-                        .updates
-                        .send(UIUpdate::RecordingFinished(track_id, clip));
-                    engine.recording_state.accumulated_samples.clear();
-                }
+                let _ = engine
+                    .updates
+                    .send(UIUpdate::RecordingFinished(track_id, clip));
+                engine.recording_state.accumulated_samples.clear();
             }
         }
 
@@ -410,31 +410,30 @@ impl AudioEngine {
                 }
             }
             RealtimeCommand::UpdatePluginBypass(track_id, plugin_idx, bypass) => {
-                if let Some(proc) = self.track_processors.get_mut(track_id) {
-                    if let Some(p) = proc.plugins_unified.get_mut(plugin_idx) {
-                        p.bypass = bypass;
-                    }
+                if let Some(proc) = self.track_processors.get_mut(track_id)
+                    && let Some(p) = proc.plugins_unified.get_mut(plugin_idx)
+                {
+                    p.bypass = bypass;
                 }
             }
             RealtimeCommand::UpdatePluginParam(track_id, plugin_idx, param_name, value) => {
-                if let Some(proc) = self.track_processors.get_mut(track_id) {
-                    if let Some(ppu) = proc.plugins_unified.get_mut(plugin_idx) {
-                        if let Some(id) = ppu.plugin_id {
-                            let key = match ppu.backend {
-                                BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
-                                BackendKind::Clap => ppu
-                                    .param_name_to_key
-                                    .get(&param_name)
-                                    .cloned()
-                                    .unwrap_or(ParamKey::Clap(0)),
-                            };
-                            PLUGIN_STORE.with(|st| {
-                                if let Some(inst) = st.borrow_mut().get_mut(id) {
-                                    inst.set_param(&key, value);
-                                }
-                            });
+                if let Some(proc) = self.track_processors.get_mut(track_id)
+                    && let Some(ppu) = proc.plugins_unified.get_mut(plugin_idx)
+                    && let Some(id) = ppu.plugin_id
+                {
+                    let key = match ppu.backend {
+                        BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
+                        BackendKind::Clap => ppu
+                            .param_name_to_key
+                            .get(&param_name)
+                            .cloned()
+                            .unwrap_or(ParamKey::Clap(0)),
+                    };
+                    PLUGIN_STORE.with(|st| {
+                        if let Some(inst) = st.borrow_mut().get_mut(id) {
+                            inst.set_param(&key, value);
                         }
-                    }
+                    });
                 }
             }
             RealtimeCommand::PreviewNote(track_id, pitch, start_position) => {
@@ -498,10 +497,10 @@ impl AudioEngine {
                 plugin_idx,
             } => {
                 if let Some(proc) = self.track_processors.get_mut(track_id) {
-                    if let Some(pp) = proc.plugins_unified.get(plugin_idx) {
-                        if let Some(id) = pp.plugin_id {
-                            PLUGIN_STORE.with(|st| st.borrow_mut().remove(id));
-                        }
+                    if let Some(pp) = proc.plugins_unified.get(plugin_idx)
+                        && let Some(id) = pp.plugin_id
+                    {
+                        PLUGIN_STORE.with(|st| st.borrow_mut().remove(id));
                     }
                     if plugin_idx < proc.plugins_unified.len() {
                         proc.plugins_unified.remove(plugin_idx);
@@ -533,10 +532,10 @@ impl AudioEngine {
             } => {
                 // NARROW UPDATE - only update the specific clip's notes
                 let mut tracks = self.tracks.write();
-                if let Some(track) = tracks.get_mut(track_id) {
-                    if let Some(clip) = track.midi_clips.get_mut(clip_id) {
-                        clip.notes = notes;
-                    }
+                if let Some(track) = tracks.get_mut(track_id)
+                    && let Some(clip) = track.midi_clips.get_mut(clip_id)
+                {
+                    clip.notes = notes;
                 }
                 // DO NOT update processors, DO NOT touch plugins
             }
@@ -648,7 +647,7 @@ impl AudioEngine {
         plugin_time_ms_accum: &mut f32,
     ) -> f64 {
         let tracks_guard = self.tracks.read();
-        let tracks: &Vec<TrackSnapshot> = &*tracks_guard;
+        let tracks: &Vec<TrackSnapshot> = &tracks_guard;
 
         let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
@@ -749,16 +748,16 @@ impl AudioEngine {
                     }
 
                     // Note preview (simple synth audition)
-                    if let Some(ref preview) = preview_opt {
-                        if preview.track_id == track_idx {
-                            process_preview_note(
-                                processor,
-                                preview,
-                                frames_to_process,
-                                block_start_samp,
-                                self.sample_rate,
-                            );
-                        }
+                    if let Some(ref preview) = preview_opt
+                        && preview.track_id == track_idx
+                    {
+                        process_preview_note(
+                            processor,
+                            preview,
+                            frames_to_process,
+                            block_start_samp,
+                            self.sample_rate,
+                        );
                     }
 
                     // Mix input monitoring into the recording track (mono -> stereo)
@@ -1215,8 +1214,8 @@ fn build_block_midi_events(
         let offset = clip.content_offset_beats.rem_euclid(content_len);
         for n in &clip.notes {
             // local start/end with offset, modulo content_len
-            let s_loc = (n.start as f64 + offset).rem_euclid(content_len);
-            let e_loc_raw = s_loc + n.duration as f64;
+            let s_loc = (n.start + offset).rem_euclid(content_len);
+            let e_loc_raw = s_loc + n.duration;
 
             let mut segs: smallvec::SmallVec<[(f64, f64); 2]> = smallvec::smallvec![];
             if e_loc_raw <= content_len {

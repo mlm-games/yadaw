@@ -3,17 +3,11 @@ use eframe::egui;
 use crate::metering::{draw_meter_bar, MeterData};
 
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct LevelMeter {
     data: MeterData,
 }
 
-impl Default for LevelMeter {
-    fn default() -> Self {
-        Self {
-            data: MeterData::default(),
-        }
-    }
-}
 
 impl LevelMeter {
     pub fn update(&mut self, samples: &[f32], dt: f32) {

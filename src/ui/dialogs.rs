@@ -390,11 +390,10 @@ impl DialogManager {
         if let Some(d) = self.import_audio.as_mut() {
             d.show(ctx, app);
         }
-        if let Some(d) = &self.import_audio {
-            if !d.is_open() {
+        if let Some(d) = &self.import_audio
+            && !d.is_open() {
                 self.import_audio = None;
             }
-        }
     }
 
     pub fn show_project_settings(&mut self) {
@@ -466,8 +465,8 @@ impl OpenDialog {
     pub fn new() -> Self {
         let fd = FileDialog::new()
             .title("Open Project")
-            .add_file_filter_extensions("YADAW Project", (&["yadaw", "ydw"]).to_vec())
-            .add_file_filter_extensions("All Files", (&["*"]).to_vec());
+            .add_file_filter_extensions("YADAW Project", ["yadaw", "ydw"].to_vec())
+            .add_file_filter_extensions("All Files", ["*"].to_vec());
         Self {
             closed: false,
             fd,
@@ -503,7 +502,7 @@ impl SaveDialog {
         let fd = FileDialog::new()
             .title("Save Project")
             .default_file_name("untitled.yadaw")
-            .add_file_filter_extensions("YADAW Project", (&["yadaw"]).to_vec())
+            .add_file_filter_extensions("YADAW Project", ["yadaw"].to_vec())
             .allow_file_overwrite(true);
         Self {
             closed: false,
@@ -673,9 +672,9 @@ impl PluginBrowserDialog {
             // Footer
             ui.horizontal(|ui| {
                 let can_add = self.selected_plugin.is_some();
-                if ui.add_enabled(can_add, egui::Button::new("Add to Track")).clicked() {
-                    if let Some(idx) = self.selected_plugin {
-                        if let Some(plugin) = app.available_plugins.get(idx) {
+                if ui.add_enabled(can_add, egui::Button::new("Add to Track")).clicked()
+                    && let Some(idx) = self.selected_plugin
+                        && let Some(plugin) = app.available_plugins.get(idx) {
                             // Warning for MIDI track with effect
                             let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
                             let is_midi = {
@@ -702,8 +701,6 @@ impl PluginBrowserDialog {
                             app.selected_track_for_plugin = None;
                             self.closed = true;
                         }
-                    }
-                }
 
                 if ui.button("Cancel").clicked() {
                     self.closed = true;
@@ -768,7 +765,7 @@ impl Dialog for TransposeContent {
             }
 
             if ui.button("Cancel").clicked() {
-                return true;
+                true
             } else {
                 false
             }
@@ -1318,9 +1315,9 @@ impl ImportAudioDialog {
             .title("Import Audio")
             .add_file_filter_extensions(
                 "Audio Files",
-                (&["wav", "mp3", "flac", "ogg", "m4a", "aac"]).to_vec(),
+                ["wav", "mp3", "flac", "ogg", "m4a", "aac"].to_vec(),
             )
-            .add_file_filter_extensions("All Files", (&["*"]).to_vec());
+            .add_file_filter_extensions("All Files", ["*"].to_vec());
         Self { fd, opened: false }
     }
 
@@ -1429,15 +1426,13 @@ impl LayoutManagerDialog {
                         // Save current layout
                     }
 
-                    if ui.button("Delete").clicked() {
-                        if let Some(idx) = self.selected_layout {
-                            if idx >= 4 {
+                    if ui.button("Delete").clicked()
+                        && let Some(idx) = self.selected_layout
+                            && idx >= 4 {
                                 // Don't delete built-in layouts
                                 self.layouts.remove(idx);
                                 self.selected_layout = None;
                             }
-                        }
-                    }
 
                     if ui.button("Cancel").clicked() {
                         self.closed = true;
@@ -1485,11 +1480,10 @@ impl ProgressBar {
                 ui.label(&self.message);
                 ui.add(egui::ProgressBar::new(self.progress));
 
-                if self.progress >= 1.0 {
-                    if ui.button("OK").clicked() {
+                if self.progress >= 1.0
+                    && ui.button("OK").clicked() {
                         self.closed = true;
                     }
-                }
             });
     }
 
@@ -1580,8 +1574,8 @@ impl TrackGroupingDialog {
                     }
                     drop(state);
 
-                    if ui.button("Create Group").clicked() {
-                        if !self.selected_tracks.is_empty() {
+                    if ui.button("Create Group").clicked()
+                        && !self.selected_tracks.is_empty() {
                             app.track_manager.create_group(
                                 self.new_group_name.clone(),
                                 self.selected_tracks.clone(),
@@ -1589,7 +1583,6 @@ impl TrackGroupingDialog {
                             self.selected_tracks.clear();
                             self.new_group_name = String::from("New Group");
                         }
-                    }
                 });
 
                 ui.separator();
