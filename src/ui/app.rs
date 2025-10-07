@@ -15,6 +15,7 @@ use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -57,8 +58,8 @@ pub struct YadawApp {
     pub(super) selected_clips: Vec<(usize, usize)>,
 
     // Undo/Redo
-    pub(super) undo_stack: Vec<AppStateSnapshot>,
-    pub(super) redo_stack: Vec<AppStateSnapshot>,
+    pub(super) undo_stack: VecDeque<AppStateSnapshot>,
+    pub(super) redo_stack: VecDeque<AppStateSnapshot>,
 
     // Other state
     pub(super) project_path: Option<String>,
@@ -135,8 +136,8 @@ impl YadawApp {
             selected_clips: Vec::new(),
             selected_track_for_plugin: None,
 
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
 
             project_path: None,
             clipboard: None,
@@ -163,19 +164,19 @@ impl YadawApp {
     // Core functionality methods
     pub(super) fn push_undo(&mut self) {
         let state = self.state.lock().unwrap();
-        self.undo_stack.push(state.snapshot());
+        self.undo_stack.push_back(state.snapshot());
         self.redo_stack.clear();
 
         if self.undo_stack.len() > 100 {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
     }
 
     pub(super) fn undo(&mut self) {
-        if let Some(snapshot) = self.undo_stack.pop() {
+        if let Some(snapshot) = self.undo_stack.pop_back() {
             let mut state = self.state.lock().unwrap();
             let current = state.snapshot();
-            self.redo_stack.push(current);
+            self.redo_stack.push_back(current);
             state.restore(snapshot);
             drop(state);
 
@@ -185,10 +186,10 @@ impl YadawApp {
     }
 
     pub(super) fn redo(&mut self) {
-        if let Some(snapshot) = self.redo_stack.pop() {
+        if let Some(snapshot) = self.redo_stack.pop_back() {
             let mut state = self.state.lock().unwrap();
             let current = state.snapshot();
-            self.undo_stack.push(current);
+            self.undo_stack.push_back(current);
             state.restore(snapshot);
             drop(state);
 
@@ -742,7 +743,7 @@ impl YadawApp {
             UIUpdate::RecordingLevel(_level) => {}
             UIUpdate::MasterLevel(_left, _right) => {}
             UIUpdate::PushUndo(snapshot) => {
-                self.undo_stack.push(snapshot);
+                self.undo_stack.push_back(snapshot);
                 self.redo_stack.clear();
                 if self.undo_stack.len() > 100 {
                     self.undo_stack.remove(0);
