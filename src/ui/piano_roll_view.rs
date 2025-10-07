@@ -31,10 +31,6 @@ pub struct PianoRollView {
 enum ToolMode {
     Select,
     Draw,
-    Erase,
-    Split,
-    Glue,
-    Velocity,
 }
 
 impl PianoRollView {
@@ -416,16 +412,42 @@ impl PianoRollView {
                             }
                         });
 
-                    // Create new clip button
                     if ui
                         .button("➕")
                         .on_hover_text("Create New MIDI Clip")
                         .clicked()
-                        && let Some(current_beat) = create_clip_data
                     {
+                        let (playhead_beat, last_clip_end) = {
+                            let state = app.state.lock().unwrap();
+                            let playhead = state.position_to_beats(app.audio_state.get_position());
+
+                            let last_end = if let Some(track) = state.tracks.get(app.selected_track)
+                            {
+                                track
+                                    .midi_clips
+                                    .iter()
+                                    .map(|c| c.start_beat + c.length_beats)
+                                    .fold(0.0f64, f64::max)
+                            } else {
+                                0.0
+                            };
+
+                            (playhead, last_end)
+                        };
+
+                        // Round playhead to nearest beat
+                        let playhead_snapped = playhead_beat.round();
+
+                        // Use playhead if it's after all existing clips, otherwise use last_clip_end
+                        let start_beat = if playhead_snapped >= last_clip_end {
+                            playhead_snapped
+                        } else {
+                            last_clip_end
+                        };
+
                         let _ = app.command_tx.send(AudioCommand::CreateMidiClip(
                             app.selected_track,
-                            current_beat,
+                            start_beat,
                             DEFAULT_MIDI_CLIP_LEN,
                         ));
                     }
@@ -469,34 +491,6 @@ impl PianoRollView {
                             .clicked()
                         {
                             self.tool_mode = ToolMode::Draw;
-                        }
-                        if ui
-                            .selectable_label(self.tool_mode == ToolMode::Erase, "⌫")
-                            .on_hover_text("Erase Tool")
-                            .clicked()
-                        {
-                            self.tool_mode = ToolMode::Erase;
-                        }
-                        if ui
-                            .selectable_label(self.tool_mode == ToolMode::Split, "✂")
-                            .on_hover_text("Split Tool")
-                            .clicked()
-                        {
-                            self.tool_mode = ToolMode::Split;
-                        }
-                        if ui
-                            .selectable_label(self.tool_mode == ToolMode::Glue, "⊕")
-                            .on_hover_text("Glue Tool")
-                            .clicked()
-                        {
-                            self.tool_mode = ToolMode::Glue;
-                        }
-                        if ui
-                            .selectable_label(self.tool_mode == ToolMode::Velocity, "⇅")
-                            .on_hover_text("Velocity Tool")
-                            .clicked()
-                        {
-                            self.tool_mode = ToolMode::Velocity;
                         }
                     });
 
