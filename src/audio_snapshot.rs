@@ -1,5 +1,4 @@
 //! Build immutable audio snapshots from UI/project model types.
-//! Call this on the UI thread and send to the audio thread.
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -15,14 +14,22 @@ use crate::{
         plugin::PluginDescriptor,
         track::Track,
     },
+    project::AppState,
 };
 
-pub fn build_track_snapshots(tracks: &[Track]) -> Vec<TrackSnapshot> {
-    tracks.iter().map(track_to_snapshot).collect()
+/// Build snapshots
+pub fn build_track_snapshots(state: &AppState) -> Vec<TrackSnapshot> {
+    state
+        .track_order
+        .iter()
+        .filter_map(|&id| state.tracks.get(&id))
+        .map(track_to_snapshot)
+        .collect()
 }
 
 fn track_to_snapshot(t: &Track) -> TrackSnapshot {
     TrackSnapshot {
+        track_id: t.id,
         name: t.name.clone(),
         volume: t.volume,
         pan: t.pan,
@@ -47,7 +54,7 @@ fn audio_clip_to_snapshot(c: &AudioClip) -> AudioClipSnapshot {
         name: c.name.clone(),
         start_beat: c.start_beat,
         length_beats: c.length_beats,
-        samples: c.samples.clone(), // consider ref-counted pool if large
+        samples: c.samples.clone(),
         sample_rate: c.sample_rate,
         fade_in: c.fade_in,
         fade_out: c.fade_out,
@@ -99,6 +106,7 @@ fn plugin_desc_to_snapshot(p: &PluginDescriptor) -> PluginDescriptorSnapshot {
         params.insert(k.clone(), *v);
     }
     PluginDescriptorSnapshot {
+        plugin_id: p.id,
         uri: p.uri.clone(),
         name: p.name.clone(),
         bypass: p.bypass,
@@ -119,10 +127,10 @@ fn automation_lane_to_snapshot(
                 RtAutomationTarget::TrackSend(*i)
             }
             crate::model::automation::AutomationTarget::PluginParam {
-                plugin_idx,
+                plugin_id,
                 param_name,
             } => RtAutomationTarget::PluginParam {
-                plugin_idx: *plugin_idx,
+                plugin_id: *plugin_id,
                 param_name: param_name.clone(),
             },
         },

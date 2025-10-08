@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::*;
 use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
@@ -5,12 +7,10 @@ use crate::messages::AudioCommand;
 use crate::model::automation::AutomationTarget;
 use crate::model::track::Track;
 use crate::plugin::get_control_port_info;
-use crate::track_manager::{arm_track_exclusive, mute_track, solo_track};
+use crate::track_manager::{mute_track, solo_track};
 
 pub struct TracksPanel {
-    track_meters: Vec<LevelMeter>,
-    collapsed_groups: Vec<bool>,
-    track_width: f32,
+    track_meters: HashMap<u64, LevelMeter>,
     show_mixer_strip: bool,
     show_automation_buttons: bool,
 }
@@ -18,23 +18,17 @@ pub struct TracksPanel {
 impl TracksPanel {
     pub fn new() -> Self {
         Self {
-            track_meters: Vec::new(),
-            collapsed_groups: Vec::new(),
-            track_width: 300.0,
+            track_meters: HashMap::new(),
             show_mixer_strip: true,
             show_automation_buttons: true,
         }
     }
 
-    pub fn update_levels(&mut self, levels: Vec<(f32, f32)>) {
-        while self.track_meters.len() < levels.len() {
-            self.track_meters.push(LevelMeter::default());
-        }
-        for (i, (left, right)) in levels.iter().enumerate() {
-            if let Some(meter) = self.track_meters.get_mut(i) {
-                let samples = [left.max(*right)];
-                meter.update(&samples, 1.0 / 60.0);
-            }
+    pub fn update_levels(&mut self, levels: HashMap<u64, (f32, f32)>) {
+        for (track_id, (left, right)) in levels {
+            let meter = self.track_meters.entry(track_id).or_default();
+            let samples = [left.max(right)];
+            meter.update(&samples, 1.0 / 60.0);
         }
     }
 
@@ -95,179 +89,134 @@ impl TracksPanel {
 
     fn draw_track_list(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         let mut track_actions = Vec::new();
-        let mut selected_track_changed = None;
-        let mut automation_actions = Vec::new(); // ← NEW: collect automation actions
+        let mut automation_actions = Vec::new();
 
-        // Sanitize groups
-        {
-            let len = app.state.lock().unwrap().tracks.len();
-            app.track_manager.sanitize(len);
-        }
+        // Get ordered track IDs and clone them to avoid holding the lock
+        let track_ids = {
+            let state = app.state.lock().unwrap();
+            state.track_order.clone()
+        };
 
-        let groups = app.track_manager.get_groups().to_vec();
-        while self.collapsed_groups.len() < groups.len() {
-            self.collapsed_groups.push(false);
-        }
+        for &track_id in track_ids.iter() {
+            let is_selected = track_id == app.selected_track;
 
-        // Build grouped set
-        use std::collections::HashSet;
-        let mut grouped: HashSet<usize> = HashSet::new();
-        for g in &groups {
-            for &i in &g.track_ids {
-                grouped.insert(i);
-            }
-        }
-
-        // Draw groups
-        for (gidx, g) in groups.iter().enumerate() {
-            let mut collapsed = *self.collapsed_groups.get(gidx).unwrap_or(&false);
-
-            self.draw_group_block(
-                ui,
-                app,
-                &g.name,
-                &g.track_ids,
-                &mut collapsed,
-                &mut track_actions,
-                &mut selected_track_changed,
-                &mut automation_actions,
-            );
-
-            if self.collapsed_groups.len() <= gidx {
-                self.collapsed_groups.resize(gidx + 1, false);
-            }
-            self.collapsed_groups[gidx] = collapsed;
-            ui.add_space(6.0);
-        }
-
-        // Ungrouped tracks
-        let command_tx = app.command_tx.clone();
-
-        {
-            let binding = app.state.clone();
-            let mut state = binding.lock().unwrap();
-            let num_tracks = state.tracks.len();
-
-            for track_idx in 0..num_tracks {
-                if grouped.contains(&track_idx) {
-                    continue;
-                }
-                let is_selected = track_idx == app.selected_track;
-
-                let row = ui.group(|ui| {
-                    let header_resp = self.draw_track_header(
-                        ui,
-                        &state.tracks[track_idx],
-                        track_idx,
-                        is_selected,
-                        &mut track_actions,
-                    );
-                    if header_resp.clicked() {
-                        selected_track_changed = Some((track_idx, state.tracks[track_idx].is_midi));
-                    }
+            // Build the whole track UI inside a group and return the header response
+            let header_resp = ui
+                .group(|ui| {
+                    let header_resp =
+                        self.draw_track_header(ui, track_id, is_selected, app, |action| {
+                            track_actions.push((action, track_id))
+                        });
 
                     if self.show_mixer_strip {
-                        self.draw_mixer_strip(
-                            ui,
-                            &mut state.tracks[track_idx],
-                            track_idx,
-                            &mut track_actions,
-                            &command_tx,
-                        );
+                        self.draw_mixer_strip(ui, track_id, app);
                     }
 
-                    if self.show_automation_buttons
-                        && let Some(action) =
-                            self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx)
-                    {
-                        automation_actions.push(action); // ← Collect for later
+                    if self.show_automation_buttons {
+                        if let Some(action) = self.draw_automation_controls(ui, track_id, app) {
+                            automation_actions.push(action);
+                        }
                     }
 
-                    self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
-                });
+                    self.draw_plugin_chain(ui, track_id, app);
 
-                row.response.context_menu(|ui| {
-                    if ui.button("Duplicate Selected Track").clicked() {
-                        track_actions.push(("duplicate", track_idx));
-                        ui.close();
-                    }
-                    if ui.button("Delete Selected Track").clicked() {
-                        track_actions.push(("delete", track_idx));
-                        ui.close();
-                    }
-                });
+                    header_resp
+                })
+                .inner;
+
+            // Select the track when the header is clicked
+            if header_resp.clicked() {
+                app.selected_track = track_id;
             }
         }
 
-        // Apply automation actions
-        for (idx, target) in automation_actions {
-            app.add_automation_lane(idx, target);
+        // Apply actions after the main loop to avoid borrow issues
+        for (action, track_id) in track_actions {
+            self.apply_track_action(app, action, track_id);
         }
-
-        // Handle selection change
-        if let Some((track_idx, is_midi)) = selected_track_changed {
-            app.selected_track = track_idx;
-        }
-
-        // Apply track actions
-        for (action, track_idx) in track_actions {
-            self.apply_track_action(app, action, track_idx);
+        for (track_id, target) in automation_actions {
+            app.add_automation_lane_by_id(track_id, target);
         }
     }
 
-    fn draw_track_header(
+    fn draw_track_header<'a>(
         &self,
         ui: &mut egui::Ui,
-        track: &Track,
-        idx: usize,
+        track_id: u64,
         is_selected: bool,
-        actions: &mut Vec<(&str, usize)>,
+        app: &super::app::YadawApp,
+        mut on_action: impl FnMut(&'a str),
     ) -> egui::Response {
-        const HEADER_H: f32 = 24.0;
+        // Query current name and type
+        let (name, is_midi) = {
+            let state = app.state.lock().unwrap();
+            state
+                .tracks
+                .get(&track_id)
+                .map(|t| (t.name.clone(), t.is_midi))
+                .unwrap_or_else(|| ("Unknown".to_string(), false))
+        };
 
-        let desired = egui::vec2(ui.available_width(), HEADER_H);
-        let (rect, bg_resp) = ui.allocate_exact_size(desired, egui::Sense::click());
-
-        if is_selected {
-            let visuals = ui.visuals();
-            ui.painter()
-                .rect_filled(rect, 0.0, visuals.selection.bg_fill);
-        }
-
-        ui.allocate_ui_at_rect(rect, |ui| {
+        // Draw a framed header
+        let inner = egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
+                // Selected marker
                 if is_selected {
                     ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "▶");
                 } else {
                     ui.label(" ");
                 }
-                ui.label(&track.name);
-                ui.label(if track.is_midi { "🎹" } else { "🎵" });
-                ui.weak(format!("#{}", idx + 1));
+
+                // Tiny intensity viewer (uses your existing LevelMeter; non-vertical)
+                if let Some(meter) = self.track_meters.get(&track_id) {
+                    // render compactly
+                    ui.scope(|ui| {
+                        // Shrink spacing to keep header height reasonable
+                        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                        ui.add(egui::Separator::default().spacing(4.0));
+                        // Draw in a small reserved space
+                        let (resp, painter) =
+                            ui.allocate_painter(egui::vec2(60.0, 10.0), egui::Sense::hover());
+                        // Re-use meter painter (horizontal)
+                        // Note: LevelMeter::ui draws its own size; here we provide a minimal inline bar.
+                        // If you prefer the existing visual, replace this block with: meter.ui(ui, false);
+                        // Simple inline bar: draw a filled rect proportional to peak
+                        let peak = meter.clone().data.peak_normalized(); // if data is private, fallback to a fixed small bar
+                        let w = (resp.rect.width() * peak).clamp(0.0, resp.rect.width());
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                resp.rect.left_top(),
+                                egui::vec2(w, resp.rect.height()),
+                            ),
+                            1.0,
+                            egui::Color32::from_rgb(90, 180, 90),
+                        );
+                        painter.rect_stroke(
+                            resp.rect,
+                            1.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
+                            egui::StrokeKind::Middle,
+                        );
+                    });
+                }
+
+                ui.label(name);
+                ui.label(if is_midi { "🎹" } else { "🎵" });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.menu_button("⚙", |ui| {
                         ui.label("Track Options");
                         ui.separator();
                         if ui.button("Rename…").clicked() {
-                            actions.push(("rename", idx));
+                            on_action("rename");
                             ui.close();
                         }
-                        if ui.button("Change Color…").clicked() {
-                            actions.push(("color", idx));
-                            ui.close();
-                        }
-                        if ui.button("Freeze Track").clicked() {
-                            actions.push(("freeze", idx));
-                            ui.close();
-                        }
-                        ui.separator();
                         if ui.button("Duplicate").clicked() {
-                            actions.push(("duplicate", idx));
+                            on_action("duplicate");
                             ui.close();
                         }
                         if ui.button("Delete").clicked() {
-                            actions.push(("delete", idx));
+                            on_action("delete");
                             ui.close();
                         }
                     });
@@ -275,100 +224,156 @@ impl TracksPanel {
             });
         });
 
-        bg_resp
+        // Make the entire header clickable by adding an overlay response on the frame rect
+        let rect = inner.response.rect;
+        let id = ui.id().with(("track_header", track_id));
+        let clickable = ui.interact(rect, id, egui::Sense::click());
+
+        // Optional: selection background highlight (painted after content; acceptable in egui)
+        if is_selected {
+            ui.painter().rect_stroke(
+                rect.shrink(1.0),
+                3.0,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 150, 255)),
+                egui::StrokeKind::Middle,
+            );
+        }
+
+        // Combine the clickable overlay with the inner response so hover/tooltip still work
+        clickable.union(inner.response)
     }
 
-    fn draw_mixer_strip(
-        &mut self,
-        ui: &mut egui::Ui,
-        track: &mut Track,
-        idx: usize,
-        actions: &mut Vec<(&str, usize)>,
-        command_tx: &Sender<AudioCommand>,
-    ) {
+    fn draw_mixer_strip(&mut self, ui: &mut egui::Ui, track_id: u64, app: &super::app::YadawApp) {
+        // Read the track's current state
+        let (mut volume, mut pan, muted, solo, armed, monitor_enabled, is_midi) = {
+            let state = app.state.lock().unwrap();
+            state
+                .tracks
+                .get(&track_id)
+                .map(|t| {
+                    (
+                        t.volume,
+                        t.pan,
+                        t.muted,
+                        t.solo,
+                        t.armed,
+                        t.monitor_enabled,
+                        t.is_midi,
+                    )
+                })
+                .unwrap_or((0.7, 0.0, false, false, false, false, false))
+        };
+
         ui.horizontal(|ui| {
             if ui
-                .selectable_label(track.muted, if track.muted { "M" } else { "m" })
+                .selectable_label(muted, if muted { "M" } else { "m" })
                 .on_hover_text("Mute")
                 .clicked()
             {
-                actions.push(("mute", idx));
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetTrackMute(track_id, !muted));
             }
             if ui
-                .selectable_label(track.solo, if track.solo { "S" } else { "s" })
+                .selectable_label(solo, if solo { "S" } else { "s" })
                 .on_hover_text("Solo")
                 .clicked()
             {
-                actions.push(("solo", idx));
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetTrackSolo(track_id, !solo));
             }
             if ui
-                .selectable_label(track.armed, if track.armed { "●" } else { "○" })
+                .selectable_label(armed, if armed { "●" } else { "○" })
                 .on_hover_text("Record Arm")
                 .clicked()
             {
-                actions.push(("arm", idx));
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetTrackArmed(track_id, !armed));
             }
-            if !track.is_midi
+            if !is_midi
                 && ui
-                    .selectable_label(track.monitor_enabled, "🎧")
+                    .selectable_label(monitor_enabled, "🎧")
                     .on_hover_text("Input Monitoring")
                     .clicked()
             {
-                // Toggle and notify audio thread
-                track.monitor_enabled = !track.monitor_enabled;
-                let _ = command_tx.send(AudioCommand::SetTrackMonitor(idx, track.monitor_enabled));
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetTrackMonitor(track_id, !monitor_enabled));
             }
         });
 
         ui.horizontal(|ui| {
             ui.label("Vol:");
-            ui.add(
-                egui::Slider::new(&mut track.volume, 0.0..=1.2)
-                    .show_value(false)
-                    .logarithmic(true),
-            );
-            ui.label(format!("{:.1}", linear_to_db(track.volume)));
+            if ui
+                .add(
+                    egui::Slider::new(&mut volume, 0.0..=1.2)
+                        .show_value(false)
+                        .logarithmic(true),
+                )
+                .changed()
+            {
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetTrackVolume(track_id, volume));
+            }
+            ui.label(format!("{:.1}", linear_to_db(volume)));
         });
 
         ui.horizontal(|ui| {
             ui.label("Pan:");
-            ui.add(egui::Slider::new(&mut track.pan, -1.0..=1.0).show_value(false));
-            ui.label(format_pan(track.pan));
+            if ui
+                .add(egui::Slider::new(&mut pan, -1.0..=1.0).show_value(false))
+                .changed()
+            {
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetTrackPan(track_id, pan));
+            }
+            ui.label(format_pan(pan));
         });
-
-        if idx < self.track_meters.len() {
-            self.track_meters[idx].ui(ui, false);
-        }
     }
 
     fn draw_automation_controls(
         &self,
         ui: &mut egui::Ui,
-        track: &Track,
-        idx: usize,
-    ) -> Option<(usize, AutomationTarget)> {
+        track_id: u64,
+        app: &super::app::YadawApp,
+    ) -> Option<(u64, AutomationTarget)> {
         let mut action = None;
+        let (plugin_chain, num_lanes) = {
+            let state = app.state.lock().unwrap();
+            state
+                .tracks
+                .get(&track_id)
+                .map(|t| (t.plugin_chain.clone(), t.automation_lanes.len()))
+                .unwrap_or_default()
+        };
+
         ui.horizontal(|ui| {
             ui.label("Automation:");
-            ui.menu_button("➕", |ui| {
+            ui.menu_button("+", |ui| {
                 if ui.button("Volume").clicked() {
-                    action = Some((idx, AutomationTarget::TrackVolume));
+                    action = Some((track_id, AutomationTarget::TrackVolume));
                     ui.close();
                 }
                 if ui.button("Pan").clicked() {
-                    action = Some((idx, AutomationTarget::TrackPan));
+                    action = Some((track_id, AutomationTarget::TrackPan));
                     ui.close();
                 }
                 ui.separator();
-                for (plugin_idx, plugin) in track.plugin_chain.iter().enumerate() {
+                for plugin in &plugin_chain {
+                    let plugin_id = plugin.id;
+                    let param_names: Vec<_> = plugin.params.keys().cloned().collect();
                     ui.menu_button(&plugin.name, |ui| {
-                        for param_name in plugin.params.keys() {
-                            if ui.button(param_name).clicked() {
+                        for param_name in param_names {
+                            if ui.button(&param_name).clicked() {
                                 action = Some((
-                                    idx,
+                                    track_id,
                                     AutomationTarget::PluginParam {
-                                        plugin_idx,
-                                        param_name: param_name.clone(),
+                                        plugin_id,
+                                        param_name,
                                     },
                                 ));
                                 ui.close();
@@ -377,230 +382,127 @@ impl TracksPanel {
                     });
                 }
             });
-            if !track.automation_lanes.is_empty() {
-                ui.label(format!("({} lanes)", track.automation_lanes.len()));
+            if num_lanes > 0 {
+                ui.label(format!("({} lanes)", num_lanes));
             }
         });
         action
     }
 
-    fn draw_plugin_chain(
-        &self,
-        ui: &mut egui::Ui,
-        track: &mut Track,
-        idx: usize,
-        app: &mut super::app::YadawApp,
-    ) {
+    fn draw_plugin_chain(&self, ui: &mut egui::Ui, track_id: u64, app: &mut super::app::YadawApp) {
         ui.separator();
         ui.horizontal(|ui| {
             ui.label("Plugins:");
-            if ui.button("➕").clicked() {
-                app.show_plugin_browser_for_track(idx);
+            if ui.button("+").clicked() {
+                app.show_plugin_browser_for_track(track_id);
             }
         });
 
-        let mut plugin_to_remove = None;
+        let mut plugin_to_remove: Option<u64> = None;
 
-        for (plugin_idx, plugin) in track.plugin_chain.iter_mut().enumerate() {
-            ui.collapsing(&plugin.name, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut plugin.bypass, "Bypass").changed() {
-                        let _ = app.command_tx.send(AudioCommand::SetPluginBypass(
-                            idx,
-                            plugin_idx,
-                            plugin.bypass,
-                        ));
-                    }
-                    if ui.small_button("✕").clicked() {
-                        plugin_to_remove = Some(plugin_idx);
-                    }
-                });
+        let plugin_chain = {
+            let state = app.state.lock().unwrap();
+            state
+                .tracks
+                .get(&track_id)
+                .map(|t| t.plugin_chain.clone())
+                .unwrap_or_default()
+        };
+        let chain_len = plugin_chain.len();
 
-                for (pname, val) in plugin.params.iter_mut() {
+        for (plugin_idx, plugin) in plugin_chain.iter().enumerate() {
+            let plugin_id = plugin.id;
+            let mut bypass = plugin.bypass;
+
+            egui::CollapsingHeader::new(&plugin.name)
+                .id_salt(("plugin", track_id, plugin_id))
+                .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(pname);
-
-                        let meta = get_control_port_info(&plugin.uri, pname);
-                        let (min_v, max_v, default_v) = match meta.as_ref() {
-                            Some(m) => (m.min, m.max, m.default),
-                            None => (0.0, 1.0, 0.0),
-                        };
-
-                        let mut v = *val;
-                        if ui
-                            .add(egui::Slider::new(&mut v, min_v..=max_v).show_value(true))
-                            .changed()
-                        {
-                            *val = v;
-                            let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                                idx,
+                        if ui.checkbox(&mut bypass, "Bypass").changed() {
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::SetPluginBypass(track_id, plugin_id, bypass));
+                        }
+                        if ui.small_button("✕").clicked() {
+                            plugin_to_remove = Some(plugin_id);
+                        }
+                        if plugin_idx > 0 && ui.small_button("▲").clicked() {
+                            let _ = app.command_tx.send(AudioCommand::MovePlugin(
+                                track_id,
                                 plugin_idx,
-                                pname.clone(),
-                                v,
+                                plugin_idx - 1,
                             ));
                         }
-
-                        if ui
-                            .small_button("↺")
-                            .on_hover_text(format!("Reset to default ({:.3})", default_v))
-                            .clicked()
-                        {
-                            *val = default_v;
-                            let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                                idx,
+                        if plugin_idx < chain_len - 1 && ui.small_button("▼").clicked() {
+                            let _ = app.command_tx.send(AudioCommand::MovePlugin(
+                                track_id,
                                 plugin_idx,
-                                pname.clone(),
-                                default_v,
+                                plugin_idx + 1,
                             ));
                         }
                     });
-                }
-            });
-        }
 
-        if let Some(idx_to_remove) = plugin_to_remove {
+                    for (pname, &pval) in &plugin.params {
+                        let mut v = pval;
+                        ui.horizontal(|ui| {
+                            ui.label(pname);
+
+                            let meta = get_control_port_info(&plugin.uri, pname);
+                            let (min_v, max_v, default_v) = meta
+                                .as_ref()
+                                .map(|m| (m.min, m.max, m.default))
+                                .unwrap_or((0.0, 1.0, 0.0));
+
+                            if ui
+                                .add(egui::Slider::new(&mut v, min_v..=max_v).show_value(true))
+                                .changed()
+                            {
+                                let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                    track_id,
+                                    plugin_id,
+                                    pname.clone(),
+                                    v,
+                                ));
+                            }
+                            if ui
+                                .small_button("↺")
+                                .on_hover_text(format!("Reset to default ({:.3})", default_v))
+                                .clicked()
+                            {
+                                let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                    track_id,
+                                    plugin_id,
+                                    pname.clone(),
+                                    default_v,
+                                ));
+                            }
+                        });
+                    }
+                });
+        }
+        if let Some(id_to_remove) = plugin_to_remove {
             let _ = app
                 .command_tx
-                .send(AudioCommand::RemovePlugin(idx, idx_to_remove));
+                .send(AudioCommand::RemovePlugin(track_id, id_to_remove));
         }
     }
 
-    fn apply_track_action(
-        &mut self,
-        app: &mut super::app::YadawApp,
-        action: &str,
-        track_idx: usize,
-    ) {
-        let mut state = app.state.lock().unwrap();
+    fn apply_track_action(&mut self, app: &mut super::app::YadawApp, action: &str, track_id: u64) {
         match action {
             "rename" => {
-                let current = state
-                    .tracks
-                    .get(track_idx)
-                    .map(|t| t.name.clone())
-                    .unwrap_or_default();
-                drop(state);
-                app.dialogs.show_rename_track(track_idx, current);
+                let current_name = {
+                    let state = app.state.lock().unwrap();
+                    state
+                        .tracks
+                        .get(&track_id)
+                        .map(|t| t.name.clone())
+                        .unwrap_or_default()
+                };
+                app.dialogs.show_rename_track(track_id, current_name);
             }
-            "mute" => {
-                mute_track(&mut state.tracks, track_idx, &app.command_tx);
-            }
-            "solo" => {
-                solo_track(&mut state.tracks, track_idx, &app.command_tx);
-            }
-            "arm" => {
-                arm_track_exclusive(&mut state.tracks, track_idx);
-                drop(state);
-                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
-            }
-            "duplicate" => {
-                if let Some(track) = state.tracks.get(track_idx).cloned() {
-                    let dup = app.track_manager.duplicate_track(&track);
-                    state.tracks.insert(track_idx + 1, dup);
-                    state.ensure_ids();
-                }
-                drop(state);
-                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
-            }
-            "delete" => {
-                if state.tracks.len() > 1 {
-                    state.tracks.remove(track_idx);
-                    if app.selected_track >= state.tracks.len() {
-                        app.selected_track = state.tracks.len().saturating_sub(1);
-                    }
-                }
-                drop(state);
-                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
-            }
+            "duplicate" => app.duplicate_selected_track(),
+            "delete" => app.delete_selected_track(),
             _ => {}
-        }
-    }
-
-    fn draw_group_block(
-        &mut self,
-        ui: &mut egui::Ui,
-        app: &mut super::app::YadawApp,
-        name: &str,
-        track_ids: &[usize],
-        collapsed: &mut bool,
-        track_actions: &mut Vec<(&str, usize)>,
-        selected_track_changed: &mut Option<(usize, bool)>,
-        automation_actions: &mut Vec<(usize, AutomationTarget)>, // ← ADD THIS
-    ) {
-        // Header
-        let hdr = ui.collapsing(name, |_ui| {});
-        if hdr.header_response.clicked() {
-            *collapsed = !*collapsed;
-        }
-        // Optional header context menu
-        hdr.header_response.context_menu(|ui| {
-            if ui
-                .button(if *collapsed { "Expand" } else { "Collapse" })
-                .clicked()
-            {
-                *collapsed = !*collapsed;
-                ui.close();
-            }
-        });
-
-        if *collapsed {
-            return;
-        }
-
-        // Extract command_tx before locking
-        let command_tx = app.command_tx.clone();
-
-        let binding = app.state.clone();
-        let mut state = binding.lock().unwrap();
-
-        for &track_idx in track_ids {
-            if track_idx >= state.tracks.len() {
-                continue;
-            }
-            let is_selected = track_idx == app.selected_track;
-
-            let row = ui.group(|ui| {
-                let header_resp = self.draw_track_header(
-                    ui,
-                    &state.tracks[track_idx],
-                    track_idx,
-                    is_selected,
-                    track_actions,
-                );
-                if header_resp.clicked() {
-                    *selected_track_changed = Some((track_idx, state.tracks[track_idx].is_midi));
-                }
-
-                if self.show_mixer_strip {
-                    self.draw_mixer_strip(
-                        ui,
-                        &mut state.tracks[track_idx],
-                        track_idx,
-                        track_actions,
-                        &command_tx,
-                    );
-                }
-
-                if self.show_automation_buttons
-                    && let Some(action) =
-                        self.draw_automation_controls(ui, &state.tracks[track_idx], track_idx)
-                {
-                    automation_actions.push(action);
-                }
-
-                self.draw_plugin_chain(ui, &mut state.tracks[track_idx], track_idx, app);
-            });
-
-            row.response.context_menu(|ui| {
-                if ui.button("Duplicate Track").clicked() {
-                    track_actions.push(("duplicate", track_idx));
-                    ui.close();
-                }
-                if ui.button("Delete Track").clicked() {
-                    track_actions.push(("delete", track_idx));
-                    ui.close();
-                }
-            });
         }
     }
 }

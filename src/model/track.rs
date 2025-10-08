@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{automation::AutomationLane, plugin::PluginDescriptor};
@@ -5,7 +7,7 @@ use crate::model::clip::{AudioClip, MidiClip};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Send {
-    pub destination_track: usize,
+    pub destination_track: u64,
     pub amount: f32,
     pub pre_fader: bool,
     pub muted: bool,
@@ -13,6 +15,8 @@ pub struct Send {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
+    #[serde(default)]
+    pub id: u64,
     pub name: String,
     pub volume: f32,
     pub pan: f32,
@@ -27,7 +31,7 @@ pub struct Track {
     pub plugin_chain: Vec<PluginDescriptor>,
     pub automation_lanes: Vec<AutomationLane>,
     pub sends: Vec<Send>,
-    pub group_id: Option<usize>,
+    pub group_id: Option<usize>, // index for now (groups are UI-only)
     pub color: Option<(u8, u8, u8)>,
     pub height: f32,
     pub minimized: bool,
@@ -37,11 +41,15 @@ pub struct Track {
     pub phase_inverted: bool,
     pub frozen: bool,
     pub frozen_buffer: Option<Vec<f32>>,
+
+    #[serde(skip)]
+    pub plugin_by_id: HashMap<u64, usize>,
 }
 
 impl Default for Track {
     fn default() -> Self {
         Self {
+            id: 0,
             name: "New Track".to_string(),
             volume: 1.0,
             pan: 0.0,
@@ -66,6 +74,29 @@ impl Default for Track {
             phase_inverted: false,
             frozen: false,
             frozen_buffer: None,
+            plugin_by_id: HashMap::new(),
         }
+    }
+}
+
+impl Track {
+    pub fn rebuild_plugin_index(&mut self) {
+        self.plugin_by_id.clear();
+        for (idx, plugin) in self.plugin_chain.iter().enumerate() {
+            if plugin.id != 0 {
+                self.plugin_by_id.insert(plugin.id, idx);
+            }
+        }
+    }
+
+    pub fn find_plugin(&self, plugin_id: u64) -> Option<&PluginDescriptor> {
+        self.plugin_by_id
+            .get(&plugin_id)
+            .and_then(|&idx| self.plugin_chain.get(idx))
+    }
+
+    pub fn find_plugin_mut(&mut self, plugin_id: u64) -> Option<&mut PluginDescriptor> {
+        let idx = *self.plugin_by_id.get(&plugin_id)?;
+        self.plugin_chain.get_mut(idx)
     }
 }

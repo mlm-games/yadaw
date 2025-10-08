@@ -378,6 +378,26 @@ impl MenuBar {
 
             if ui.button("Go to End").clicked() {
                 // Go to end of project
+                let end_beats = {
+                    let state = app.state.lock().unwrap();
+                    let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
+                    for track in state.tracks.values() {
+                        for c in &track.audio_clips {
+                            max_beat = max_beat.max(c.start_beat + c.length_beats);
+                        }
+                        for c in &track.midi_clips {
+                            max_beat = max_beat.max(c.start_beat + c.length_beats);
+                        }
+                    }
+                    max_beat
+                };
+                // convert beats->samples
+                let sr = app.audio_state.sample_rate.load() as f64;
+                let bpm = app.audio_state.bpm.load() as f64;
+                if bpm > 0.0 && sr > 0.0 {
+                    let samples = end_beats * (60.0 / bpm) * sr;
+                    let _ = app.command_tx.send(AudioCommand::SetPosition(samples));
+                }
                 ui.close();
             }
 
@@ -418,7 +438,7 @@ impl MenuBar {
                         // compute project end in beats
                         let state = app.state.lock().unwrap();
                         let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
-                        for t in &state.tracks {
+                        for t in state.tracks.values() {
                             for c in &t.audio_clips {
                                 max_beat = max_beat.max(c.start_beat + c.length_beats);
                             }
@@ -454,7 +474,7 @@ impl MenuBar {
                 let end_beats = {
                     let state = app.state.lock().unwrap();
                     let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
-                    for t in &state.tracks {
+                    for t in state.tracks.values() {
                         for c in &t.audio_clips {
                             max_beat = max_beat.max(c.start_beat + c.length_beats);
                         }
@@ -464,6 +484,7 @@ impl MenuBar {
                     }
                     max_beat
                 };
+
                 // convert beats->samples
                 let sr = app.audio_state.sample_rate.load() as f64;
                 let bpm = app.audio_state.bpm.load() as f64;

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::*;
 use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
@@ -10,7 +12,7 @@ pub struct MixerWindow {
     position: Option<egui::Pos2>,
 
     // Mixer state
-    channel_strips: Vec<ChannelStrip>,
+    channel_strips: HashMap<u64, ChannelStrip>,
     master_strip: MasterStrip,
 
     // View options
@@ -49,7 +51,7 @@ impl MixerWindow {
             size: egui::vec2(800.0, 600.0),
             position: None,
 
-            channel_strips: Vec::new(),
+            channel_strips: HashMap::new(),
             master_strip: MasterStrip {
                 meter: LevelMeter::default(),
                 limiter_enabled: false,
@@ -151,47 +153,77 @@ impl MixerWindow {
 
     fn draw_mixer_channels(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         ui.horizontal(|ui| {
-            let binding = app.state.clone();
-            let state = binding.lock().unwrap();
+            let track_data: Vec<(u64, crate::model::track::Track)> = {
+                let state = app.state.lock().unwrap();
+                state
+                    .track_order
+                    .iter()
+                    .filter_map(|&id| state.tracks.get(&id).cloned().map(|t| (id, t)))
+                    .collect()
+            };
 
-            // Ensure we have enough channel strips
-            while self.channel_strips.len() < state.tracks.len() {
-                self.channel_strips.push(ChannelStrip {
-                    meter: LevelMeter::default(),
-                    eq_enabled: false,
-                    sends: Vec::new(),
-                });
-            }
+            // Snapshot flags to avoid borrowing &mut self while also holding &mut strip.
+            let show_inserts = self.show_inserts;
+            let show_eq = self.show_eq;
+            let show_sends = self.show_sends;
+            let strip_width = self.strip_width;
 
-            // Draw each track's channel strip
-            for (idx, track) in state.tracks.iter().enumerate() {
-                self.draw_channel_strip(ui, track, idx, app);
+            for (track_id, track) in &track_data {
+                let strip = self
+                    .channel_strips
+                    .entry(*track_id)
+                    .or_insert_with(|| ChannelStrip {
+                        meter: LevelMeter::default(),
+                        eq_enabled: false,
+                        sends: Vec::new(),
+                    });
+
+                Self::draw_channel_strip_ui(
+                    ui,
+                    track,
+                    strip,
+                    *track_id,
+                    app,
+                    show_inserts,
+                    show_eq,
+                    show_sends,
+                    strip_width,
+                );
+
                 ui.separator();
             }
 
-            // Master channel
+            {
+                use std::collections::HashSet;
+                let live: HashSet<u64> = track_data.iter().map(|(id, _)| *id).collect();
+                self.channel_strips.retain(|id, _| live.contains(id));
+            }
+
             self.draw_master_strip(ui, app);
         });
     }
 
-    fn draw_channel_strip(
-        &mut self,
+    fn draw_channel_strip_ui(
         ui: &mut egui::Ui,
-        track: &Track,
-        idx: usize,
+        track: &crate::model::track::Track,
+        strip: &mut ChannelStrip,
+        track_id: u64,
         app: &mut super::app::YadawApp,
+        show_inserts: bool,
+        show_eq: bool,
+        show_sends: bool,
+        strip_width: f32,
     ) {
-        ui.allocate_ui(egui::vec2(self.strip_width, ui.available_height()), |ui| {
+        ui.allocate_ui(egui::vec2(strip_width, ui.available_height()), |ui| {
             ui.vertical(|ui| {
                 // Channel name
                 ui.group(|ui| {
                     ui.set_min_width(ui.available_width());
                     ui.label(&track.name);
-                    ui.label(format!("#{}", idx + 1));
                 });
 
-                // Insert effects section
-                if self.show_inserts {
+                // Inserts
+                if show_inserts {
                     ui.group(|ui| {
                         ui.set_min_height(80.0);
                         ui.label("Inserts");
@@ -203,24 +235,20 @@ impl MixerWindow {
                                 plugin.name.clone()
                             };
 
-                            if ui.small_button(&label).clicked() {
-                                // Open plugin editor
-                            }
+                            let _ = ui.small_button(&label);
                         }
 
                         if ui.small_button("+ Add").clicked() {
-                            app.show_plugin_browser_for_track(idx);
+                            app.show_plugin_browser_for_track(track_id);
                         }
                     });
                 }
 
-                // EQ section
-                if self.show_eq {
+                // EQ
+                if show_eq {
                     ui.group(|ui| {
                         ui.set_min_height(100.0);
                         ui.label("EQ");
-
-                        // Simple 3-band EQ visualization
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.label("L");
@@ -231,7 +259,6 @@ impl MixerWindow {
                                         .show_value(false),
                                 );
                             });
-
                             ui.vertical(|ui| {
                                 ui.label("M");
                                 let mut mid = 0.0f32;
@@ -241,7 +268,6 @@ impl MixerWindow {
                                         .show_value(false),
                                 );
                             });
-
                             ui.vertical(|ui| {
                                 ui.label("H");
                                 let mut high = 0.0f32;
@@ -253,31 +279,30 @@ impl MixerWindow {
                             });
                         });
 
-                        ui.checkbox(&mut self.channel_strips[idx].eq_enabled, "Enable");
+                        ui.checkbox(&mut strip.eq_enabled, "Enable");
                     });
                 }
 
-                // Sends section
-                if self.show_sends {
+                // Sends
+                if show_sends {
                     ui.group(|ui| {
                         ui.set_min_height(60.0);
                         ui.label("Sends");
 
-                        // Add some default sends
-                        if self.channel_strips[idx].sends.is_empty() {
-                            self.channel_strips[idx].sends.push(SendControl {
+                        if strip.sends.is_empty() {
+                            strip.sends.push(SendControl {
                                 destination: "Reverb".to_string(),
                                 level: 0.0,
                                 pre_fader: false,
                             });
-                            self.channel_strips[idx].sends.push(SendControl {
+                            strip.sends.push(SendControl {
                                 destination: "Delay".to_string(),
                                 level: 0.0,
                                 pre_fader: false,
                             });
                         }
 
-                        for send in &mut self.channel_strips[idx].sends {
+                        for send in &mut strip.sends {
                             ui.horizontal(|ui| {
                                 ui.label(&send.destination);
                                 ui.add(
@@ -288,10 +313,10 @@ impl MixerWindow {
                     });
                 }
 
-                // Level meter
+                // Meter
                 ui.group(|ui| {
                     ui.set_min_height(150.0);
-                    self.channel_strips[idx].meter.ui(ui, true);
+                    strip.meter.ui(ui, true);
                 });
 
                 // Fader and pan
@@ -304,61 +329,72 @@ impl MixerWindow {
                                 .vertical()
                                 .show_value(false),
                         );
-                        ui.label(format!("{:.1}", linear_to_db(volume)));
+                        ui.label(format!("{:.1}", crate::audio_utils::linear_to_db(volume)));
                     });
-
                     if (volume - track.volume).abs() > 0.001 {
                         let _ = app
                             .command_tx
-                            .send(AudioCommand::SetTrackVolume(idx, volume));
+                            .send(crate::messages::AudioCommand::SetTrackVolume(
+                                track_id, volume,
+                            ));
                     }
 
                     ui.separator();
 
-                    // Pan knob
+                    // Pan
                     let mut pan = track.pan;
                     ui.horizontal(|ui| {
                         ui.label("Pan:");
                         ui.add(egui::Slider::new(&mut pan, -1.0..=1.0).show_value(false));
                     });
-
                     if (pan - track.pan).abs() > 0.001 {
-                        let _ = app.command_tx.send(AudioCommand::SetTrackPan(idx, pan));
+                        let _ = app
+                            .command_tx
+                            .send(crate::messages::AudioCommand::SetTrackPan(track_id, pan));
                     }
-
-                    let pan_text = format_pan(pan);
-                    ui.label(pan_text);
+                    ui.label(crate::audio_utils::format_pan(pan));
                 });
 
-                // Channel controls
+                // Buttons (mute/solo/arm)
                 ui.horizontal(|ui| {
                     // Mute
-                    let muted = track.muted;
                     if ui
-                        .selectable_label(muted, if muted { "M" } else { "m" })
+                        .selectable_label(track.muted, if track.muted { "M" } else { "m" })
                         .on_hover_text("Mute")
                         .clicked()
                     {
-                        let _ = app.command_tx.send(AudioCommand::SetTrackMute(idx, !muted));
+                        let _ = app
+                            .command_tx
+                            .send(crate::messages::AudioCommand::SetTrackMute(
+                                track_id,
+                                !track.muted,
+                            ));
                     }
-
                     // Solo
-                    let solo = track.solo;
                     if ui
-                        .selectable_label(solo, if solo { "S" } else { "s" })
+                        .selectable_label(track.solo, if track.solo { "S" } else { "s" })
                         .on_hover_text("Solo")
                         .clicked()
                     {
-                        let _ = app.command_tx.send(AudioCommand::SetTrackSolo(idx, !solo));
+                        let _ = app
+                            .command_tx
+                            .send(crate::messages::AudioCommand::SetTrackSolo(
+                                track_id,
+                                !track.solo,
+                            ));
                     }
-
                     // Record arm
                     if ui
                         .selectable_label(track.armed, if track.armed { "●" } else { "○" })
                         .on_hover_text("Record Arm")
                         .clicked()
                     {
-                        // Handle record arm
+                        let _ = app
+                            .command_tx
+                            .send(crate::messages::AudioCommand::SetTrackArmed(
+                                track_id,
+                                !track.armed,
+                            ));
                     }
                 });
             });

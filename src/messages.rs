@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
@@ -18,87 +20,139 @@ pub enum AudioCommand {
 
     UpdateTracks,
 
-    SetTrackVolume(usize, f32),
-    SetTrackPan(usize, f32),
-    SetTrackMute(usize, bool),
-    SetTrackSolo(usize, bool),
-    SetTrackArmed(usize, bool),
-    SetTrackInput(usize, Option<String>),
-    SetTrackOutput(usize, Option<String>),
-    SetTrackMonitor(usize, bool),
-    FreezeTrack(usize),
-    UnfreezeTrack(usize),
+    SetTrackVolume(u64, f32),
+    SetTrackPan(u64, f32),
+    SetTrackMute(u64, bool),
+    SetTrackSolo(u64, bool),
+    SetTrackArmed(u64, bool),
+    SetTrackInput(u64, Option<String>),
+    SetTrackOutput(u64, Option<String>),
+    SetTrackMonitor(u64, bool),
+    FreezeTrack(u64),
+    UnfreezeTrack(u64),
 
     AddPluginUnified {
-        track_id: usize,
+        track_id: u64,
+        plugin_idx: usize, // for ordering
         backend: BackendKind,
         uri: String,
         display_name: String,
     },
-    RemovePlugin(usize, usize),
-    SetPluginBypass(usize, usize, bool),
-    SetPluginParam(usize, usize, String, f32),
-    MovePlugin(usize, usize, usize),
-    LoadPluginPreset(usize, usize, String),
-    SavePluginPreset(usize, usize, String),
+
+    RemovePlugin(u64, u64),
+    SetPluginBypass(u64, u64, bool),
+    SetPluginParam(u64, u64, String, f32),
+    MovePlugin(u64, usize, usize),
+    LoadPluginPreset(u64, usize, String),
+    SavePluginPreset(u64, usize, String),
 
     SetLoopEnabled(bool),
     SetLoopRegion(f64, f64),
 
-    // MIDI clip management (structure, not content)
-    CreateMidiClip(usize, f64, f64),
-    CreateMidiClipWithData(usize, MidiClip),
-    DeleteMidiClip(usize, usize),
-    MoveMidiClip(usize, usize, f64),
-    ResizeMidiClip(usize, usize, f64, f64),
-    DuplicateMidiClip(usize, usize),
-    SplitMidiClip(usize, usize, f64),
+    CreateMidiClip {
+        track_id: u64,
+        start_beat: f64,
+        length_beats: f64,
+    },
+    CreateMidiClipWithData {
+        track_id: u64,
+        clip: MidiClip,
+    },
+    DeleteMidiClip {
+        clip_id: u64,
+    },
+    MoveMidiClip {
+        clip_id: u64,
+        new_start: f64,
+    },
+    ResizeMidiClip {
+        clip_id: u64,
+        new_start: f64,
+        new_length: f64,
+    },
+    DuplicateMidiClip {
+        clip_id: u64,
+    },
+    SplitMidiClip {
+        clip_id: u64,
+        position: f64,
+    },
 
-    // Audio clips
-    MoveAudioClip(usize, usize, f64),
-    ResizeAudioClip(usize, usize, f64, f64),
-    DuplicateAudioClip(usize, usize),
-    SplitAudioClip(usize, usize, f64),
-    DeleteAudioClip(usize, usize),
-    SetAudioClipGain(usize, usize, f32),
-    SetAudioClipFadeIn(usize, usize, Option<f64>),
-    SetAudioClipFadeOut(usize, usize, Option<f64>),
+    MoveAudioClip {
+        clip_id: u64,
+        new_start: f64,
+    },
+    ResizeAudioClip {
+        clip_id: u64,
+        new_start: f64,
+        new_length: f64,
+    },
+    DuplicateAudioClip {
+        clip_id: u64,
+    },
+    SplitAudioClip {
+        clip_id: u64,
+        position: f64,
+    },
+    DeleteAudioClip {
+        clip_id: u64,
+    },
+    SetAudioClipGain(u64, f32),
+    SetAudioClipFadeIn(u64, Option<f64>),
+    SetAudioClipFadeOut(u64, Option<f64>),
 
-    // Automation
-    AddAutomationPoint(usize, AutomationTarget, f64, f32),
-    RemoveAutomationPoint(usize, usize, f64),
-    UpdateAutomationPoint(usize, usize, f64, f64, f32),
-    SetAutomationMode(usize, usize, AutomationMode),
-    ClearAutomationLane(usize, usize),
+    // Automation (track ID + lane index)
+    AddAutomationPoint(u64, AutomationTarget, f64, f32),
+    RemoveAutomationPoint(u64, usize, f64),
+    UpdateAutomationPoint(u64, usize, f64, f64, f32),
+    SetAutomationMode(u64, usize, AutomationMode),
+    ClearAutomationLane(u64, usize),
 
-    // Preview
-    PreviewNote(usize, u8),
+    // Preview (track ID)
+    PreviewNote(u64, u8),
     StopPreviewNote,
 
-    // Sends/Groups
-    AddSend(usize, usize, f32),
-    RemoveSend(usize, usize),
-    SetSendAmount(usize, usize, f32),
-    SetSendPreFader(usize, usize, bool),
-    CreateGroup(String, Vec<usize>),
+    // Sends/Groups (track IDs)
+    AddSend(u64, u64, f32), // source, destination, amount
+    RemoveSend(u64, usize),
+    SetSendAmount(u64, usize, f32),
+    SetSendPreFader(u64, usize, bool),
+    CreateGroup(String, Vec<u64>),
     RemoveGroup(usize),
-    AddTrackToGroup(usize, usize),
-    RemoveTrackFromGroup(usize),
+    AddTrackToGroup(u64, usize),
+    RemoveTrackFromGroup(u64),
 
-    // Clip operations
-    ToggleClipLoop(usize, usize, bool), // track_id, clip_id, enabled
-    MakeClipAlias(usize, usize),        // assign pattern_id, mirror edits
-    MakeClipUnique(usize, usize),       // remove pattern_id
-    SetClipQuantize(usize, usize, f32, f32, f32, bool), // grid, strength, swing, enabled
-    DuplicateMidiClipAsAlias(usize, usize), // track_id, clip_id
-    SetClipContentOffset(usize, usize, f64),
+    ToggleClipLoop {
+        clip_id: u64,
+        enabled: bool,
+    },
+    MakeClipAlias {
+        clip_id: u64,
+    },
+    MakeClipUnique {
+        clip_id: u64,
+    },
+    SetClipQuantize {
+        clip_id: u64,
+        grid: f32,
+        strength: f32,
+        swing: f32,
+        enabled: bool,
+    },
+    DuplicateMidiClipAsAlias {
+        clip_id: u64,
+    },
+    SetClipContentOffset {
+        clip_id: u64,
+        new_offset: f64,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum UIUpdate {
     Position(f64),
-    TrackLevels(Vec<(f32, f32)>),
-    RecordingFinished(usize, AudioClip),
+    TrackLevels(HashMap<u64, (f32, f32)>), // indexed for meters
+    RecordingFinished(u64, AudioClip),     // Track ID
     RecordingLevel(f32),
     MasterLevel(f32, f32),
     PushUndo(crate::project::AppStateSnapshot),
@@ -111,19 +165,19 @@ pub enum UIUpdate {
         latency_ms: f32,
     },
 
-    TrackAdded(usize),
-    TrackRemoved(usize),
-    TrackUpdated(usize),
+    TrackAdded(u64),
+    TrackRemoved(u64),
+    TrackUpdated(u64),
 
-    ClipAdded(usize, usize),
-    ClipRemoved(usize, usize),
-    ClipUpdated(usize, usize),
+    ClipAdded(u64),   // Clip ID
+    ClipRemoved(u64), // Clip ID
+    ClipUpdated(u64), // Clip ID
 
-    AutomationUpdated(usize, usize),
+    AutomationUpdated(u64, usize), // Track ID, lane index
 
-    PluginAdded(usize, usize),
-    PluginRemoved(usize, usize),
-    PluginUpdated(usize, usize),
+    PluginAdded(u64, usize),   // Track ID, plugin index
+    PluginRemoved(u64, usize), // Track ID, plugin index
+    PluginUpdated(u64, usize), // Track ID, plugin index
 
     Error(String),
     Warning(String),
@@ -132,7 +186,7 @@ pub enum UIUpdate {
     ReservedNoteIds(Vec<u64>),
 
     PluginParamsDiscovered {
-        track_id: usize,
+        track_id: u64,
         plugin_idx: usize,
         params: Vec<(String, f32, f32, f32)>,
     },

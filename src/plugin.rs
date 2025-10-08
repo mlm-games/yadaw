@@ -49,6 +49,7 @@ pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDesc
     }
 
     Ok(PluginDescriptor {
+        id: 0,
         uri: uri.to_string(),
         name: plugin_info.name.clone(),
         bypass: false,
@@ -59,8 +60,8 @@ pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDesc
 }
 
 pub struct PluginParameterUpdate {
-    pub track_id: usize,
-    pub plugin_idx: usize,
+    pub track_id: u64,
+    pub plugin_id: u64,
     pub param_name: String,
     pub value: f32,
 }
@@ -82,7 +83,7 @@ impl PluginParameterUpdate {
     pub fn create_command(&self) -> AudioCommand {
         AudioCommand::SetPluginParam(
             self.track_id,
-            self.plugin_idx,
+            self.plugin_id,
             self.param_name.clone(),
             self.value,
         )

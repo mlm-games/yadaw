@@ -30,9 +30,6 @@ pub struct AutomationLane {
 pub enum AutomationTarget {
     TrackVolume,
     TrackPan,
-    TrackSend(usize),
-    PluginParam {
-        plugin_idx: usize,
-        param_name: String,
-    },
+    TrackSend(u64),
+    PluginParam { plugin_id: u64, param_name: String },
 }

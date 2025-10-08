@@ -74,3 +74,4 @@ pub const DEBUG_PLUGIN_AUDIO: bool = cfg!(debug_assertions);
 pub const DEFAULT_MIN_PROJECT_BEATS: f64 = 64.0;
 pub const DEFAULT_MIDI_CLIP_LEN: f64 = 64.0;
 pub const DEFAULT_LOOP_LEN: f64 = 4.0;
+pub const MAGNETIC_SNAP_THRESHOLD: f64 = 0.5; // 0.5 beats

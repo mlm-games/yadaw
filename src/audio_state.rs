@@ -87,6 +87,7 @@ impl AudioState {
 /// Immutable snapshot of track data for audio processing
 #[derive(Debug, Clone)]
 pub struct TrackSnapshot {
+    pub track_id: u64,
     pub name: String,
     pub volume: f32,
     pub pan: f32,
@@ -148,41 +149,39 @@ pub struct PatternSnapshot {
 #[derive(Debug)]
 pub enum RealtimeCommand {
     UpdateTracks(Vec<TrackSnapshot>),
-    UpdateTrackVolume(usize, f32),
-    UpdateTrackPan(usize, f32),
-    UpdateTrackMute(usize, bool),
-    UpdateTrackSolo(usize, bool),
-    UpdatePluginBypass(usize, usize, bool),
-    UpdatePluginParam(usize, usize, String, f32),
-    PreviewNote(usize, u8, f64),
+    UpdateTrackVolume(u64, f32),              // Track ID
+    UpdateTrackPan(u64, f32),                 // Track ID
+    UpdateTrackMute(u64, bool),               // Track ID
+    UpdateTrackSolo(u64, bool),               // Track ID
+    UpdatePluginBypass(u64, u64, bool),       // track_id, plugin_id, bypass
+    UpdatePluginParam(u64, u64, String, f32), // track_id, plugin_id, param, value
+    PreviewNote(u64, u8, f64),                // Track ID
     StopPreviewNote,
     SetLoopEnabled(bool),
     SetLoopRegion(f64, f64),
     AddUnifiedPlugin {
-        track_id: usize,
-        plugin_idx: usize,
+        track_id: u64,
+        plugin_id: u64,
         backend: BackendKind,
         uri: String,
     },
     RemovePluginInstance {
-        track_id: usize,
-        plugin_idx: usize,
+        track_id: u64,
+        plugin_id: u64,
     },
     UpdateMidiClipNotes {
-        track_id: usize,
-        clip_id: usize,
+        track_id: u64, // Track ID
+        clip_id: u64,
         notes: Vec<MidiNoteSnapshot>,
     },
-
     BeginMidiClipEdit {
-        track_id: usize,
-        clip_id: usize,
+        track_id: u64, // Track ID
+        clip_id: u64,
         session_id: u64,
     },
-
     PreviewMidiClipNotes {
-        track_id: usize,
-        clip_id: usize,
+        track_id: u64, // Track ID
+        clip_id: u64,
         session_id: u64,
         notes: Vec<MidiNoteSnapshot>,
     },
@@ -190,6 +189,7 @@ pub enum RealtimeCommand {
 
 #[derive(Debug, Clone)]
 pub struct PluginDescriptorSnapshot {
+    pub plugin_id: u64,
     pub uri: String,
     pub name: String,
     pub bypass: bool,
@@ -223,11 +223,8 @@ pub enum RtCurveType {
 pub enum RtAutomationTarget {
     TrackVolume,
     TrackPan,
-    TrackSend(usize),
-    PluginParam {
-        plugin_idx: usize,
-        param_name: String,
-    },
+    TrackSend(u64), // by id
+    PluginParam { plugin_id: u64, param_name: String },
 }
 
 #[derive(Debug, Clone)]

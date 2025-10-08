@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::constants::{
     DEFAULT_AUDIO_TRACK_PREFIX, DEFAULT_MIDI_TRACK_PREFIX, DEFAULT_MIN_PROJECT_BEATS,
     DEFAULT_TRACK_VOLUME,
@@ -88,6 +90,7 @@ impl TrackBuilder {
         };
 
         Track {
+            id: 0,
             name: self.name.unwrap_or(default_name),
             volume: self.volume.unwrap_or(DEFAULT_TRACK_VOLUME),
             pan: self.pan.unwrap_or(0.0),
@@ -112,6 +115,7 @@ impl TrackBuilder {
             phase_inverted: false,
             frozen: false,
             frozen_buffer: None,
+            plugin_by_id: HashMap::new(),
         }
     }
 
@@ -298,21 +302,68 @@ impl TrackManager {
 }
 
 // Helper functions for track operations
-pub fn solo_track(tracks: &mut Vec<Track>, track_id: usize, command_tx: &Sender<AudioCommand>) {
-    if let Some(track) = tracks.get_mut(track_id) {
+pub fn solo_track(
+    tracks: &HashMap<u64, Track>,
+    track_order: &[u64],
+    track_id: u64,
+    command_tx: &Sender<AudioCommand>,
+) {
+    if let Some(track) = tracks.get(&track_id) {
         let new_solo = !track.solo;
-        track.solo = new_solo;
+
+        let _ = command_tx.send(AudioCommand::SetTrackSolo(track_id, new_solo));
 
         if new_solo {
-            for (i, t) in tracks.iter_mut().enumerate() {
-                if i != track_id && t.solo {
-                    t.solo = false;
-                    let _ = command_tx.send(AudioCommand::SetTrackSolo(i, false));
+            // Un-solo all other tracks
+            for &other_id in track_order {
+                if other_id != track_id {
+                    if let Some(other) = tracks.get(&other_id) {
+                        if other.solo {
+                            let _ = command_tx.send(AudioCommand::SetTrackSolo(other_id, false));
+                        }
+                    }
                 }
             }
         }
+    }
+}
 
-        let _ = command_tx.send(AudioCommand::SetTrackSolo(track_id, new_solo));
+pub fn mute_track(tracks: &HashMap<u64, Track>, track_id: u64, command_tx: &Sender<AudioCommand>) {
+    if let Some(track) = tracks.get(&track_id) {
+        let new_mute = !track.muted;
+        let _ = command_tx.send(AudioCommand::SetTrackMute(track_id, new_mute));
+    }
+}
+
+pub fn arm_track_exclusive(tracks: &mut HashMap<u64, Track>, track_order: &[u64], track_id: u64) {
+    // Disarm all
+    for track in tracks.values_mut() {
+        track.armed = false;
+    }
+    // Arm target
+    if let Some(track) = tracks.get_mut(&track_id) {
+        track.armed = true;
+    }
+}
+
+pub fn delete_track(
+    tracks: &mut HashMap<u64, Track>,
+    track_order: &mut Vec<u64>,
+    track_id: u64,
+) -> Option<Track> {
+    track_order.retain(|&id| id != track_id);
+    tracks.remove(&track_id)
+}
+
+pub fn move_track(track_order: &mut Vec<u64>, from_idx: usize, to_idx: usize) {
+    if from_idx < track_order.len() && to_idx < track_order.len() && from_idx != to_idx {
+        let track_id = track_order.remove(from_idx);
+        let insert_pos = if from_idx < to_idx {
+            to_idx - 1
+        } else {
+            to_idx
+        };
+        track_order.insert(insert_pos, track_id);
     }
 }
 
@@ -333,35 +384,4 @@ pub fn create_master_track() -> Track {
     TrackBuilder::new(0, TrackType::Master)
         .with_volume(0.8)
         .build()
-}
-
-pub fn mute_track(tracks: &mut Vec<Track>, track_id: usize, command_tx: &Sender<AudioCommand>) {
-    if let Some(track) = tracks.get_mut(track_id) {
-        track.muted = !track.muted;
-        let _ = command_tx.send(AudioCommand::SetTrackMute(track_id, track.muted));
-    }
-}
-
-pub fn arm_track_exclusive(tracks: &mut Vec<Track>, track_id: usize) {
-    for t in tracks.iter_mut() {
-        t.armed = false;
-    }
-    if let Some(track) = tracks.get_mut(track_id) {
-        track.armed = true;
-    }
-}
-
-pub fn delete_track(tracks: &mut Vec<Track>, track_id: usize) -> Option<Track> {
-    if track_id < tracks.len() {
-        return Some(tracks.remove(track_id));
-    }
-    None
-}
-
-pub fn move_track(tracks: &mut Vec<Track>, from: usize, to: usize) {
-    if from < tracks.len() && to < tracks.len() && from != to {
-        let track = tracks.remove(from);
-        let insert_pos = if from < to { to - 1 } else { to };
-        tracks.insert(insert_pos, track);
-    }
 }

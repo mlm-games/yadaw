@@ -449,8 +449,8 @@ impl DialogManager {
         self.theme_editor = Some(ThemeEditorDialog::new());
     }
 
-    pub fn show_rename_track(&mut self, idx: usize, current: String) {
-        self.track_rename = Some(TrackRenameDialog::new(idx, current));
+    pub fn show_rename_track(&mut self, track_id: u64, current: String) {
+        self.track_rename = Some(TrackRenameDialog::new(track_id, current));
     }
 }
 
@@ -532,7 +532,7 @@ pub struct PluginBrowserDialog {
     closed: bool,
     search_text: String,
     selected_category: String,
-    selected_plugin: Option<usize>,
+    selected_plugin: Option<String>, 
     available_categories: Vec<String>,
 }
 
@@ -594,7 +594,7 @@ impl PluginBrowserDialog {
                 .auto_shrink([false, false])
                 .max_height(220.0)
                 .show(ui, |ui| {
-                    for (idx, plugin) in app.available_plugins.iter().enumerate() {
+                    for plugin in app.available_plugins.values() {
                         // search filter
                         if !self.search_text.is_empty() {
                             let q = self.search_text.to_lowercase();
@@ -612,7 +612,7 @@ impl PluginBrowserDialog {
                             }
                         }
 
-                        let selected = self.selected_plugin == Some(idx);
+                        let selected = self.selected_plugin == Some(plugin.uri.clone());
 
                         let backend_badge =
                             if plugin.uri.starts_with("file://") { "[CLAP]" } else { "[LV2]" };
@@ -634,17 +634,25 @@ impl PluginBrowserDialog {
                                 BackendKind::Lv2
                             };
                             let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
+                
+                            let plugin_idx = {
+                                let state = app.state.lock().unwrap();
+                                state.tracks.get(&track_id).map(|t| t.plugin_chain.len()).unwrap_or(0)
+                            };
+
                             let _ = app.command_tx.send(AudioCommand::AddPluginUnified {
                                 track_id,
                                 backend,
                                 uri: plugin.uri.clone(),
                                 display_name: plugin.name.clone(),
+                                plugin_idx, 
                             });
+
                             // clear the selection target after adding
                             app.selected_track_for_plugin = None;
                             self.closed = true;
                         } else if resp.clicked() {
-                            self.selected_plugin = Some(idx);
+                            self.selected_plugin = Some(plugin.uri.clone());
                         }
                     }
                 });
@@ -652,8 +660,8 @@ impl PluginBrowserDialog {
             ui.separator();
 
             // Plugin info
-            if let Some(idx) = self.selected_plugin {
-                if let Some(plugin) = app.available_plugins.get(idx) {
+            if let Some(uri) = &self.selected_plugin {
+                if let Some(plugin) = app.available_plugins.get(uri) {
                     ui.heading(&plugin.name);
                     ui.separator();
                     ui.label(format!("Backend: {}", if plugin.uri.starts_with("file://") { "CLAP" } else { "LV2" }));
@@ -673,13 +681,13 @@ impl PluginBrowserDialog {
             ui.horizontal(|ui| {
                 let can_add = self.selected_plugin.is_some();
                 if ui.add_enabled(can_add, egui::Button::new("Add to Track")).clicked()
-                    && let Some(idx) = self.selected_plugin
-                        && let Some(plugin) = app.available_plugins.get(idx) {
+                    && let Some(uri) = &self.selected_plugin
+                    && let Some(plugin) = app.available_plugins.get(uri) { 
                             // Warning for MIDI track with effect
                             let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
                             let is_midi = {
                                 let state = app.state.lock().unwrap();
-                                state.tracks.get(track_id).map(|t| t.is_midi).unwrap_or(false)
+                                state.tracks.get(&track_id).map(|t| t.is_midi).unwrap_or(false)
                             };
 
                             let backend = if plugin.uri.starts_with("file://") {
@@ -691,13 +699,21 @@ impl PluginBrowserDialog {
                             if is_midi && !plugin.is_instrument {
                                 app.dialogs.show_message("You are adding an effect plugin to a MIDI track. It will not output audio unless the track is fed with audio. Consider adding it to an audio track or a bus.");
                             }
-
+                            
+                            let track_id = app.selected_track;
+                            
+                            let plugin_idx = {
+                            let state = app.state.lock().unwrap();
+                            state.tracks.get(&track_id).map(|t| t.plugin_chain.len()).unwrap_or(0)
+                            };
                             let _ = app.command_tx.send(AudioCommand::AddPluginUnified {
                                 track_id,
                                 backend,
                                 uri: plugin.uri.clone(),
                                 display_name: plugin.name.clone(),
+                                plugin_idx,
                             });
+                        
                             app.selected_track_for_plugin = None;
                             self.closed = true;
                         }
@@ -1335,7 +1351,7 @@ impl ImportAudioDialog {
                     .map_err(|e| common::audio_import_failed(&path, e))
                     .map(|clip| {
                         let mut state = app.state.lock().unwrap();
-                        if let Some(track) = state.tracks.get_mut(app.selected_track) {
+                        if let Some(track) = state.tracks.get_mut(&app.selected_track) {
                             if !track.is_midi {
                                 track.audio_clips.push(clip);
                                 state.ensure_ids();
@@ -1560,7 +1576,7 @@ impl TrackGroupingDialog {
                     let state = app.state.lock().unwrap();
                     for (idx, track) in state.tracks.iter().enumerate() {
                         let mut is_selected = self.selected_tracks.contains(&idx);
-                        if ui.checkbox(&mut is_selected, &track.name).changed() {
+                        if ui.checkbox(&mut is_selected, &track.1.name).changed() {
                             if is_selected {
                                 self.selected_tracks.push(idx);
                             } else {
@@ -1599,15 +1615,15 @@ impl TrackGroupingDialog {
 
 pub struct TrackRenameDialog {
     closed: bool,
-    track_idx: usize,
+    track_id: u64,
     name: String,
 }
 
 impl TrackRenameDialog {
-    pub fn new(track_idx: usize, current: String) -> Self {
+    pub fn new(track_id: u64, current: String) -> Self {
         Self {
             closed: false,
-            track_idx,
+            track_id,
             name: current,
         }
     }
@@ -1630,7 +1646,7 @@ impl TrackRenameDialog {
                         // Apply
                         {
                             let mut state = app.state.lock().unwrap();
-                            if let Some(t) = state.tracks.get_mut(self.track_idx) {
+                            if let Some(t) = state.tracks.get_mut(&self.track_id) {
                                 t.name = self.name.trim().to_string();
                             }
                         }

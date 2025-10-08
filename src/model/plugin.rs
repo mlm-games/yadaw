@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginDescriptor {
+    pub id: u64,
     pub uri: String,
     pub name: String,
     pub bypass: bool,

@@ -4,7 +4,7 @@ use crate::metering::{MeterData, draw_meter_bar};
 
 #[derive(Clone, Debug, Default)]
 pub struct LevelMeter {
-    data: MeterData,
+    pub data: MeterData,
 }
 
 impl LevelMeter {
