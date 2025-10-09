@@ -71,7 +71,7 @@ impl InputManager {
                     }
                 }
                 GestureAction::LongPress { .. } => {
-                    // Show context menu
+                    // TODO: Show context menu in far future
                 }
                 _ => {} // Pan/Pinch handled separately in views
             }

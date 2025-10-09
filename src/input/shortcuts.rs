@@ -352,6 +352,19 @@ impl ShortcutRegistry {
         // Edit (Cmd/Ctrl)
         reg.bind(Undo, Keybind::cmd(Z));
         reg.bind(Redo, Keybind::cmd_shift(Z));
+        #[cfg(not(target_os = "macos"))]
+        {
+            reg.bind(
+                Redo,
+                Keybind {
+                    modifiers: ModifierSet {
+                        command: true,
+                        ..Default::default()
+                    },
+                    key: Y,
+                },
+            );
+        }
         reg.bind(Cut, Keybind::cmd(X));
         reg.bind(Copy, Keybind::cmd(C));
         reg.bind(Paste, Keybind::cmd(V));
