@@ -401,7 +401,7 @@ impl DialogManager {
         }
 
         if let Some(editor) = &mut self.shortcuts_editor {
-            editor.ui(ctx, &mut app.input_manager);
+            editor.ui(ctx, &mut app.input_manager);           
             if !editor.open {
                 self.shortcuts_editor = None;
             }
@@ -466,7 +466,9 @@ impl DialogManager {
     }
 
     pub fn show_shortcuts_editor(&mut self) {
-        self.shortcuts_editor = Some(ShortcutsEditorDialog::new());
+        let mut editor = ShortcutsEditorDialog::new();
+        editor.open = true;
+        self.shortcuts_editor = Some(editor);
     }
 }
 
@@ -1165,7 +1167,7 @@ impl ShortcutsEditorDialog {
         }
     }
     
-    pub fn show(&mut self, input_mgr: &mut InputManager) {
+    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
         self.open = true;
     }
     
