@@ -6,7 +6,6 @@ use crate::{constants::DEFAULT_MIN_PROJECT_BEATS, messages::AudioCommand};
 pub struct MenuBar {
     show_about: bool,
     show_preferences: bool,
-    show_keyboard_shortcuts: bool,
 }
 
 impl MenuBar {
@@ -14,7 +13,6 @@ impl MenuBar {
         Self {
             show_about: false,
             show_preferences: false,
-            show_keyboard_shortcuts: false,
         }
     }
 
@@ -637,19 +635,6 @@ impl MenuBar {
                 });
             self.show_preferences = show_preferences;
         }
-
-        // Keyboard shortcuts dialog
-        if self.show_keyboard_shortcuts {
-            let mut show_keyboard_shortcuts = true;
-            egui::Window::new("Keyboard Shortcuts")
-                .open(&mut show_keyboard_shortcuts)
-                .resizable(true)
-                .default_size(egui::vec2(400.0, 500.0))
-                .show(ctx, |ui| {
-                    draw_keyboard_shortcuts_static(ui);
-                });
-            self.show_keyboard_shortcuts = show_keyboard_shortcuts;
-        }
     }
 }
 
@@ -689,41 +674,6 @@ fn draw_preferences_static(ui: &mut egui::Ui, config: &crate::config::Config) {
                 // Apply settings
             }
         });
-    });
-}
-
-fn draw_keyboard_shortcuts_static(ui: &mut egui::Ui) {
-    //TODO: use the input module
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.heading("Transport");
-        ui.label("Space - Play/Stop");
-        ui.label("R - Record");
-        ui.label("Home - Go to Start");
-
-        ui.separator();
-
-        ui.heading("Editing");
-        ui.label("Ctrl+Z - Undo");
-        ui.label("Ctrl+Shift+Z - Redo");
-        ui.label("Ctrl+X - Cut");
-        ui.label("Ctrl+C - Copy");
-        ui.label("Ctrl+V - Paste");
-        ui.label("Delete - Delete Selected");
-
-        ui.separator();
-
-        ui.heading("File");
-        ui.label("Ctrl+N - New Project");
-        ui.label("Ctrl+O - Open Project");
-        ui.label("Ctrl+S - Save Project");
-        ui.label("Ctrl+Shift+S - Save As");
-
-        ui.separator();
-
-        ui.heading("View");
-        ui.label("Ctrl++ - Zoom In");
-        ui.label("Ctrl+- - Zoom Out");
-        ui.label("Ctrl+M - Toggle Mixer");
     });
 }
 
