@@ -11,6 +11,7 @@ pub mod constants;
 pub mod edit_actions;
 pub mod entry;
 pub mod error;
+pub mod input;
 pub mod level_meter;
 pub mod lv2_plugin_host;
 pub mod messages;

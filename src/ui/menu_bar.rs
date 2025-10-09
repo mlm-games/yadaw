@@ -593,7 +593,7 @@ impl MenuBar {
             }
 
             if ui.button("Keyboard Shortcuts").clicked() {
-                self.show_keyboard_shortcuts = true;
+                app.dialogs.show_shortcuts_editor();
                 ui.close();
             }
 
@@ -661,6 +661,7 @@ fn draw_preferences_static(ui: &mut egui::Ui, config: &crate::config::Config) {
             ui.selectable_label(true, "Audio"); // TODO for later
             ui.selectable_label(false, "MIDI");
             ui.selectable_label(false, "Appearance");
+            ui.selectable_label(false, "Shortcuts");
             ui.selectable_label(false, "Behavior");
             ui.selectable_label(false, "Plugins");
             ui.selectable_label(false, "File Paths");
@@ -692,6 +693,7 @@ fn draw_preferences_static(ui: &mut egui::Ui, config: &crate::config::Config) {
 }
 
 fn draw_keyboard_shortcuts_static(ui: &mut egui::Ui) {
+    //TODO: use the input module
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.heading("Transport");
         ui.label("Space - Play/Stop");

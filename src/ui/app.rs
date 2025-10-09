@@ -4,9 +4,12 @@ use crate::config::Config;
 use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
+use crate::input::InputManager;
+use crate::input::actions::{ActionContext, AppAction};
 use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::{AudioClip, MidiNote, Track};
+use crate::paths::config_path;
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project::{AppState, AppStateSnapshot};
 use crate::project_manager::ProjectManager;
@@ -14,6 +17,7 @@ use crate::project_manager::ProjectManager;
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
 use crossbeam_channel::{Receiver, Sender};
+use dirs::config_dir;
 use eframe::egui;
 use egui::KeyboardShortcut;
 use egui::ahash::HashMap;
@@ -75,6 +79,8 @@ pub struct YadawApp {
     // Touch support
     touch_state: TouchState,
 
+    pub input_manager: InputManager,
+
     pub(super) note_clipboard: Option<Vec<MidiNote>>,
     pub(super) active_edit_target: ActiveEditTarget,
     pub(crate) last_real_metrics_at: Option<Instant>,
@@ -124,6 +130,13 @@ impl YadawApp {
             .map(|p| (p.uri.clone(), p))
             .collect();
 
+        let mut input_mgr = InputManager::new();
+
+        // Load custom shortcuts if they exist
+        if let Some(shortcuts_path) = config_dir().map(|d| d.join("shortcuts.json")) {
+            let _ = input_mgr.load_shortcuts(&shortcuts_path);
+        }
+
         Self {
             transport_ui: super::transport::TransportUI::new(transport),
             tracks_ui: super::tracks::TracksPanel::new(),
@@ -167,6 +180,8 @@ impl YadawApp {
                 gesture_start_time: None,
                 tap_times: Vec::new(),
             },
+
+            input_manager: input_mgr,
             last_real_metrics_at: None,
         }
     }
@@ -1046,187 +1061,395 @@ impl YadawApp {
             });
     }
 
-    fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
-        // Respect focused text inputs for the rest
-        if ctx.wants_keyboard_input() {
-            return;
-        }
+    fn handle_action(&mut self, action: AppAction) {
+        use AppAction::*;
 
-        // Space is truly global.
-        let sc_space = KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Space);
-        if ctx.input_mut(|i| i.consume_shortcut(&sc_space)) {
-            self.transport_ui.toggle_playback(&self.command_tx);
-        }
-
-        ctx.input_mut(|i| {
-            let cmd = egui::Modifiers::COMMAND; // Ctrl on Linux/Windows
-
-            // File shortcuts
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::N)) {
-                self.new_project();
+        match action {
+            // ========== TRANSPORT ==========
+            PlayPause => {
+                self.transport_ui.toggle_playback(&self.command_tx);
             }
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::O)) {
-                self.dialogs.show_open_dialog();
-            }
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::S)) {
-                if i.modifiers.shift {
-                    self.dialogs.show_save_dialog();
-                } else {
-                    self.save_project();
+
+            Stop => {
+                if let Some(transport) = &self.transport_ui.transport {
+                    transport.stop();
                 }
             }
 
-            // Edit shortcuts (clip-level)
-            if i.modifiers.shift
-                && i.consume_shortcut(&KeyboardShortcut::new(
-                    cmd.plus(egui::Modifiers::SHIFT),
-                    egui::Key::Z,
-                ))
-            {
-                self.redo();
-            } else if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::Z)) {
-                self.undo();
-            }
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::X)) {
-                self.cut_selected();
-            }
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::C)) {
-                self.copy_selected();
-            }
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::V)) {
-                self.paste_at_playhead();
-            }
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::A)) {
-                self.select_all();
+            Record => {
+                if let Some(transport) = &self.transport_ui.transport {
+                    transport.record();
+                }
             }
 
-            // Transport / loop
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::Home)
-                && let Some(transport) = &mut self.transport_ui.transport
-            {
-                transport.set_position(0.0);
+            GoToStart => {
+                if let Some(transport) = &self.transport_ui.transport {
+                    transport.set_position(0.0);
+                }
             }
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::L) && !i.modifiers.ctrl {
-                // Toggle loop
+
+            Rewind => {
+                if let Some(transport) = &self.transport_ui.transport {
+                    transport.rewind_beats(4.0);
+                }
+            }
+
+            FastForward => {
+                if let Some(transport) = &self.transport_ui.transport {
+                    transport.fast_forward(4.0);
+                }
+            }
+
+            // ========== EDIT ==========
+            Undo => self.undo(),
+            Redo => self.redo(),
+
+            Cut => {
+                if self.is_selected_track_midi() {
+                    // Piano roll cut
+                    let clipboard = self.piano_roll_view.cut_selected_notes(
+                        &self.state,
+                        self.selected_track,
+                        &self.command_tx,
+                    );
+                    if let Some(notes) = clipboard {
+                        self.note_clipboard = Some(notes);
+                        self.push_undo();
+                    }
+                } else {
+                    // Timeline cut
+                    self.cut_selected();
+                }
+            }
+
+            Copy => {
+                if self.is_selected_track_midi() {
+                    // Piano roll copy
+                    let clipboard = self
+                        .piano_roll_view
+                        .copy_selected_notes(&self.state, self.selected_track);
+                    if let Some(notes) = clipboard {
+                        self.note_clipboard = Some(notes);
+                    }
+                } else {
+                    // Timeline copy
+                    self.copy_selected();
+                }
+            }
+
+            Paste => {
+                if self.is_selected_track_midi() {
+                    // Piano roll paste
+                    if let Some(ref clipboard) = self.note_clipboard.clone() {
+                        self.piano_roll_view.paste_notes(
+                            &self.state,
+                            self.selected_track,
+                            &self.audio_state,
+                            &self.command_tx,
+                            clipboard,
+                        );
+                        self.push_undo();
+                    }
+                } else {
+                    // Timeline paste
+                    self.paste_at_playhead();
+                }
+            }
+
+            Delete => {
+                if self.is_selected_track_midi() {
+                    // Delete notes
+                    if self.piano_roll_view.delete_selected_notes(
+                        &self.state,
+                        self.selected_track,
+                        &self.command_tx,
+                    ) {
+                        self.push_undo();
+                    }
+                } else {
+                    // Delete clips
+                    self.delete_selected();
+                }
+            }
+
+            SelectAll => {
+                if self.is_selected_track_midi() {
+                    self.piano_roll_view
+                        .select_all_notes(&self.state, self.selected_track);
+                } else {
+                    self.select_all();
+                }
+            }
+
+            DeselectAll => {
+                if self.is_selected_track_midi() {
+                    self.piano_roll_view.piano_roll.selected_note_ids.clear();
+                    self.piano_roll_view
+                        .piano_roll
+                        .temp_selected_indices
+                        .clear();
+                } else {
+                    self.deselect_all();
+                }
+            }
+
+            Duplicate => {
+                if self.is_selected_track_midi() {
+                    // Duplicate notes (handled via copy+paste)
+                    if let Some(clipboard) = self
+                        .piano_roll_view
+                        .copy_selected_notes(&self.state, self.selected_track)
+                    {
+                        self.piano_roll_view.paste_notes(
+                            &self.state,
+                            self.selected_track,
+                            &self.audio_state,
+                            &self.command_tx,
+                            &clipboard,
+                        );
+                        self.push_undo();
+                    }
+                } else {
+                    // Duplicate track
+                    self.duplicate_selected_track();
+                }
+            }
+
+            // ========== FILE ==========
+            NewProject => self.new_project(),
+            OpenProject => self.dialogs.show_open_dialog(),
+            SaveProject => self.save_project(),
+            SaveProjectAs => self.dialogs.show_save_dialog(),
+            ImportAudio => self.import_audio_dialog(),
+            ExportAudio => self.export_audio_dialog(),
+
+            // ========== VIEW ==========
+            ZoomIn => {
+                if self.is_selected_track_midi() {
+                    self.piano_roll_view.piano_roll.zoom_x =
+                        (self.piano_roll_view.piano_roll.zoom_x * 1.25).min(500.0);
+                } else {
+                    self.timeline_ui.zoom_x = (self.timeline_ui.zoom_x * 1.25).min(500.0);
+                }
+            }
+
+            ZoomOut => {
+                if self.is_selected_track_midi() {
+                    self.piano_roll_view.piano_roll.zoom_x =
+                        (self.piano_roll_view.piano_roll.zoom_x * 0.8).max(10.0);
+                } else {
+                    self.timeline_ui.zoom_x = (self.timeline_ui.zoom_x * 0.8).max(10.0);
+                }
+            }
+
+            ZoomToFit => self.zoom_to_fit(),
+            ToggleMixer => self.mixer_ui.toggle_visibility(),
+            TogglePianoRoll => self.switch_to_piano_roll(),
+            ToggleTimeline => self.switch_to_timeline(),
+
+            // ========== LOOP ==========
+            ToggleLoop => {
                 let enabled = !self.audio_state.loop_enabled.load(Ordering::Relaxed);
                 self.audio_state
                     .loop_enabled
                     .store(enabled, Ordering::Relaxed);
                 let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(enabled));
             }
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::L)) {
-                // Set loop to selection
-                self.set_loop_to_selection();
-            }
-            if i.consume_key(egui::Modifiers::SHIFT, egui::Key::L) {
-                // Clear loop
+
+            SetLoopToSelection => self.set_loop_to_selection(),
+
+            ClearLoop => {
                 self.audio_state
                     .loop_enabled
                     .store(false, Ordering::Relaxed);
                 let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(false));
             }
 
-            // Delete clips
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
-                && !self.selected_clips.is_empty()
-            {
-                self.delete_selected();
-            }
+            // ========== PIANO ROLL ACTIONS ==========
+            NudgeLeft => self.nudge_notes(-1.0, false, false),
+            NudgeRight => self.nudge_notes(1.0, false, false),
+            NudgeLeftFine => self.nudge_notes(-1.0, true, false),
+            NudgeRightFine => self.nudge_notes(1.0, true, false),
+            NudgeLeftCoarse => self.nudge_notes(-1.0, false, true),
+            NudgeRightCoarse => self.nudge_notes(1.0, false, true),
 
-            // View
-            if i.consume_shortcut(&KeyboardShortcut::new(cmd, egui::Key::M)) {
-                self.mixer_ui.toggle_visibility();
+            TransposeUp => self.transpose_selected_notes(1),
+            TransposeDown => self.transpose_selected_notes(-1),
+            TransposeOctaveUp => self.transpose_selected_notes(12),
+            TransposeOctaveDown => self.transpose_selected_notes(-12),
+
+            VelocityUp => self.adjust_velocity(10),
+            VelocityDown => self.adjust_velocity(-10),
+
+            // ========== TIMELINE ACTIONS ==========
+            SplitAtPlayhead => self.split_selected_at_playhead(),
+            Normalize => self.normalize_selected(),
+            Reverse => self.reverse_selected(),
+            FadeIn => self.apply_fade_in(),
+            FadeOut => self.apply_fade_out(),
+
+            // ========== DIALOGS ==========
+            QuantizeDialog => self.dialogs.show_quantize_dialog(),
+            TransposeDialog => self.dialogs.show_transpose_dialog(),
+            HumanizeDialog => self.dialogs.show_humanize_dialog(),
+
+            // ========== OTHER ==========
+            Escape => {
+                // Close dialogs or deselect
+                self.deselect_all();
             }
-        });
+        }
     }
 
-    fn handle_touch_gestures(&mut self, ctx: &egui::Context) {
-        ctx.input(|i| {
-            // Handle touch events
-            if let Some(touch) = i.events.iter().find_map(|e| {
-                if let egui::Event::Touch { .. } = e {
-                    Some(e)
-                } else {
-                    None
-                }
-            }) && let egui::Event::Touch {
-                device_id: _,
-                id: _,
-                phase,
-                pos,
-                force: _,
-            } = touch
-            {
-                match phase {
-                    egui::TouchPhase::Start => {
-                        self.touch_state.last_touch_pos = Some(*pos);
-                        self.touch_state.gesture_start_time = Some(Instant::now());
-                    }
-                    egui::TouchPhase::Move => {
-                        if let Some(last_pos) = self.touch_state.last_touch_pos {
-                            let delta = *pos - last_pos;
+    fn nudge_notes(&mut self, direction: f32, fine: bool, coarse: bool) {
+        let clip_id = match self.piano_roll_view.selected_clip {
+            Some(id) => id,
+            None => return,
+        };
 
-                            // Pan gesture
-                            if delta.length() > 5.0 {
-                                self.timeline_ui.scroll_x -= delta.x;
-                                self.timeline_ui.scroll_y -= delta.y;
-                            }
+        let grid = self.piano_roll_view.piano_roll.grid_snap as f64;
+        let delta = if fine {
+            (grid / 4.0).max(1e-6) * direction as f64
+        } else if coarse {
+            1.0 * direction as f64
+        } else {
+            grid * direction as f64
+        };
 
-                            self.touch_state.last_touch_pos = Some(*pos);
+        let mut state = self.state.lock().unwrap();
+        if let Some((track, loc)) = state.find_clip_mut(clip_id) {
+            if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let Some(clip) = track.midi_clips.get_mut(idx) {
+                    let sel_idx = self.piano_roll_view.piano_roll.selected_indices(clip);
+
+                    for &idx in &sel_idx {
+                        if let Some(note) = clip.notes.get_mut(idx) {
+                            let new_start = (note.start + delta).max(0.0);
+                            let max_start = (clip.length_beats - note.duration).max(0.0);
+                            note.start = new_start.min(max_start);
                         }
-                    }
-                    egui::TouchPhase::End => {
-                        // Check for tap vs long press
-                        if let Some(start_time) = self.touch_state.gesture_start_time {
-                            let duration = Instant::now().duration_since(start_time);
-
-                            if duration.as_millis() < 200 {
-                                // Tap - treat as click
-                            } else {
-                                // Long press - show context menu
-                            }
-                        }
-
-                        self.touch_state.last_touch_pos = None;
-                        self.touch_state.gesture_start_time = None;
-                    }
-                    egui::TouchPhase::Cancel => {
-                        self.touch_state.last_touch_pos = None;
-                        self.touch_state.gesture_start_time = None;
                     }
                 }
             }
+        }
+        drop(state);
 
-            // Handle multi-touch (pinch zoom)
-            let touches: Vec<_> = i
-                .events
-                .iter()
-                .filter_map(|e| {
-                    if let egui::Event::Touch { pos, .. } = e {
-                        Some(*pos)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if touches.len() == 2 {
-                let distance = (touches[0] - touches[1]).length();
-
-                if let Some(last_distance) = self.touch_state.pinch_distance {
-                    let scale = distance / last_distance;
-
-                    // Apply zoom
-                    self.timeline_ui.zoom_x *= scale;
-                    self.timeline_ui.zoom_x = self.timeline_ui.zoom_x.clamp(10.0, 500.0);
-                }
-
-                self.touch_state.pinch_distance = Some(distance);
-            } else {
-                self.touch_state.pinch_distance = None;
-            }
-        });
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
+
+    fn adjust_velocity(&mut self, delta: i8) {
+        let clip_id = match self.piano_roll_view.selected_clip {
+            Some(id) => id,
+            None => return,
+        };
+
+        let mut state = self.state.lock().unwrap();
+        if let Some((track, loc)) = state.find_clip_mut(clip_id) {
+            if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let Some(clip) = track.midi_clips.get_mut(idx) {
+                    let sel_idx = self.piano_roll_view.piano_roll.selected_indices(clip);
+
+                    for &idx in &sel_idx {
+                        if let Some(note) = clip.notes.get_mut(idx) {
+                            let new_vel = (note.velocity as i16 + delta as i16).clamp(1, 127);
+                            note.velocity = new_vel as u8;
+                        }
+                    }
+                }
+            }
+        }
+        drop(state);
+
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+    }
+
+    // fn handle_touch_gestures(&mut self, ctx: &egui::Context) {
+    //     ctx.input(|i| {
+    //         // Handle touch events
+    //         if let Some(touch) = i.events.iter().find_map(|e| {
+    //             if let egui::Event::Touch { .. } = e {
+    //                 Some(e)
+    //             } else {
+    //                 None
+    //             }
+    //         }) && let egui::Event::Touch {
+    //             device_id: _,
+    //             id: _,
+    //             phase,
+    //             pos,
+    //             force: _,
+    //         } = touch
+    //         {
+    //             match phase {
+    //                 egui::TouchPhase::Start => {
+    //                     self.touch_state.last_touch_pos = Some(*pos);
+    //                     self.touch_state.gesture_start_time = Some(Instant::now());
+    //                 }
+    //                 egui::TouchPhase::Move => {
+    //                     if let Some(last_pos) = self.touch_state.last_touch_pos {
+    //                         let delta = *pos - last_pos;
+
+    //                         // Pan gesture
+    //                         if delta.length() > 5.0 {
+    //                             self.timeline_ui.scroll_x -= delta.x;
+    //                             self.timeline_ui.scroll_y -= delta.y;
+    //                         }
+
+    //                         self.touch_state.last_touch_pos = Some(*pos);
+    //                     }
+    //                 }
+    //                 egui::TouchPhase::End => {
+    //                     // Check for tap vs long press
+    //                     if let Some(start_time) = self.touch_state.gesture_start_time {
+    //                         let duration = Instant::now().duration_since(start_time);
+
+    //                         if duration.as_millis() < 200 {
+    //                             // Tap - treat as click
+    //                         } else {
+    //                             // Long press - show context menu
+    //                         }
+    //                     }
+
+    //                     self.touch_state.last_touch_pos = None;
+    //                     self.touch_state.gesture_start_time = None;
+    //                 }
+    //                 egui::TouchPhase::Cancel => {
+    //                     self.touch_state.last_touch_pos = None;
+    //                     self.touch_state.gesture_start_time = None;
+    //                 }
+    //             }
+    //         }
+
+    //         // Handle multi-touch (pinch zoom)
+    //         let touches: Vec<_> = i
+    //             .events
+    //             .iter()
+    //             .filter_map(|e| {
+    //                 if let egui::Event::Touch { pos, .. } = e {
+    //                     Some(*pos)
+    //                 } else {
+    //                     None
+    //                 }
+    //             })
+    //             .collect();
+
+    //         if touches.len() == 2 {
+    //             let distance = (touches[0] - touches[1]).length();
+
+    //             if let Some(last_distance) = self.touch_state.pinch_distance {
+    //                 let scale = distance / last_distance;
+
+    //                 // Apply zoom
+    //                 self.timeline_ui.zoom_x *= scale;
+    //                 self.timeline_ui.zoom_x = self.timeline_ui.zoom_x.clamp(10.0, 500.0);
+    //             }
+
+    //             self.touch_state.pinch_distance = Some(distance);
+    //         } else {
+    //             self.touch_state.pinch_distance = None;
+    //         }
+    //     });
+    // }
 
     pub fn switch_to_piano_roll(&mut self) {
         let midi_id = {
@@ -1379,8 +1602,22 @@ impl eframe::App for YadawApp {
             self.process_ui_update(update, ctx);
         }
 
-        // Handle touch gestures
-        self.handle_touch_gestures(ctx);
+        if self.is_selected_track_midi() {
+            self.input_manager.set_context(ActionContext::PianoRoll);
+        } else {
+            self.input_manager.set_context(ActionContext::Timeline);
+        }
+
+        // Poll actions
+        let actions = self.input_manager.poll_actions(ctx);
+
+        // Dispatch actions
+        for action in actions {
+            self.handle_action(action);
+        }
+
+        // // Handle touch gestures
+        // self.handle_touch_gestures(ctx);
 
         // Draw menu bar
         let mut menu_bar = std::mem::take(&mut self.menu_bar);
@@ -1400,12 +1637,20 @@ impl eframe::App for YadawApp {
 
         self.update_performance_metrics(); //TODO: maybe reduce calls for performance (irony? or it's just overexaggerated)
 
-        // Handle global shortcuts
-        self.handle_global_shortcuts(ctx);
+        // // Handle global shortcuts
+        // self.handle_global_shortcuts(ctx);
 
         // Request repaint if playing
         if self.audio_state.playing.load(Ordering::Relaxed) {
             ctx.request_repaint();
+        }
+    }
+}
+
+impl Drop for YadawApp {
+    fn drop(&mut self) {
+        if let Some(shortcuts_path) = config_path().parent().map(|p| p.join("shortcuts.json")) {
+            let _ = self.input_manager.save_shortcuts(&shortcuts_path);
         }
     }
 }

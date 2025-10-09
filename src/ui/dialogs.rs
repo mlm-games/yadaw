@@ -2,6 +2,9 @@ use egui_file_dialog::FileDialog;
 
 use super::*;
 use crate::error::{ResultExt, UserNotification, common};
+use crate::input::actions::{ActionContext, AppAction};
+use crate::input::shortcuts::ShortcutRegistry;
+use crate::input::InputManager;
 use crate::messages::AudioCommand;
 use crate::model::plugin_api::BackendKind;
 use crate::plugin::categorize_unified_plugin;
@@ -240,6 +243,7 @@ pub struct DialogManager {
     pub track_grouping: Option<TrackGroupingDialog>,
     pub track_rename: Option<TrackRenameDialog>,
     pub import_audio: Option<ImportAudioDialog>,
+    pub shortcuts_editor: Option<ShortcutsEditorDialog>,
 }
 
 impl DialogManager {
@@ -263,6 +267,7 @@ impl DialogManager {
             track_grouping: None,
             track_rename: None,
             import_audio: None,
+            shortcuts_editor: None,
         }
     }
 
@@ -394,6 +399,13 @@ impl DialogManager {
         {
             self.import_audio = None;
         }
+
+        if let Some(editor) = &mut self.shortcuts_editor {
+            editor.ui(ctx, &mut app.input_manager);
+            if !editor.open {
+                self.shortcuts_editor = None;
+            }
+        }
     }
 
     pub fn show_project_settings(&mut self) {
@@ -451,6 +463,10 @@ impl DialogManager {
 
     pub fn show_rename_track(&mut self, track_id: u64, current: String) {
         self.track_rename = Some(TrackRenameDialog::new(track_id, current));
+    }
+
+    pub fn show_shortcuts_editor(&mut self) {
+        self.shortcuts_editor = Some(ShortcutsEditorDialog::new());
     }
 }
 
@@ -1125,6 +1141,259 @@ impl ThemeEditorDialog {
 
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+}
+
+use crate::input::shortcuts::{Keybind, KeyCode, ModifierSet};
+
+pub struct ShortcutsEditorDialog {
+    open: bool,
+    capturing: Option<AppAction>,
+    capture_buffer: Option<Keybind>,
+    filter_context: Option<ActionContext>,
+    search_query: String,
+}
+
+impl ShortcutsEditorDialog {
+    pub fn new() -> Self {
+        Self {
+            open: false,
+            capturing: None,
+            capture_buffer: None,
+            filter_context: None,
+            search_query: String::new(),
+        }
+    }
+    
+    pub fn show(&mut self, input_mgr: &mut InputManager) {
+        self.open = true;
+    }
+    
+    pub fn ui(&mut self, ctx: &egui::Context, input_mgr: &mut InputManager) {
+        if !self.open {
+            return;
+        }
+        
+        let mut open = self.open;
+        egui::Window::new("Keyboard Shortcuts")
+            .open(&mut open)
+            .default_size(egui::vec2(800.0, 600.0))
+            .resizable(true)
+            .show(ctx, |ui| {
+                self.draw_content(ui, input_mgr);
+            });
+        
+        self.open = open;
+    }
+    
+    fn draw_content(&mut self, ui: &mut egui::Ui, input_mgr: &mut InputManager) {
+        // Toolbar
+        ui.horizontal(|ui| {
+            ui.label("Filter:");
+            egui::ComboBox::from_id_salt("context_filter")
+                .selected_text(match self.filter_context {
+                    None => "All Contexts",
+                    Some(ActionContext::Global) => "Global",
+                    Some(ActionContext::PianoRoll) => "Piano Roll",
+                    Some(ActionContext::Timeline) => "Timeline",
+                    Some(ActionContext::Mixer) => "Mixer",
+                    _ => "Other",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.filter_context, None, "All Contexts");
+                    ui.selectable_value(&mut self.filter_context, Some(ActionContext::Global), "Global");
+                    ui.selectable_value(&mut self.filter_context, Some(ActionContext::PianoRoll), "Piano Roll");
+                    ui.selectable_value(&mut self.filter_context, Some(ActionContext::Timeline), "Timeline");
+                    ui.selectable_value(&mut self.filter_context, Some(ActionContext::Mixer), "Mixer");
+                });
+            
+            ui.separator();
+            ui.label("Search:");
+            ui.text_edit_singleline(&mut self.search_query);
+        });
+        
+        ui.separator();
+        
+        // Actions list
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            // Group by category
+            let mut categories: std::collections::HashMap<&str, Vec<AppAction>> = std::collections::HashMap::new();
+            
+            for &action in AppAction::all() {
+                // Filter by context
+                if let Some(filter_ctx) = self.filter_context {
+                    if !action.contexts().contains(&filter_ctx) && !action.contexts().contains(&ActionContext::Global) {
+                        continue;
+                    }
+                }
+                
+                // Filter by search
+                if !self.search_query.is_empty() {
+                    let query = self.search_query.to_lowercase();
+                    if !action.name().to_lowercase().contains(&query) {
+                        continue;
+                    }
+                }
+                
+                categories.entry(action.category()).or_default().push(action);
+            }
+            
+            let mut sorted_categories: Vec<_> = categories.into_iter().collect();
+            sorted_categories.sort_by_key(|(cat, _)| *cat);
+            
+            for (category, mut actions) in sorted_categories {
+                actions.sort_by_key(|a| a.name());
+                
+                ui.collapsing(category, |ui| {
+                    for action in actions {
+                        self.draw_action_row(ui, action, input_mgr);
+                    }
+                });
+            }
+        });
+        
+        ui.separator();
+        
+        // Footer buttons
+        ui.horizontal(|ui| {
+            if ui.button("Reset to Defaults").clicked() {
+                *input_mgr.shortcuts_mut() = crate::input::shortcuts::ShortcutRegistry::default();
+            }
+            
+            if ui.button("Import...").clicked() {
+                // TODO: File dialog
+            }
+            
+            if ui.button("Export...").clicked() {
+                // TODO: File dialog
+            }
+            
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Close").clicked() {
+                    self.open = false;
+                }
+            });
+        });
+    }
+    
+    fn draw_action_row(&mut self, ui: &mut egui::Ui, action: AppAction, input_mgr: &mut InputManager) {
+        ui.horizontal(|ui| {
+            ui.set_min_width(ui.available_width());
+            
+            // Action name
+            ui.label(action.name());
+            
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Add binding button
+                if ui.small_button("➕").on_hover_text("Add Keybind").clicked() {
+                    self.capturing = Some(action);
+                    self.capture_buffer = None;
+                }
+                
+                // Show existing bindings
+                let bindings = input_mgr.shortcuts().get_bindings(action).to_vec();
+                
+                for (i, bind) in bindings.iter().enumerate().rev() {
+                    // Remove button
+                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                        input_mgr.shortcuts_mut().unbind(bind);
+                    }
+                    
+                    // Keybind label
+                    ui.label(bind.to_string());
+                    
+                    if i > 0 {
+                        ui.label("/");
+                    }
+                }
+                
+                if bindings.is_empty() {
+                    ui.label(egui::RichText::new("(none)").weak());
+                }
+            });
+        });
+        
+        // Capture dialog
+        if self.capturing == Some(action) {
+            self.draw_capture_popup(ui.ctx(), action, input_mgr);
+        }
+    }
+    
+    fn draw_capture_popup(&mut self, ctx: &egui::Context, action: AppAction, input_mgr: &mut InputManager) {
+        if self.capture_buffer.is_none() {
+            let captured = ctx.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::Key { key, pressed: true, modifiers, .. } = event {
+                        if *key == egui::Key::Escape {
+                            return Some(None); // cancel
+                        }
+                        if let Ok(keycode) = KeyCode::try_from(*key) {
+                            return Some(Some(Keybind {
+                                modifiers: (*modifiers).into(),
+                                key: keycode,
+                            }));
+                        }
+                    }
+                }
+                None
+            });
+
+            if let Some(maybe_bind) = captured {
+                if let Some(bind) = maybe_bind {
+                    self.capture_buffer = Some(bind);
+                } else {
+                    self.capturing = None;
+                    self.capture_buffer = None;
+                    return;
+                }
+            }
+        }
+
+        
+        let captured_bind_opt = self.capture_buffer;
+
+        egui::Window::new("Capture Keybind")
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("Press keys for: {}", action.name()));
+                ui.label(egui::RichText::new("(ESC to cancel)").weak());
+
+                if let Some(bind) = captured_bind_opt {
+                    ui.separator();
+                    ui.label(format!("Captured: {}", bind.to_string()));
+
+                    if let Some(conflict) = input_mgr.shortcuts().has_conflict(&bind, Some(action)) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 100, 100),
+                            format!("⚠ Already used by: {}", conflict.name())
+                        );
+                    }
+
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Assign").clicked() {
+                            input_mgr.shortcuts_mut().bind(action, bind);
+                            self.capturing = None;
+                            self.capture_buffer = None;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.capturing = None;
+                            self.capture_buffer = None;
+                        }
+                    });
+                } else {
+                    ui.label("Waiting for key press...");
+                }
+            });
+    }
+}
+
+impl Default for ShortcutsEditorDialog {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
