@@ -398,22 +398,39 @@ impl AudioEngine {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.gain = vol;
                 }
+                let mut tracks_guard = self.tracks.write();
+                if let Some(track) = tracks_guard.iter_mut().find(|t| t.track_id == track_id) {
+                    track.volume = vol;
+                }
             }
             RealtimeCommand::UpdateTrackPan(track_id, pan) => {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.pan = pan;
+                }
+                let mut tracks_guard = self.tracks.write();
+                if let Some(track) = tracks_guard.iter_mut().find(|t| t.track_id == track_id) {
+                    track.pan = pan;
                 }
             }
             RealtimeCommand::UpdateTrackMute(track_id, mute) => {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.mute = mute;
                 }
+                let mut tracks_guard = self.tracks.write();
+                if let Some(track) = tracks_guard.iter_mut().find(|t| t.track_id == track_id) {
+                    track.muted = mute;
+                }
             }
             RealtimeCommand::UpdateTrackSolo(track_id, solo) => {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.solo = solo;
                 }
+                let mut tracks_guard = self.tracks.write();
+                if let Some(track) = tracks_guard.iter_mut().find(|t| t.track_id == track_id) {
+                    track.solo = solo;
+                }
             }
+
             RealtimeCommand::UpdatePluginBypass(track_id, plugin_id, bypass) => {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     if let Some(plugin) = proc.plugins.get_mut(&plugin_id) {

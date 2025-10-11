@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS, MAGNETIC_SNAP_THRESHOLD};
 use crate::messages::AudioCommand;
-use crate::model::{AudioClip, MidiClip, Track};
+use crate::model::{AudioClip, AutomationTarget, MidiClip, Track};
 use crate::project::ClipLocation;
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
 use egui::scroll_area::ScrollSource;
@@ -992,12 +992,10 @@ impl TimelineView {
             let label_w = 80.0_f32.min(track_rect.width() * 0.25);
             let label_rect = egui::Rect::from_min_size(lane_rect.min, egui::vec2(label_w, h));
             let lane_name = match &track.automation_lanes[lane_idx].parameter {
-                crate::model::automation::AutomationTarget::TrackVolume => "Volume",
-                crate::model::automation::AutomationTarget::TrackPan => "Pan",
-                crate::model::automation::AutomationTarget::TrackSend(_) => "Send",
-                crate::model::automation::AutomationTarget::PluginParam { param_name, .. } => {
-                    param_name.as_str()
-                }
+                AutomationTarget::TrackVolume => "Volume",
+                AutomationTarget::TrackPan => "Pan",
+                AutomationTarget::TrackSend(_) => "Send",
+                AutomationTarget::PluginParam { param_name, .. } => param_name.as_str(),
             };
             ui.painter()
                 .rect_filled(label_rect, 0.0, egui::Color32::from_gray(28));

@@ -394,75 +394,89 @@ impl YadawApp {
         };
 
         let track_id = self.selected_track;
+        let midi_clipboard = self.midi_clipboard.clone();
+        let audio_clipboard = self.clipboard.clone();
 
-        let mut state = self.state.lock().unwrap();
-        let is_midi_track = state.tracks.get(&track_id).map_or(false, |t| t.is_midi);
+        let mut prepared_midi_clips: Vec<crate::model::clip::MidiClip> = Vec::new();
+        let mut prepared_audio_clips: Vec<crate::model::clip::AudioClip> = Vec::new();
+        let mut required_ids: usize = 0;
+
+        let is_midi_track = self
+            .state
+            .lock()
+            .unwrap()
+            .tracks
+            .get(&track_id)
+            .map_or(false, |t| t.is_midi);
 
         if is_midi_track {
-            if let Some(clips_src) = self.midi_clipboard.clone() {
-                // Prepare all clips with new IDs
-                let mut prepared: Vec<crate::model::clip::MidiClip> =
-                    Vec::with_capacity(clips_src.len());
-                for mut clip in clips_src {
-                    // clip id
-                    clip.id = state.fresh_id();
-                    clip.start_beat = current_beat;
-                    // note ids
-                    for n in &mut clip.notes {
-                        n.id = state.fresh_id();
-                    }
-                    prepared.push(clip);
+            if let Some(clips_src) = midi_clipboard {
+                required_ids += clips_src.len();
+                for clip in &clips_src {
+                    required_ids += clip.notes.len();
                 }
-
-                {
-                    if let Some(track) = state.tracks.get_mut(&track_id) {
-                        track.midi_clips.extend(prepared.iter().cloned());
-                    }
-                }
-
-                for c in &prepared {
-                    state.clips_by_id.insert(
-                        c.id,
-                        crate::project::ClipRef {
-                            track_id,
-                            is_midi: true,
-                        },
-                    );
-                }
+                prepared_midi_clips = clips_src;
             }
         } else {
-            if let Some(clips_src) = self.clipboard.clone() {
-                // Prepare all clips with new IDs first
-                let mut prepared: Vec<crate::model::clip::AudioClip> =
-                    Vec::with_capacity(clips_src.len());
-                for src in clips_src {
-                    let mut c = src.clone();
-                    c.id = state.fresh_id();
-                    c.start_beat = current_beat;
-                    prepared.push(c);
-                }
+            if let Some(clips_src) = audio_clipboard {
+                required_ids += clips_src.len();
+                prepared_audio_clips = clips_src;
+            }
+        }
 
-                // Push to track first (limit borrow to this scope)
-                {
-                    if let Some(track) = state.tracks.get_mut(&track_id) {
-                        track.audio_clips.extend(prepared.iter().cloned());
+        if required_ids == 0 {
+            return; // Nothing to paste
+        }
+
+        let new_ids: Vec<u64> = {
+            let mut state = self.state.lock().unwrap();
+            (0..required_ids).map(|_| state.fresh_id()).collect()
+        };
+        let mut id_iter = new_ids.into_iter();
+
+        for clip in &mut prepared_midi_clips {
+            clip.id = id_iter.next().unwrap();
+            clip.start_beat = current_beat;
+            for n in &mut clip.notes {
+                n.id = id_iter.next().unwrap();
+            }
+        }
+        for clip in &mut prepared_audio_clips {
+            clip.id = id_iter.next().unwrap();
+            clip.start_beat = current_beat;
+        }
+
+        {
+            let mut state = self.state.lock().unwrap();
+            if let Some(track) = state.tracks.get_mut(&track_id) {
+                if is_midi_track {
+                    track.midi_clips.extend(prepared_midi_clips.iter().cloned());
+                    for c in &prepared_midi_clips {
+                        state.clips_by_id.insert(
+                            c.id,
+                            crate::project::ClipRef {
+                                track_id,
+                                is_midi: true,
+                            },
+                        );
                     }
-                }
-
-                // Update global index after releasing the track borrow
-                for c in &prepared {
-                    state.clips_by_id.insert(
-                        c.id,
-                        crate::project::ClipRef {
-                            track_id,
-                            is_midi: false,
-                        },
-                    );
+                } else {
+                    track
+                        .audio_clips
+                        .extend(prepared_audio_clips.iter().cloned());
+                    for c in &prepared_audio_clips {
+                        state.clips_by_id.insert(
+                            c.id,
+                            crate::project::ClipRef {
+                                track_id,
+                                is_midi: false,
+                            },
+                        );
+                    }
                 }
             }
         }
 
-        drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
@@ -1363,94 +1377,6 @@ impl YadawApp {
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
-    // fn handle_touch_gestures(&mut self, ctx: &egui::Context) {
-    //     ctx.input(|i| {
-    //         // Handle touch events
-    //         if let Some(touch) = i.events.iter().find_map(|e| {
-    //             if let egui::Event::Touch { .. } = e {
-    //                 Some(e)
-    //             } else {
-    //                 None
-    //             }
-    //         }) && let egui::Event::Touch {
-    //             device_id: _,
-    //             id: _,
-    //             phase,
-    //             pos,
-    //             force: _,
-    //         } = touch
-    //         {
-    //             match phase {
-    //                 egui::TouchPhase::Start => {
-    //                     self.touch_state.last_touch_pos = Some(*pos);
-    //                     self.touch_state.gesture_start_time = Some(Instant::now());
-    //                 }
-    //                 egui::TouchPhase::Move => {
-    //                     if let Some(last_pos) = self.touch_state.last_touch_pos {
-    //                         let delta = *pos - last_pos;
-
-    //                         // Pan gesture
-    //                         if delta.length() > 5.0 {
-    //                             self.timeline_ui.scroll_x -= delta.x;
-    //                             self.timeline_ui.scroll_y -= delta.y;
-    //                         }
-
-    //                         self.touch_state.last_touch_pos = Some(*pos);
-    //                     }
-    //                 }
-    //                 egui::TouchPhase::End => {
-    //                     // Check for tap vs long press
-    //                     if let Some(start_time) = self.touch_state.gesture_start_time {
-    //                         let duration = Instant::now().duration_since(start_time);
-
-    //                         if duration.as_millis() < 200 {
-    //                             // Tap - treat as click
-    //                         } else {
-    //                             // Long press - show context menu
-    //                         }
-    //                     }
-
-    //                     self.touch_state.last_touch_pos = None;
-    //                     self.touch_state.gesture_start_time = None;
-    //                 }
-    //                 egui::TouchPhase::Cancel => {
-    //                     self.touch_state.last_touch_pos = None;
-    //                     self.touch_state.gesture_start_time = None;
-    //                 }
-    //             }
-    //         }
-
-    //         // Handle multi-touch (pinch zoom)
-    //         let touches: Vec<_> = i
-    //             .events
-    //             .iter()
-    //             .filter_map(|e| {
-    //                 if let egui::Event::Touch { pos, .. } = e {
-    //                     Some(*pos)
-    //                 } else {
-    //                     None
-    //                 }
-    //             })
-    //             .collect();
-
-    //         if touches.len() == 2 {
-    //             let distance = (touches[0] - touches[1]).length();
-
-    //             if let Some(last_distance) = self.touch_state.pinch_distance {
-    //                 let scale = distance / last_distance;
-
-    //                 // Apply zoom
-    //                 self.timeline_ui.zoom_x *= scale;
-    //                 self.timeline_ui.zoom_x = self.timeline_ui.zoom_x.clamp(10.0, 500.0);
-    //             }
-
-    //             self.touch_state.pinch_distance = Some(distance);
-    //         } else {
-    //             self.touch_state.pinch_distance = None;
-    //         }
-    //     });
-    // }
-
     pub fn switch_to_piano_roll(&mut self) {
         let midi_id = {
             let state = self.state.lock().unwrap();
@@ -1615,9 +1541,6 @@ impl eframe::App for YadawApp {
         for action in actions {
             self.handle_action(action);
         }
-
-        // // Handle touch gestures
-        // self.handle_touch_gestures(ctx);
 
         // Draw menu bar
         let mut menu_bar = std::mem::take(&mut self.menu_bar);

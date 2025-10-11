@@ -358,21 +358,17 @@ impl AppState {
             .collect()
     }
 
-    /// Helper: get mutable ordered tracks
-    pub fn ordered_tracks_mut(&mut self) -> Vec<&mut Track> {
-        // This pattern is necessary to work around a limitation in the borrow checker,
-        // which cannot prove that getting mutable references to different keys in a
-        // HashMap is safe within a single iterator chain.
-        let mut tracks = Vec::with_capacity(self.track_order.len());
-        for id in &self.track_order {
-            if let Some(track) = self.tracks.get_mut(id) {
-                tracks.push(track as *mut Track);
+    /// Helper: Apply a mutable operation to each track in order.
+    pub fn for_each_ordered_track_mut<F>(&mut self, mut op: F)
+    where
+        F: FnMut(&mut Track),
+    {
+        let order = self.track_order.clone();
+        for id in order {
+            if let Some(track) = self.tracks.get_mut(&id) {
+                op(track);
             }
         }
-        // The pointers should all be distinct because HashMap keys are unique.
-        // The lifetime of the returned `&mut Track` is tied to `&mut self` from the function
-        // signature, ensuring they don't outlive the `AppState`.
-        unsafe { tracks.into_iter().map(|ptr| &mut *ptr).collect() }
     }
 
     /// Find clip by ID
