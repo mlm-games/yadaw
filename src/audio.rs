@@ -92,6 +92,7 @@ struct TrackProcessor {
     notes_triggered_this_loop: Vec<u8>,
     last_block_end_samples: f64,
     plugin_active_notes: Vec<(u8, u8)>,
+    automation_sample_buffers: HashMap<String, Vec<f32>>,
 }
 
 impl TrackProcessor {
@@ -111,6 +112,7 @@ impl TrackProcessor {
             notes_triggered_this_loop: Vec::new(),
             last_block_end_samples: 0.0,
             plugin_active_notes: Vec::new(),
+            automation_sample_buffers: HashMap::new(),
         };
         s.ensure_channels(2);
         s
@@ -597,12 +599,12 @@ impl AudioEngine {
         let mut frames_processed = 0usize;
 
         while frames_processed < num_frames {
-            let block_start_samp = current_position;
-            let block_start_beat = converter.samples_to_beats(block_start_samp);
+            let block_start_samples = current_position;
+            let block_start_beat = converter.samples_to_beats(block_start_samples);
 
             // How many frames remain before loop end? Round up so 0<remain<1 -> 1 frame.
-            let frames_to_loop_end = if loop_active && block_start_samp < loop_end_samp {
-                let remain = loop_end_samp - block_start_samp;
+            let frames_to_loop_end = if loop_active && block_start_samples < loop_end_samp {
+                let remain = loop_end_samp - block_start_samples;
                 if remain <= 0.0 {
                     0
                 } else {
@@ -652,15 +654,20 @@ impl AudioEngine {
                 }
 
                 if let Some(processor) = self.track_processors.get_mut(&track_id) {
-                    apply_automation(track, processor, block_start_beat);
-
+                    apply_automation_smooth(
+                        track,
+                        processor,
+                        block_start_samples,
+                        frames_to_process,
+                        &converter,
+                    );
                     // Build per-track buffers (post-clip, pre-plugin)
                     if track.is_midi {
                         process_midi_track(
                             track,
                             processor,
                             frames_to_process,
-                            block_start_samp,
+                            block_start_samples,
                             bpm,
                             self.sample_rate,
                             loop_active,
@@ -672,7 +679,7 @@ impl AudioEngine {
                             track,
                             processor,
                             frames_to_process,
-                            block_start_samp,
+                            block_start_samples,
                             bpm,
                             self.sample_rate,
                         );
@@ -689,7 +696,7 @@ impl AudioEngine {
                                     processor,
                                     preview,
                                     frames_to_process,
-                                    block_start_samp,
+                                    block_start_samples,
                                     self.sample_rate,
                                 );
                             }
@@ -719,7 +726,7 @@ impl AudioEngine {
                         track,
                         processor,
                         frames_to_process,
-                        block_start_samp, // pass samples for block start
+                        block_start_samples, // pass samples for block start
                         bpm,
                         self.sample_rate,
                         loop_active,
@@ -1067,9 +1074,9 @@ fn build_block_midi_events(
     frames: usize,
     sample_rate: f64,
     bpm: f32,
-    loop_enabled: bool,
-    loop_start: f64,
-    loop_end: f64,
+    _loop_enabled: bool,
+    _loop_start: f64,
+    _loop_end: f64,
     transport_jump: bool,
     plugin_active_notes: &mut Vec<(u8, u8)>,
 ) -> Vec<(u8, u8, u8, i64)> {
@@ -1078,30 +1085,13 @@ fn build_block_midi_events(
     let block_start_beat = conv.samples_to_beats(block_start_samples);
     let block_end_beat = conv.samples_to_beats(block_start_samples + frames as f64);
 
-    // Effective start/end with loop range (project loop)
-    let eff_start = if loop_enabled && loop_end > loop_start && block_start_beat >= loop_end {
-        let len = loop_end - loop_start;
-        loop_start + ((block_start_beat - loop_start) % len)
-    } else {
-        block_start_beat
-    };
-    let eff_end = if loop_enabled && loop_end > loop_start && block_end_beat >= loop_end {
-        let len = loop_end - loop_start;
-        loop_start + ((block_end_beat - loop_start) % len)
-    } else {
-        block_end_beat
-    };
-
-    // Clip instance window
     let clip_start = clip.start_beat;
     let clip_end = clip.start_beat + clip.length_beats.max(0.0);
 
-    // Fast reject vs block
-    if eff_end <= clip_start || eff_start >= clip_end {
+    if block_end_beat <= clip_start || block_start_beat >= clip_end {
         return Vec::new();
     }
 
-    // Number of repeats that can fit into instance length
     let content_len = clip.content_len_beats.max(0.000001);
     let repeats = if clip.loop_enabled {
         (clip.length_beats / content_len).ceil().max(1.0) as i32
@@ -1109,43 +1099,19 @@ fn build_block_midi_events(
         1
     };
 
-    // Helper: quantize a beat non-destructively
-    let quantize = |beat: f64| -> f64 {
-        if !clip.quantize_enabled || clip.quantize_grid <= 0.0 {
-            return beat;
-        }
-        let g = clip.quantize_grid as f64;
-        let q = (beat / g).round() * g;
+    let mut events: Vec<(u8, u8, u8, i64)> = Vec::with_capacity(64);
 
-        // swing: shift odd subdivisions by +/- swing*0.5*g
-        let mut q_swing = q;
-        if clip.swing.abs() > 0.0001 {
-            let idx = (q_swing / (g * 0.5)).round() as i64;
-            if idx % 2 != 0 {
-                q_swing += (clip.swing as f64) * 0.5 * g;
-            }
-        }
-
-        // strength blend
-        beat + (q_swing - beat) * (clip.quantize_strength as f64).clamp(0.0, 1.0)
-    };
-
-    // Build events
-    let mut events: Vec<(u8, u8, u8, i64)> = Vec::new();
     for k in 0..repeats {
         let rep_off = clip_start + (k as f64 * content_len);
-
-        // End of this repeat in project beats (clamped to instance end)
         let rep_end = (rep_off + content_len).min(clip_end);
 
-        // Skip if outside block
-        if rep_end <= eff_start || rep_off >= eff_end {
+        if rep_end <= block_start_beat || rep_off >= block_end_beat {
             continue;
         }
 
         let offset = clip.content_offset_beats.rem_euclid(content_len);
+
         for n in &clip.notes {
-            // local start/end with offset, modulo content_len
             let s_loc = (n.start + offset).rem_euclid(content_len);
             let e_loc_raw = s_loc + n.duration;
 
@@ -1161,20 +1127,20 @@ fn build_block_midi_events(
                 let s_raw = rep_off + s_local;
                 let e_raw = (rep_off + e_local).min(rep_end);
 
-                // Global transforms
+                if e_raw <= block_start_beat || s_raw >= block_end_beat {
+                    continue;
+                }
+
                 let pitch = (n.pitch as i16 + clip.transpose as i16).clamp(0, 127) as u8;
                 let vel = (n.velocity as i16 + clip.velocity_offset as i16).clamp(1, 127) as u8;
 
-                // Quantize start/end (separately)
-                let s_q = quantize(s_raw);
-                let e_q = quantize(e_raw).max(s_q + 1e-6);
+                let s_q = quantize_beat(s_raw, clip);
+                let e_q = quantize_beat(e_raw, clip).max(s_q + 1e-6);
 
-                // Convert to frames inside this audio block
-                let start_frame = conv.beats_to_samples(s_q - eff_start).round() as i64;
-                let end_frame = conv.beats_to_samples(e_q - eff_start).round() as i64;
+                let start_frame = conv.beats_to_samples(s_q - block_start_beat).round() as i64;
+                let end_frame = conv.beats_to_samples(e_q - block_start_beat).round() as i64;
 
-                // Note chase on transport jump (send Note On at t=0 if block lands inside a sustaining note)
-                if transport_jump && s_q < eff_start && e_q > eff_start {
+                if transport_jump && s_q < block_start_beat && e_q > block_start_beat {
                     events.push((0x90, pitch, vel, 0));
                 }
 
@@ -1189,30 +1155,44 @@ fn build_block_midi_events(
     }
 
     events.sort_by_key(|e| e.3);
-    let mut new_active = plugin_active_notes.clone();
+    update_active_notes(&events, plugin_active_notes);
+    events
+}
 
-    for event in &events {
-        let channel = event.0 & 0x0F;
-        let status = event.0 & 0xF0;
-        let key = event.1;
+#[inline]
+fn quantize_beat(beat: f64, clip: &MidiClipSnapshot) -> f64 {
+    if !clip.quantize_enabled || clip.quantize_grid <= 0.0 {
+        return beat;
+    }
+    let g = clip.quantize_grid as f64;
+    let q = (beat / g).round() * g;
+    let mut q_swing = q;
+    if clip.swing.abs() > 0.0001 {
+        let idx = (q_swing / (g * 0.5)).round() as i64;
+        if idx % 2 != 0 {
+            q_swing += (clip.swing as f64) * 0.5 * g;
+        }
+    }
+    beat + (q_swing - beat) * (clip.quantize_strength as f64).clamp(0.0, 1.0)
+}
 
+fn update_active_notes(events: &[(u8, u8, u8, i64)], active: &mut Vec<(u8, u8)>) {
+    for e in events {
+        let ch = e.0 & 0x0F;
+        let status = e.0 & 0xF0;
+        let key = e.1;
         match status {
-            0x90 if event.2 > 0 => {
-                // Note on - add to active
-                if !new_active.contains(&(channel, key)) {
-                    new_active.push((channel, key));
+            0x90 if e.2 > 0 => {
+                if !active.contains(&(ch, key)) {
+                    active.push((ch, key));
                 }
             }
             0x80 | 0x90 => {
-                // Note off - remove from active
-                new_active.retain(|&(ch, k)| ch != channel || k != key);
+                active.retain(|&(c, k)| c != ch || k != key);
             }
             _ => {}
         }
     }
-
-    *plugin_active_notes = new_active;
-    events
 }
 
 fn process_track_plugins(
@@ -1391,30 +1371,100 @@ fn value_at_beat_snapshot(lane: &RtAutomationLaneSnapshot, beat: f64) -> f32 {
     }
 }
 
-fn apply_automation(
-    track: &crate::audio_state::TrackSnapshot,
+fn apply_automation_smooth(
+    track: &TrackSnapshot,
     processor: &mut TrackProcessor,
-    current_beat: f64,
+    block_start_samples: f64,
+    num_frames: usize,
+    converter: &TimeConverter,
 ) {
+    let block_start_beat = converter.samples_to_beats(block_start_samples);
+    let block_end_beat = converter.samples_to_beats(block_start_samples + num_frames as f64);
+
     for lane in &track.automation_lanes {
-        let value = value_at_beat_snapshot(lane, current_beat);
-        match &lane.parameter {
-            RtAutomationTarget::TrackVolume => {
-                processor.automated_volume = value;
-            }
-            RtAutomationTarget::TrackPan => {
-                processor.automated_pan = value * 2.0 - 1.0;
-            }
+        // Check if automation changes during this block
+        let has_point_in_block = lane
+            .points
+            .iter()
+            .any(|p| p.beat >= block_start_beat && p.beat < block_end_beat);
+
+        let param_key = match &lane.parameter {
+            RtAutomationTarget::TrackVolume => "volume".to_string(),
+            RtAutomationTarget::TrackPan => "pan".to_string(),
             RtAutomationTarget::PluginParam {
                 plugin_id,
                 param_name,
             } => {
-                processor
-                    .automated_plugin_params
-                    .insert((*plugin_id, param_name.clone()), value);
+                format!("plugin_{}_{}", plugin_id, param_name)
             }
-            RtAutomationTarget::TrackSend(_) => {
-                // TODO: implement
+            _ => continue,
+        };
+
+        if has_point_in_block {
+            let buf = processor
+                .automation_sample_buffers
+                .entry(param_key.clone())
+                .or_insert_with(|| vec![0.0; num_frames]);
+
+            if buf.len() < num_frames {
+                buf.resize(num_frames, 0.0);
+            }
+
+            // Sample automation at each frame
+            for i in 0..num_frames {
+                let sample_pos = block_start_samples + i as f64;
+                let beat = converter.samples_to_beats(sample_pos);
+                buf[i] = value_at_beat_snapshot(lane, beat);
+            }
+
+            match &lane.parameter {
+                RtAutomationTarget::TrackVolume => {
+                    for i in 0..num_frames {
+                        let v = buf[i];
+                        processor.input_buffers[0][i] *= v;
+                        processor.input_buffers[1][i] *= v;
+                    }
+                    processor.automated_volume = f32::NAN;
+                }
+                RtAutomationTarget::TrackPan => {
+                    for i in 0..num_frames {
+                        let pan = buf[i] * 2.0 - 1.0;
+                        let (l_gain, r_gain) = calculate_stereo_gains(1.0, pan);
+                        processor.input_buffers[0][i] *= l_gain;
+                        processor.input_buffers[1][i] *= r_gain;
+                    }
+                    processor.automated_pan = f32::NAN;
+                }
+                RtAutomationTarget::PluginParam {
+                    plugin_id,
+                    param_name,
+                } => {
+                    // Use block-average for plugins (per-sample would need API extension)
+                    let avg = buf.iter().sum::<f32>() / buf.len() as f32;
+                    processor
+                        .automated_plugin_params
+                        .insert((*plugin_id, param_name.clone()), avg);
+                }
+                _ => {}
+            }
+        } else {
+            let value = value_at_beat_snapshot(lane, block_start_beat);
+            match &lane.parameter {
+                RtAutomationTarget::TrackVolume => {
+                    processor.automated_volume = value;
+                }
+                RtAutomationTarget::TrackPan => {
+                    processor.automated_pan = value * 2.0 - 1.0;
+                }
+                RtAutomationTarget::PluginParam {
+                    plugin_id,
+                    param_name,
+                } => {
+                    processor
+                        .automated_plugin_params
+                        .insert((*plugin_id, param_name.clone()), value);
+                }
+                _ => {}
             }
         }
     }

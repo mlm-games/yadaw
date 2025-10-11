@@ -961,7 +961,7 @@ impl TimelineView {
         &mut self,
         ui: &mut egui::Ui,
         track_rect: egui::Rect,
-        track: &mut Track,
+        track: &Track,
         track_id: u64,
         app: &mut super::app::YadawApp,
     ) {
@@ -1014,7 +1014,7 @@ impl TimelineView {
 
             let actions = self.automation_widgets[lane_idx].ui(
                 ui,
-                &mut track.automation_lanes[lane_idx],
+                &track.automation_lanes[lane_idx],
                 curve_rect,
                 self.zoom_x,
                 self.scroll_x,
@@ -1038,13 +1038,13 @@ impl TimelineView {
                         new_beat,
                         new_value,
                     } => {
-                        let _ = app.command_tx.send(AudioCommand::RemoveAutomationPoint(
-                            track_id, lane_idx, old_beat,
-                        ));
-                        let target = track.automation_lanes[lane_idx].parameter.clone();
-                        let _ = app.command_tx.send(AudioCommand::AddAutomationPoint(
-                            track_id, target, new_beat, new_value,
-                        ));
+                        let _ = app.command_tx.send(AudioCommand::UpdateAutomationPoint {
+                            track_id,
+                            lane_idx,
+                            old_beat,
+                            new_beat,
+                            new_value,
+                        });
                     }
                 }
             }

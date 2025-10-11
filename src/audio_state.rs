@@ -232,6 +232,7 @@ pub struct AudioClipSnapshot {
     pub name: String,
     pub start_beat: f64,
     pub length_beats: f64,
+    pub offset_beats: f64,
     pub samples: Vec<f32>,
     pub sample_rate: f32,
     pub fade_in: Option<f64>,

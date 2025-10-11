@@ -23,7 +23,7 @@ impl AutomationLaneWidget {
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        lane: &mut AutomationLane,
+        lane: &AutomationLane,
         lane_rect: egui::Rect,
         zoom_x: f32,
         scroll_x: f32,

@@ -104,7 +104,13 @@ pub enum AudioCommand {
     // Automation (track ID + lane index)
     AddAutomationPoint(u64, AutomationTarget, f64, f32),
     RemoveAutomationPoint(u64, usize, f64),
-    UpdateAutomationPoint(u64, usize, f64, f64, f32),
+    UpdateAutomationPoint {
+        track_id: u64,
+        lane_idx: usize,
+        old_beat: f64,
+        new_beat: f64,
+        new_value: f32,
+    },
     SetAutomationMode(u64, usize, AutomationMode),
     ClearAutomationLane(u64, usize),
 

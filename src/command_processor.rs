@@ -5,8 +5,8 @@ use crossbeam_channel::{Receiver, Sender};
 
 use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, UIUpdate};
-use crate::model::PluginDescriptor;
 use crate::model::plugin_api::BackendKind;
+use crate::model::{AutomationPoint, PluginDescriptor};
 use crate::plugin::{PluginParameterAccess, create_plugin_instance, get_control_port_info};
 use crate::project::AppState;
 
@@ -401,44 +401,13 @@ fn process_command(
             new_length,
         } => {
             let mut state = app_state.lock().unwrap();
-            let bpm = state.bpm;
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
                 if let crate::project::ClipLocation::Audio(idx) = loc {
                     if let Some(clip) = track.audio_clips.get_mut(idx) {
-                        let spb = (clip.sample_rate as f64) * (60.0 / bpm as f64);
+                        let old_start = clip.start_beat;
+                        let delta_beats = *new_start - old_start;
 
-                        // Adjust samples based on start change
-                        if *new_start > clip.start_beat {
-                            let delta_beats = *new_start - clip.start_beat;
-                            let drop_samples = (delta_beats * spb).round() as usize;
-                            if drop_samples >= clip.samples.len() {
-                                clip.samples.clear();
-                            } else {
-                                clip.samples.drain(0..drop_samples);
-                            }
-                        } else if *new_start < clip.start_beat {
-                            let delta_beats = clip.start_beat - *new_start;
-                            let pad_samples = (delta_beats * spb).round() as usize;
-                            if pad_samples > 0 {
-                                let mut padded =
-                                    Vec::with_capacity(pad_samples + clip.samples.len());
-                                padded.resize(pad_samples, 0.0);
-                                padded.extend_from_slice(&clip.samples);
-                                clip.samples = padded;
-                            }
-                        }
-
-                        // Resize to target length
-                        let target_samples = (*new_length * spb).round() as usize;
-                        match target_samples.cmp(&clip.samples.len()) {
-                            std::cmp::Ordering::Less => clip.samples.truncate(target_samples),
-                            std::cmp::Ordering::Greater => {
-                                let pad = target_samples - clip.samples.len();
-                                clip.samples.extend(std::iter::repeat(0.0).take(pad));
-                            }
-                            _ => {}
-                        }
-
+                        clip.offset_beats = (clip.offset_beats + delta_beats).max(0.0);
                         clip.start_beat = *new_start;
                         clip.length_beats = new_length.max(0.0);
                     }
@@ -541,9 +510,33 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
-        AudioCommand::UpdateAutomationPoint(_, _, _, _, _)
-        | AudioCommand::SetAutomationMode(_, _, _)
-        | AudioCommand::ClearAutomationLane(_, _) => {}
+        AudioCommand::UpdateAutomationPoint {
+            track_id,
+            lane_idx,
+            old_beat,
+            new_beat,
+            new_value,
+        } => {
+            let mut state = app_state.lock().unwrap();
+            if let Some(track) = state.tracks.get_mut(track_id)
+                && let Some(lane) = track.automation_lanes.get_mut(*lane_idx)
+            {
+                // Remove old point
+                lane.points.retain(|p| (p.beat - old_beat).abs() > 0.001);
+
+                // Add new point
+                lane.points.push(AutomationPoint {
+                    beat: *new_beat,
+                    value: *new_value,
+                });
+                lane.points
+                    .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
+
+                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+            }
+            send_tracks_snapshot_locked(&state, realtime_tx);
+        }
+        AudioCommand::SetAutomationMode(_, _, _) | AudioCommand::ClearAutomationLane(_, _) => {}
 
         // ---------- PREVIEW ----------
         AudioCommand::PreviewNote(track_id, pitch) => {

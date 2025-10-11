@@ -54,6 +54,7 @@ fn audio_clip_to_snapshot(c: &AudioClip) -> AudioClipSnapshot {
         name: c.name.clone(),
         start_beat: c.start_beat,
         length_beats: c.length_beats,
+        offset_beats: c.offset_beats,
         samples: c.samples.clone(),
         sample_rate: c.sample_rate,
         fade_in: c.fade_in,

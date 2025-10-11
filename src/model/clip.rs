@@ -46,7 +46,7 @@ pub struct MidiClip {
     #[serde(default = "default_false")]
     pub loop_enabled: bool,
 
-    #[serde(default)]
+    #[serde(default = "default_zero_f64")]
     pub content_len_beats: f64,
 
     #[serde(default)]
@@ -104,6 +104,8 @@ pub struct AudioClip {
     pub name: String,
     pub start_beat: f64,
     pub length_beats: f64,
+    #[serde(default = "default_zero_f64")]
+    pub offset_beats: f64,
     pub samples: Vec<f32>,
     pub sample_rate: f32,
     pub fade_in: Option<f64>,
@@ -127,6 +129,7 @@ impl Default for AudioClip {
             name: "Audio Clip".to_string(),
             start_beat: 0.0,
             length_beats: DEFAULT_MIN_PROJECT_BEATS,
+            offset_beats: 0.0,
             samples: Vec::new(),
             sample_rate: 44100.0,
             fade_in: None,
