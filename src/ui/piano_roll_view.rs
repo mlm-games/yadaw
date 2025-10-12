@@ -777,57 +777,34 @@ impl PianoRollView {
         Some(clipboard)
     }
 
-    pub fn cut_selected_notes(
-        &mut self,
-        state: &Arc<Mutex<AppState>>,
-        selected_track: u64,
-        command_tx: &Sender<AudioCommand>,
-    ) -> Option<Vec<MidiNote>> {
-        let clip_id = self.selected_clip?;
-
-        // Copy first
-        let clipboard = self.copy_selected_notes(state, selected_track)?;
-
-        // Then delete from model
-        let mut state_guard = state.lock().unwrap();
-        if let Some(track) = state_guard.tracks.get_mut(&selected_track)
-            && let Some(clip) = track.midi_clips.iter_mut().find(|c| c.id == clip_id)
-        {
-            let mut sel_idx = self.piano_roll.selected_indices(clip);
-            sel_idx.sort_unstable_by(|a, b| b.cmp(a));
-
-            for idx in sel_idx {
-                if idx < clip.notes.len() {
-                    clip.notes.remove(idx);
-                }
-            }
-
-            self.piano_roll.selected_note_ids.clear();
-            self.piano_roll.temp_selected_indices.clear();
+    pub fn cut_selected_notes(&mut self, command_tx: &Sender<AudioCommand>) {
+        let clip_id = match self.selected_clip {
+            Some(id) => id,
+            None => return,
+        };
+        let note_ids = self.piano_roll.selected_note_ids.clone();
+        if note_ids.is_empty() {
+            return;
         }
-        drop(state_guard);
 
-        // Don't call push_undo here - caller will do it
-        let _ = command_tx.send(AudioCommand::UpdateTracks);
+        self.piano_roll.selected_note_ids.clear();
+        self.piano_roll.temp_selected_indices.clear();
 
-        Some(clipboard)
+        let _ = command_tx.send(AudioCommand::CutSelectedNotes { clip_id, note_ids });
     }
 
     pub fn paste_notes(
-        &mut self,
-        state: &Arc<Mutex<AppState>>,
-        selected_track: u64,
+        &self,
         audio_state: &Arc<AudioState>,
         command_tx: &Sender<AudioCommand>,
         clipboard: &[MidiNote],
-    ) -> bool {
+    ) {
         let clip_id = match self.selected_clip {
-            Some(idx) => idx,
-            None => return false,
+            Some(id) => id,
+            None => return,
         };
-
         if clipboard.is_empty() {
-            return false;
+            return;
         }
 
         let target_beat = audio_state.get_position();
@@ -842,74 +819,37 @@ impl PianoRollView {
             target.max(0.0)
         };
 
-        // Pre-generate all new IDs
-        let new_ids: Vec<u64> = {
-            let mut state_guard = state.lock().unwrap();
-            clipboard.iter().map(|_| state_guard.fresh_id()).collect()
-        };
-
-        // Now modify the clip with pre-generated IDs
-        let mut state_guard = state.lock().unwrap();
-        if let Some(track) = state_guard.tracks.get_mut(&selected_track)
-            && let Some(clip) = track.midi_clips.iter_mut().find(|c| c.id == clip_id)
-        {
-            for (note, &new_id) in clipboard.iter().zip(new_ids.iter()) {
+        // Prepare notes with new start times but ID 0 (processor will assign)
+        let notes_to_paste: Vec<MidiNote> = clipboard
+            .iter()
+            .map(|note| {
                 let mut new_note = *note;
-                new_note.id = new_id;
+                new_note.id = 0; // The command processor will assign a fresh ID
                 new_note.start = (snapped_target + new_note.start).max(0.0);
+                new_note
+            })
+            .collect();
 
-                if new_note.start < clip.length_beats {
-                    new_note.duration = new_note
-                        .duration
-                        .min(clip.length_beats - new_note.start)
-                        .max(0.01);
-                    clip.notes.push(new_note);
-                }
-            }
-
-            clip.notes
-                .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-        }
-        drop(state_guard);
-
-        let _ = command_tx.send(AudioCommand::UpdateTracks);
-        true
+        let _ = command_tx.send(AudioCommand::PasteNotes {
+            clip_id,
+            notes: notes_to_paste,
+        });
     }
 
-    pub fn delete_selected_notes(
-        &mut self,
-        state: &Arc<Mutex<AppState>>,
-        selected_track: u64,
-        command_tx: &Sender<AudioCommand>,
-    ) -> bool {
+    pub fn delete_selected_notes(&mut self, command_tx: &Sender<AudioCommand>) -> bool {
         let clip_id = match self.selected_clip {
-            Some(idx) => idx,
+            Some(id) => id,
             None => return false,
         };
-
-        let mut state_guard = state.lock().unwrap();
-        if let Some(track) = state_guard.tracks.get_mut(&selected_track)
-            && let Some(clip) = track.midi_clips.iter_mut().find(|c| c.id == clip_id)
-        {
-            let mut sel_idx = self.piano_roll.selected_indices(clip);
-            if sel_idx.is_empty() {
-                return false;
-            }
-
-            sel_idx.sort_unstable_by(|a, b| b.cmp(a));
-
-            for idx in sel_idx {
-                if idx < clip.notes.len() {
-                    clip.notes.remove(idx);
-                }
-            }
-
-            self.piano_roll.selected_note_ids.clear();
-            self.piano_roll.temp_selected_indices.clear();
+        let note_ids = self.piano_roll.selected_note_ids.clone();
+        if note_ids.is_empty() {
+            return false;
         }
-        drop(state_guard);
 
-        let _ = command_tx.send(AudioCommand::UpdateTracks);
+        self.piano_roll.selected_note_ids.clear();
+        self.piano_roll.temp_selected_indices.clear();
+
+        let _ = command_tx.send(AudioCommand::DeleteSelectedNotes { clip_id, note_ids });
         true
     }
 

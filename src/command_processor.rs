@@ -746,6 +746,58 @@ fn process_command(
             }
             send_tracks_snapshot_locked(&state, realtime_tx);
         }
+        AudioCommand::CutSelectedNotes { clip_id, note_ids } => {
+            let mut clipboard_notes = Vec::new();
+            let mut state = app_state.lock().unwrap();
+
+            if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
+                if let crate::project::ClipLocation::Midi(idx) = loc {
+                    if let Some(clip) = track.midi_clips.get_mut(idx) {
+                        // Partition notes into 'kept' and 'cut'
+                        let original_notes = std::mem::take(&mut clip.notes);
+                        let (kept_notes, cut_notes): (Vec<_>, Vec<_>) = original_notes
+                            .into_iter()
+                            .partition(|n| !note_ids.contains(&n.id));
+
+                        clip.notes = kept_notes;
+                        clipboard_notes = cut_notes;
+                    }
+                }
+            }
+
+            // Send the cut notes back to the UI thread for its clipboard
+            if !clipboard_notes.is_empty() {
+                let _ = ui_tx.send(UIUpdate::NotesCutToClipboard(clipboard_notes));
+            }
+            send_tracks_snapshot_locked(&state, realtime_tx);
+        }
+
+        AudioCommand::DeleteSelectedNotes { clip_id, note_ids } => {
+            let mut state = app_state.lock().unwrap();
+            if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
+                if let crate::project::ClipLocation::Midi(idx) = loc {
+                    if let Some(clip) = track.midi_clips.get_mut(idx) {
+                        clip.notes.retain(|n| !note_ids.contains(&n.id));
+                    }
+                }
+            }
+            send_tracks_snapshot_locked(&state, realtime_tx);
+        }
+
+        AudioCommand::PasteNotes { clip_id, notes } => {
+            let mut state = app_state.lock().unwrap();
+            if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
+                if let crate::project::ClipLocation::Midi(idx) = loc {
+                    if let Some(clip) = track.midi_clips.get_mut(idx) {
+                        clip.notes.extend_from_slice(notes);
+                        clip.notes
+                            .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                    }
+                }
+            }
+            state.ensure_ids(); // Assign IDs to newly pasted notes
+            send_tracks_snapshot_locked(&state, realtime_tx);
+        }
         _ => {
             // Stub for unhandled commands
         }

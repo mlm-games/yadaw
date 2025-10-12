@@ -135,16 +135,10 @@ impl MenuBar {
 
             // CUT
             if ui.button("Cut").clicked() {
+                app.push_undo();
+
                 if notes_active {
-                    let clipboard = app.piano_roll_view.cut_selected_notes(
-                        &app.state,
-                        app.selected_track,
-                        &app.command_tx,
-                    );
-                    if let Some(notes) = clipboard {
-                        app.note_clipboard = Some(notes);
-                        app.push_undo();
-                    }
+                    let clipboard = app.piano_roll_view.cut_selected_notes(&app.command_tx);
                 } else {
                     app.cut_selected();
                 }
@@ -168,16 +162,15 @@ impl MenuBar {
 
             // PASTE
             if ui.button("Paste").clicked() {
+                app.push_undo();
+
                 if notes_active {
                     if let Some(ref clipboard) = app.note_clipboard.clone() {
                         app.piano_roll_view.paste_notes(
-                            &app.state,
-                            app.selected_track,
                             &app.audio_state,
                             &app.command_tx,
                             clipboard,
                         );
-                        app.push_undo();
                     }
                 } else {
                     app.paste_at_playhead();
@@ -187,14 +180,10 @@ impl MenuBar {
 
             // DELETE
             if ui.button("Delete").clicked() {
+                app.push_undo();
+
                 if notes_active {
-                    if app.piano_roll_view.delete_selected_notes(
-                        &app.state,
-                        app.selected_track,
-                        &app.command_tx,
-                    ) {
-                        app.push_undo();
-                    }
+                    if app.piano_roll_view.delete_selected_notes(&app.command_tx) {}
                 } else {
                     app.delete_selected();
                 }

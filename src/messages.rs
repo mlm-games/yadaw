@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
+    MidiNote,
     automation::{AutomationMode, AutomationTarget},
     clip::{AudioClip, MidiClip},
     plugin_api::BackendKind,
@@ -152,6 +153,18 @@ pub enum AudioCommand {
         clip_id: u64,
         new_offset: f64,
     },
+    CutSelectedNotes {
+        clip_id: u64,
+        note_ids: Vec<u64>,
+    },
+    PasteNotes {
+        clip_id: u64,
+        notes: Vec<MidiNote>,
+    },
+    DeleteSelectedNotes {
+        clip_id: u64,
+        note_ids: Vec<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -196,4 +209,5 @@ pub enum UIUpdate {
         plugin_idx: usize,
         params: Vec<(String, f32, f32, f32)>,
     },
+    NotesCutToClipboard(Vec<MidiNote>),
 }

@@ -1035,6 +1035,9 @@ impl YadawApp {
                 self.performance_monitor.update_metrics(metrics);
                 self.last_real_metrics_at = Some(Instant::now());
             }
+            UIUpdate::NotesCutToClipboard(notes) => {
+                self.note_clipboard = Some(notes);
+            }
             _ => {}
         }
     }
@@ -1118,24 +1121,6 @@ impl YadawApp {
             Undo => self.undo(),
             Redo => self.redo(),
 
-            Cut => {
-                if self.is_selected_track_midi() {
-                    // Piano roll cut
-                    let clipboard = self.piano_roll_view.cut_selected_notes(
-                        &self.state,
-                        self.selected_track,
-                        &self.command_tx,
-                    );
-                    if let Some(notes) = clipboard {
-                        self.note_clipboard = Some(notes);
-                        self.push_undo();
-                    }
-                } else {
-                    // Timeline cut
-                    self.cut_selected();
-                }
-            }
-
             Copy => {
                 if self.is_selected_track_midi() {
                     // Piano roll copy
@@ -1151,37 +1136,33 @@ impl YadawApp {
                 }
             }
 
+            Cut => {
+                if self.is_selected_track_midi() {
+                    self.push_undo();
+                    self.piano_roll_view.cut_selected_notes(&self.command_tx);
+                } else {
+                    self.cut_selected();
+                }
+            }
             Paste => {
                 if self.is_selected_track_midi() {
-                    // Piano roll paste
                     if let Some(ref clipboard) = self.note_clipboard.clone() {
+                        self.push_undo();
                         self.piano_roll_view.paste_notes(
-                            &self.state,
-                            self.selected_track,
                             &self.audio_state,
                             &self.command_tx,
                             clipboard,
                         );
-                        self.push_undo();
                     }
                 } else {
-                    // Timeline paste
                     self.paste_at_playhead();
                 }
             }
-
             Delete => {
                 if self.is_selected_track_midi() {
-                    // Delete notes
-                    if self.piano_roll_view.delete_selected_notes(
-                        &self.state,
-                        self.selected_track,
-                        &self.command_tx,
-                    ) {
-                        self.push_undo();
-                    }
+                    self.push_undo();
+                    self.piano_roll_view.delete_selected_notes(&self.command_tx);
                 } else {
-                    // Delete clips
                     self.delete_selected();
                 }
             }
@@ -1215,8 +1196,6 @@ impl YadawApp {
                         .copy_selected_notes(&self.state, self.selected_track)
                     {
                         self.piano_roll_view.paste_notes(
-                            &self.state,
-                            self.selected_track,
                             &self.audio_state,
                             &self.command_tx,
                             &clipboard,
