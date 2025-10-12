@@ -979,22 +979,44 @@ impl AudioEngine {
                 {
                     Ok(mut inst) => {
                         for param_entry in plugin_snapshot.params.iter() {
-                            let key = match plugin_snapshot.backend {
-                                BackendKind::Lv2 => ParamKey::Lv2(param_entry.key().clone()),
-                                BackendKind::Clap => {
-                                    // Find the ParamKey from the instance's parameter list
-                                    inst.params()
-                                        .iter()
-                                        .find(|p| p.name == *param_entry.key())
-                                        .map(|p| p.key.clone())
-                                        .unwrap_or(ParamKey::Clap(0)) // Fallback, should not happen
-                                }
-                            };
-                            inst.set_param(&key, *param_entry.value());
+                            let param_name = param_entry.key();
+                            let param_value = *param_entry.value();
+
+                            // Find the corresponding ParamKey for the instance.
+                            let key_opt = inst
+                                .params()
+                                .iter()
+                                .find(|p| p.name == *param_name)
+                                .map(|p| p.key.clone());
+
+                            if let Some(key) = key_opt {
+                                inst.set_param(&key, param_value);
+                            } else {
+                                log::warn!(
+                                    "Parameter '{}' not found for plugin '{}' during offline render. It may have been updated.",
+                                    param_name,
+                                    plugin_snapshot.uri
+                                );
+                            }
                         }
 
                         let (rt_id, r#gen) =
                             PLUGIN_STORE.with(|st| st.borrow_mut().insert(Box::from(inst)));
+
+                        let param_name_to_key = {
+                            let mut map = HashMap::new();
+                            let new_inst = PLUGIN_STORE.with(|st| {
+                                st.borrow_mut()
+                                    .get_mut(rt_id, r#gen)
+                                    .map(|i| i.params().to_vec())
+                            });
+                            if let Some(params) = new_inst {
+                                for p in params {
+                                    map.insert(p.name.clone(), p.key.clone());
+                                }
+                            }
+                            map
+                        };
 
                         let plugin_processor = PluginProcessorUnified {
                             plugin_id: plugin_snapshot.plugin_id,
@@ -1002,7 +1024,7 @@ impl AudioEngine {
                             backend: plugin_snapshot.backend,
                             uri: plugin_snapshot.uri.clone(),
                             bypass: plugin_snapshot.bypass,
-                            param_name_to_key: HashMap::new(), // Can be rebuilt if needed
+                            param_name_to_key,
                         };
 
                         proc.plugins
