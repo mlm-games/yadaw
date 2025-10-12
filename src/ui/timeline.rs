@@ -728,6 +728,7 @@ impl TimelineView {
             let rel = (x - rect.left()) + self.scroll_x;
             (rel / self.zoom_x) as f64
         };
+
         let snap = |v: f64, grid: f32| -> f64 {
             if grid > 0.0 {
                 let g = grid as f64;
@@ -736,9 +737,10 @@ impl TimelineView {
                 v
             }
         };
+
         let min_len = (self.grid_snap.max(0.03125)) as f64;
 
-        // Start drag: handle ruler (loop) interactions first
+        // Start drag
         if response.drag_started()
             && self.timeline_interaction.is_none()
             && let Some(pos) = response.interact_pointer_pos()
@@ -771,141 +773,136 @@ impl TimelineView {
             }
         }
 
-        // During drag
+        // DON'T SEND COMMANDS
         if response.dragged()
             && let Some(pos) = response.hover_pos()
         {
-            match &mut self.timeline_interaction {
-                Some(TimelineInteraction::DragClip {
-                    clip_ids_and_starts,
-                    start_drag_beat,
-                }) => {
-                    let current = beat_at(pos.x);
-                    let mut delta = current - *start_drag_beat;
-                    delta = snap(delta, self.grid_snap);
+            // Commands cause stuttering
+            let _current_beat = beat_at(pos.x);
+        }
 
-                    for (clip_id, original_start) in clip_ids_and_starts.iter().copied() {
-                        let new_start = (original_start + delta).max(0.0);
+        // END DRAG
+        if response.drag_stopped() {
+            if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos())
+                && let Some(interaction) = &self.timeline_interaction
+            {
+                match interaction {
+                    TimelineInteraction::DragClip {
+                        clip_ids_and_starts,
+                        start_drag_beat,
+                    } => {
+                        let current = beat_at(pos.x);
+                        let mut delta = current - *start_drag_beat;
+                        delta = snap(delta, self.grid_snap);
+
+                        for (clip_id, original_start) in clip_ids_and_starts.iter().copied() {
+                            let new_start = (original_start + delta).max(0.0);
+                            let state = app.state.lock().unwrap();
+                            let is_midi = state
+                                .clips_by_id
+                                .get(&clip_id)
+                                .map(|r| r.is_midi)
+                                .unwrap_or(false);
+                            drop(state);
+
+                            if is_midi {
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::MoveMidiClip { clip_id, new_start });
+                            } else {
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::MoveAudioClip { clip_id, new_start });
+                            }
+                        }
+                        app.push_undo();
+                    }
+
+                    TimelineInteraction::ResizeClipLeft {
+                        clip_id,
+                        original_end_beat,
+                    } => {
+                        let drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
+                        let new_start = drag_at.min(*original_end_beat - min_len);
+                        let new_len = (*original_end_beat - new_start).max(min_len);
 
                         let state = app.state.lock().unwrap();
                         let is_midi = state
                             .clips_by_id
-                            .get(&clip_id)
+                            .get(clip_id)
                             .map(|r| r.is_midi)
                             .unwrap_or(false);
                         drop(state);
 
                         if is_midi {
-                            let _ = app
-                                .command_tx
-                                .send(AudioCommand::MoveMidiClip { clip_id, new_start });
-                        } else {
-                            let _ = app
-                                .command_tx
-                                .send(AudioCommand::MoveAudioClip { clip_id, new_start });
-                        }
-                    }
-                }
-
-                Some(TimelineInteraction::ResizeClipLeft {
-                    clip_id,
-                    original_end_beat,
-                }) => {
-                    let drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
-                    let new_start = drag_at.min(*original_end_beat - min_len);
-                    let new_len = (*original_end_beat - new_start).max(min_len);
-
-                    let state = app.state.lock().unwrap();
-                    let is_midi = state
-                        .clips_by_id
-                        .get(clip_id)
-                        .map(|r| r.is_midi)
-                        .unwrap_or(false);
-                    drop(state);
-
-                    if is_midi {
-                        let _ = app.command_tx.send(AudioCommand::ResizeMidiClip {
-                            clip_id: *clip_id,
-                            new_start,
-                            new_length: new_len,
-                        });
-                    } else {
-                        let _ = app.command_tx.send(AudioCommand::ResizeAudioClip {
-                            clip_id: *clip_id,
-                            new_start,
-                            new_length: new_len,
-                        });
-                    }
-                }
-
-                Some(TimelineInteraction::ResizeClipRight {
-                    clip_id,
-                    original_start_beat,
-                }) => {
-                    let drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
-                    let new_end = drag_at.max(*original_start_beat + min_len);
-                    let new_len = (new_end - *original_start_beat).max(min_len);
-
-                    let state = app.state.lock().unwrap();
-                    let is_midi = state
-                        .clips_by_id
-                        .get(clip_id)
-                        .map(|r| r.is_midi)
-                        .unwrap_or(false);
-                    drop(state);
-
-                    if is_midi {
-                        let _ = app.command_tx.send(AudioCommand::ResizeMidiClip {
-                            clip_id: *clip_id,
-                            new_start: *original_start_beat,
-                            new_length: new_len,
-                        });
-                    } else {
-                        let _ = app.command_tx.send(AudioCommand::ResizeAudioClip {
-                            clip_id: *clip_id,
-                            new_start: *original_start_beat,
-                            new_length: new_len,
-                        });
-                    }
-                }
-
-                Some(TimelineInteraction::SlipContent {
-                    clip_id,
-                    start_offset,
-                    start_mouse_beat,
-                }) => {
-                    if let Some(pos) = response.hover_pos() {
-                        let cur = ((pos.x - response.rect.left()) + self.scroll_x) / self.zoom_x;
-                        let delta = (cur as f64) - *start_mouse_beat;
-
-                        let mem_root = egui::Id::new(("slip", *clip_id));
-                        let due = {
-                            let last = ui.ctx().memory(|m| m.data.get_temp::<Instant>(mem_root));
-                            last.is_none_or(|t| {
-                                Instant::now().duration_since(t) >= Duration::from_millis(30)
-                            })
-                        };
-
-                        if due {
-                            let new_off = *start_offset + delta;
-                            let _ = app.command_tx.send(AudioCommand::SetClipContentOffset {
+                            let _ = app.command_tx.send(AudioCommand::ResizeMidiClip {
                                 clip_id: *clip_id,
-                                new_offset: new_off,
+                                new_start,
+                                new_length: new_len,
                             });
-                            ui.ctx()
-                                .memory_mut(|m| m.data.insert_temp(mem_root, Instant::now()));
+                        } else {
+                            let _ = app.command_tx.send(AudioCommand::ResizeAudioClip {
+                                clip_id: *clip_id,
+                                new_start,
+                                new_length: new_len,
+                            });
                         }
+                        app.push_undo();
                     }
+
+                    TimelineInteraction::ResizeClipRight {
+                        clip_id,
+                        original_start_beat,
+                    } => {
+                        let drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
+                        let new_end = drag_at.max(*original_start_beat + min_len);
+                        let new_len = (new_end - *original_start_beat).max(min_len);
+
+                        let state = app.state.lock().unwrap();
+                        let is_midi = state
+                            .clips_by_id
+                            .get(clip_id)
+                            .map(|r| r.is_midi)
+                            .unwrap_or(false);
+                        drop(state);
+
+                        if is_midi {
+                            let _ = app.command_tx.send(AudioCommand::ResizeMidiClip {
+                                clip_id: *clip_id,
+                                new_start: *original_start_beat,
+                                new_length: new_len,
+                            });
+                        } else {
+                            let _ = app.command_tx.send(AudioCommand::ResizeAudioClip {
+                                clip_id: *clip_id,
+                                new_start: *original_start_beat,
+                                new_length: new_len,
+                            });
+                        }
+                        app.push_undo();
+                    }
+
+                    TimelineInteraction::SlipContent {
+                        clip_id,
+                        start_offset,
+                        start_mouse_beat,
+                    } => {
+                        let cur = ((pos.x - rect.left()) + self.scroll_x) / self.zoom_x;
+                        let delta = (cur as f64) - *start_mouse_beat;
+                        let new_off = *start_offset + delta;
+
+                        let _ = app.command_tx.send(AudioCommand::SetClipContentOffset {
+                            clip_id: *clip_id,
+                            new_offset: new_off,
+                        });
+                        app.push_undo();
+                    }
+
+                    _ => {}
                 }
-
-                _ => {}
             }
-        }
 
-        // End interactions
-        if response.drag_stopped() {
             self.timeline_interaction = None;
-            app.push_undo();
         }
 
         // Click on ruler to set playhead
@@ -926,7 +923,7 @@ impl TimelineView {
             }
         }
 
-        // Ctrl+click empty area to create MIDI clip
+        // Ctrl+click to create MIDI clip
         if response.clicked()
             && self.timeline_interaction.is_none()
             && let Some(pos) = response.interact_pointer_pos()

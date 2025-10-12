@@ -131,19 +131,55 @@ impl TransportUI {
 
                         // BPM control
                         ui.label("BPM:");
-                        ui.add(egui::TextEdit::singleline(&mut self.bpm_input).desired_width(60.0));
+
+                        let current_bpm = self
+                            .transport
+                            .as_ref()
+                            .map(|t| t.get_bpm())
+                            .unwrap_or(120.0);
+
+                        // Auto-update display if transport BPM changed externally
+                        let displayed_bpm = self.bpm_input.parse::<f32>().unwrap_or(current_bpm);
+                        if (current_bpm - displayed_bpm).abs() > 0.1 {
+                            self.bpm_input = format!("{:.1}", current_bpm);
+                        }
+
+                        let bpm_response = ui.add(
+                            egui::TextEdit::singleline(&mut self.bpm_input).desired_width(60.0),
+                        );
+
+                        // Validate and show feedback
+                        let bpm_valid = if let Ok(bpm) = self.bpm_input.parse::<f32>() {
+                            (20.0..=999.0).contains(&bpm)
+                        } else {
+                            false
+                        };
+
+                        // Visual feedback for invalid input
+                        if !bpm_valid && !self.bpm_input.is_empty() {
+                            let bpm_response = bpm_response.clone();
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+                            bpm_response.on_hover_text("BPM must be between 20 and 999");
+                        }
+
+                        // Apply on Enter or focus lost
+                        if (bpm_response.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            || (bpm_response.lost_focus() && bpm_valid)
                         {
-                            if let Ok(bpm) = self.bpm_input.parse::<f32>()
-                                && (20.0..=999.0).contains(&bpm)
-                                && let Some(transport) = &self.transport
-                            {
-                                transport.set_bpm(bpm);
+                            if let Ok(bpm) = self.bpm_input.parse::<f32>() {
+                                if (20.0..=999.0).contains(&bpm) {
+                                    if let Some(transport) = &self.transport {
+                                        transport.set_bpm(bpm);
+                                    }
+                                    self.bpm_input = format!("{:.1}", bpm);
+                                }
                             }
                         }
 
                         ui.separator();
 
-                        // Loop controls
+                        // Loop controls with similar validation
                         let loop_enabled = app.audio_state.loop_enabled.load(Ordering::Relaxed);
                         let mut loop_checkbox = loop_enabled;
                         if ui.checkbox(&mut loop_checkbox, "Loop").clicked() {
@@ -157,43 +193,60 @@ impl TransportUI {
 
                         if loop_enabled {
                             ui.label("Start:");
-                            let loop_start = app.audio_state.loop_start.load();
-                            self.loop_start_input = format!("{:.1}", loop_start);
 
-                            ui.add(
+                            let loop_start_response = ui.add(
                                 egui::TextEdit::singleline(&mut self.loop_start_input)
                                     .desired_width(60.0),
                             );
 
-                            {
+                            if loop_start_response.lost_focus() {
                                 if let Ok(start) = self.loop_start_input.parse::<f64>() {
                                     let end = app.audio_state.loop_end.load();
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::SetLoopRegion(start, end));
+                                    if start < end && start >= 0.0 {
+                                        app.audio_state.loop_start.store(start);
+                                        let _ = app
+                                            .command_tx
+                                            .send(AudioCommand::SetLoopRegion(start, end));
+                                        self.loop_start_input = format!("{:.1}", start);
+                                    } else {
+                                        // Reset to current value on invalid input
+                                        self.loop_start_input =
+                                            format!("{:.1}", app.audio_state.loop_start.load());
+                                    }
                                 }
                             }
 
                             ui.label("End:");
-                            let loop_end = app.audio_state.loop_end.load();
-                            self.loop_end_input = format!("{:.1}", loop_end);
 
-                            ui.add(
+                            let loop_end_response = ui.add(
                                 egui::TextEdit::singleline(&mut self.loop_end_input)
                                     .desired_width(60.0),
                             );
 
-                            {
+                            if loop_end_response.lost_focus() {
                                 if let Ok(end) = self.loop_end_input.parse::<f64>() {
                                     let start = app.audio_state.loop_start.load();
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::SetLoopRegion(start, end));
+                                    if end > start {
+                                        app.audio_state.loop_end.store(end);
+                                        let _ = app
+                                            .command_tx
+                                            .send(AudioCommand::SetLoopRegion(start, end));
+                                        self.loop_end_input = format!("{:.1}", end);
+                                    } else {
+                                        // Reset to current value on invalid input
+                                        self.loop_end_input =
+                                            format!("{:.1}", app.audio_state.loop_end.load());
+                                    }
                                 }
                             }
 
                             if ui.button("Set to Selection").clicked() {
                                 app.set_loop_to_selection();
+                                // Update display
+                                self.loop_start_input =
+                                    format!("{:.1}", app.audio_state.loop_start.load());
+                                self.loop_end_input =
+                                    format!("{:.1}", app.audio_state.loop_end.load());
                             }
                         }
 

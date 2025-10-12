@@ -1,7 +1,9 @@
 use std::sync::atomic::Ordering;
 
 use super::*;
-use crate::{constants::DEFAULT_MIN_PROJECT_BEATS, messages::AudioCommand};
+use crate::{
+    constants::DEFAULT_MIN_PROJECT_BEATS, input::actions::AppAction, messages::AudioCommand,
+};
 
 pub struct MenuBar {
     show_about: bool,
@@ -37,12 +39,12 @@ impl MenuBar {
     fn file_menu(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         ui.menu_button("File", |ui| {
             if ui.button("New Project").clicked() {
-                app.new_project();
+                app.handle_action(AppAction::NewProject);
                 ui.close();
             }
 
             if ui.button("Open Project...").clicked() {
-                app.dialogs.show_open_dialog();
+                app.handle_action(AppAction::OpenProject);
                 ui.close();
             }
 
@@ -72,24 +74,24 @@ impl MenuBar {
             ui.separator();
 
             if ui.button("Save").clicked() {
-                app.save_project();
+                app.handle_action(AppAction::SaveProject);
                 ui.close();
             }
 
             if ui.button("Save As...").clicked() {
-                app.dialogs.show_save_dialog();
+                app.handle_action(AppAction::SaveProjectAs);
                 ui.close();
             }
 
             ui.separator();
 
             if ui.button("Import Audio...").clicked() {
-                app.import_audio_dialog();
+                app.handle_action(AppAction::ImportAudio);
                 ui.close();
             }
 
             if ui.button("Export Audio...").clicked() {
-                app.export_audio_dialog();
+                app.handle_action(AppAction::ExportAudio);
                 ui.close();
             }
 
@@ -103,7 +105,7 @@ impl MenuBar {
             ui.separator();
 
             if ui.button("Exit").clicked() {
-                // ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                // app.handle_action(AppAction::Escape);
             }
         });
     }
@@ -115,14 +117,14 @@ impl MenuBar {
 
             ui.add_enabled_ui(has_undo, |ui| {
                 if ui.button("Undo").clicked() {
-                    app.undo();
+                    app.handle_action(AppAction::Undo);
                     ui.close();
                 }
             });
 
             ui.add_enabled_ui(has_redo, |ui| {
                 if ui.button("Redo").clicked() {
-                    app.redo();
+                    app.handle_action(AppAction::Redo);
                     ui.close();
                 }
             });
@@ -135,80 +137,37 @@ impl MenuBar {
 
             // CUT
             if ui.button("Cut").clicked() {
-                app.push_undo();
-
-                if notes_active {
-                    let clipboard = app.piano_roll_view.cut_selected_notes(&app.command_tx);
-                } else {
-                    app.cut_selected();
-                }
+                app.handle_action(AppAction::Cut);
                 ui.close();
             }
 
             // COPY
             if ui.button("Copy").clicked() {
-                if notes_active {
-                    let clipboard = app
-                        .piano_roll_view
-                        .copy_selected_notes(&app.state, app.selected_track);
-                    if let Some(notes) = clipboard {
-                        app.note_clipboard = Some(notes);
-                    }
-                } else {
-                    app.copy_selected();
-                }
+                app.handle_action(AppAction::Copy);
                 ui.close();
             }
 
             // PASTE
             if ui.button("Paste").clicked() {
-                app.push_undo();
-
-                if notes_active {
-                    if let Some(ref clipboard) = app.note_clipboard.clone() {
-                        app.piano_roll_view.paste_notes(
-                            &app.audio_state,
-                            &app.command_tx,
-                            clipboard,
-                        );
-                    }
-                } else {
-                    app.paste_at_playhead();
-                }
+                app.handle_action(AppAction::Paste);
                 ui.close();
             }
 
             // DELETE
             if ui.button("Delete").clicked() {
-                app.push_undo();
-
-                if notes_active {
-                    if app.piano_roll_view.delete_selected_notes(&app.command_tx) {}
-                } else {
-                    app.delete_selected();
-                }
+                app.handle_action(AppAction::Delete);
                 ui.close();
             }
 
             ui.separator();
 
             if ui.button("Select All").clicked() {
-                if notes_active {
-                    app.piano_roll_view
-                        .select_all_notes(&app.state, app.selected_track);
-                } else {
-                    app.select_all();
-                }
+                app.handle_action(AppAction::SelectAll);
                 ui.close();
             }
 
             if ui.button("Deselect All").clicked() {
-                if notes_active {
-                    app.piano_roll_view.piano_roll.selected_note_ids.clear();
-                    app.piano_roll_view.piano_roll.temp_selected_indices.clear();
-                } else {
-                    app.deselect_all();
-                }
+                app.handle_action(AppAction::DeselectAll);
                 ui.close();
             }
 
@@ -454,31 +413,6 @@ impl MenuBar {
             if ui.button("Clear Loop").clicked() {
                 app.audio_state.loop_enabled.store(false, Ordering::Relaxed);
                 let _ = app.command_tx.send(AudioCommand::SetLoopEnabled(false));
-                ui.close();
-            }
-
-            if ui.button("Go to End").clicked() {
-                let end_beats = {
-                    let state = app.state.lock().unwrap();
-                    let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
-                    for t in state.tracks.values() {
-                        for c in &t.audio_clips {
-                            max_beat = max_beat.max(c.start_beat + c.length_beats);
-                        }
-                        for c in &t.midi_clips {
-                            max_beat = max_beat.max(c.start_beat + c.length_beats);
-                        }
-                    }
-                    max_beat
-                };
-
-                // convert beats->samples
-                let sr = app.audio_state.sample_rate.load() as f64;
-                let bpm = app.audio_state.bpm.load() as f64;
-                if bpm > 0.0 && sr > 0.0 {
-                    let samples = end_beats * (60.0 / bpm) * sr;
-                    let _ = app.command_tx.send(AudioCommand::SetPosition(samples));
-                }
                 ui.close();
             }
         });

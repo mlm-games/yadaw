@@ -8,7 +8,7 @@ use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, UIUpdate};
 use crate::model::plugin_api::BackendKind;
 use crate::model::{AutomationPoint, PluginDescriptor};
-use crate::plugin::{PluginParameterAccess, create_plugin_instance, get_control_port_info};
+use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::AppState;
 
 pub fn run_command_processor(
@@ -822,7 +822,7 @@ fn process_command(
             let audio_state_clone = audio_state.clone();
             let ui_tx_clone = ui_tx.clone();
 
-            AudioExporter::export_to_wav(
+            let _ = AudioExporter::export_to_wav(
                 app_state_clone,
                 audio_state_clone,
                 config.clone(),

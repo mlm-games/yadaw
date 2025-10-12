@@ -124,6 +124,18 @@ impl YadawApp {
             crate::config::Theme::Dark => super::theme::Theme::Dark,
             crate::config::Theme::Light => super::theme::Theme::Light,
         };
+        let mut theme_manager = super::theme::ThemeManager::new(theme);
+
+        // Load custom themes
+        if let Some(themes_path) = config_dir().map(|d| d.join("custom_themes.json")) {
+            let _ = theme_manager.load_custom_themes(&themes_path);
+        }
+
+        // Load current theme selection
+        if let Some(theme_path) = config_dir().map(|d| d.join("current_theme.json")) {
+            let _ = theme_manager.load_current_theme(&theme_path);
+        }
+
         let initial_track_id = {
             let state_guard = state.lock().unwrap();
             state_guard.track_order.first().copied().unwrap_or(0)
@@ -148,7 +160,7 @@ impl YadawApp {
             menu_bar: super::menu_bar::MenuBar::new(),
             piano_roll_view: super::piano_roll_view::PianoRollView::new(),
             dialogs: super::dialogs::DialogManager::new(),
-            theme_manager: super::theme::ThemeManager::new(theme),
+            theme_manager,
 
             state,
             audio_state,
@@ -1038,7 +1050,7 @@ impl YadawApp {
             } => {
                 let metrics = PerformanceMetrics {
                     cpu_usage,
-                    memory_usage: self.estimate_memory_usage(),
+                    memory_usage: 0,
                     disk_streaming_rate: 0.0,
                     audio_buffer_health: buffer_fill,
                     plugin_processing_time: Duration::from_secs_f32(plugin_time_ms / 1000.0),
@@ -1051,9 +1063,9 @@ impl YadawApp {
             UIUpdate::NotesCutToClipboard(notes) => {
                 self.note_clipboard = Some(notes);
             }
-            UIUpdate::ExportProgress(progress) => {
+            UIUpdate::ExportStateUpdate(state) => {
                 if let Some(dialog) = &mut self.dialogs.export_dialog {
-                    dialog.set_progress(progress);
+                    dialog.set_state(state);
                 }
             }
             _ => {}
@@ -1096,7 +1108,7 @@ impl YadawApp {
             });
     }
 
-    fn handle_action(&mut self, action: AppAction) {
+    pub fn handle_action(&mut self, action: AppAction) {
         use AppAction::*;
 
         match action {
@@ -1415,59 +1427,6 @@ impl YadawApp {
         }
     }
 
-    fn estimate_memory_usage(&self) -> usize {
-        let state = self.state.lock().unwrap();
-        let mut total = 0;
-
-        for track in state.tracks.values() {
-            for clip in &track.audio_clips {
-                total += clip.samples.len() * std::mem::size_of::<f32>();
-            }
-            for clip in &track.midi_clips {
-                total += clip.notes.len() * std::mem::size_of::<MidiNote>();
-            }
-        }
-
-        total
-    }
-
-    fn estimate_cpu_usage(&self) -> f32 {
-        // Simple estimation based on track count and playing state
-        let is_playing = self.audio_state.playing.load(Ordering::Relaxed);
-        let track_count = self.state.lock().unwrap().tracks.len();
-
-        if is_playing {
-            0.1 + (track_count as f32 * 0.05) // 5% per track + 10% base
-        } else {
-            0.05 // 5% idle
-        }
-    }
-
-    fn update_performance_metrics(&mut self) {
-        let stale = self
-            .last_real_metrics_at
-            .map(|t| t.elapsed() >= std::time::Duration::from_millis(200))
-            .unwrap_or(true);
-        if !stale {
-            return;
-        }
-        // Calculate current metrics
-        let cpu_usage = self.estimate_cpu_usage();
-        let memory_usage = self.estimate_memory_usage();
-
-        let metrics = PerformanceMetrics {
-            cpu_usage,
-            memory_usage,
-            disk_streaming_rate: 0.0, // TODO: Track actual disk I/O
-            audio_buffer_health: 1.0 - cpu_usage, // Simple approximation
-            plugin_processing_time: Duration::from_millis(0), // TODO: Track plugin time
-            xruns: 0,                 // TODO: Get from audio thread
-            latency_ms: (512.0 / self.audio_state.sample_rate.load()) * 1000.0,
-        };
-
-        self.performance_monitor.update_metrics(metrics);
-    }
-
     pub fn sync_views_after_model_change(&mut self) {
         let state = self.state.lock().unwrap();
         let tracks_len = state.tracks.len();
@@ -1563,11 +1522,6 @@ impl eframe::App for YadawApp {
         // Draw floating windows
         self.show_floating_windows(ctx);
 
-        self.update_performance_metrics(); //TODO: maybe reduce calls for performance (irony? or it's just overexaggerated)
-
-        // // Handle global shortcuts
-        // self.handle_global_shortcuts(ctx);
-
         // Request repaint if playing
         if self.audio_state.playing.load(Ordering::Relaxed) {
             ctx.request_repaint();
@@ -1579,6 +1533,14 @@ impl Drop for YadawApp {
     fn drop(&mut self) {
         if let Some(shortcuts_path) = config_path().parent().map(|p| p.join("shortcuts.json")) {
             let _ = self.input_manager.save_shortcuts(&shortcuts_path);
+        }
+
+        if let Some(themes_path) = config_dir().map(|d| d.join("custom_themes.json")) {
+            let _ = self.theme_manager.save_custom_themes(&themes_path);
+        }
+
+        if let Some(theme_path) = config_dir().map(|d| d.join("current_theme.json")) {
+            let _ = self.theme_manager.save_current_theme(&theme_path);
         }
     }
 }

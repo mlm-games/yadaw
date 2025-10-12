@@ -9,6 +9,57 @@ use crate::plugin_host::{get_available_plugins, with_host};
 
 pub use crate::lv2_plugin_host::PluginInfo as PluginScanResult;
 
+pub trait PluginCategorizationInfo {
+    fn name(&self) -> &str;
+    fn uri(&self) -> &str;
+    fn is_instrument(&self) -> bool;
+    fn audio_inputs(&self) -> usize;
+    fn audio_outputs(&self) -> usize;
+    fn has_midi(&self) -> bool;
+}
+
+impl PluginCategorizationInfo for PluginInfo {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+    fn is_instrument(&self) -> bool {
+        self.is_instrument
+    }
+    fn audio_inputs(&self) -> usize {
+        self.audio_inputs
+    }
+    fn audio_outputs(&self) -> usize {
+        self.audio_outputs
+    }
+    fn has_midi(&self) -> bool {
+        self.has_midi
+    }
+}
+
+impl PluginCategorizationInfo for UnifiedPluginInfo {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+    fn is_instrument(&self) -> bool {
+        self.is_instrument
+    }
+    fn audio_inputs(&self) -> usize {
+        self.audio_inputs
+    }
+    fn audio_outputs(&self) -> usize {
+        self.audio_outputs
+    }
+    fn has_midi(&self) -> bool {
+        self.has_midi
+    }
+}
+
 pub struct PluginScanner {
     pub(crate) plugins: Vec<PluginInfo>,
 }
@@ -91,46 +142,6 @@ impl PluginParameterUpdate {
     }
 }
 
-// Add a helper trait for Track
-pub trait PluginParameterAccess {
-    fn update_plugin_param(
-        &mut self,
-        plugin_idx: usize,
-        param_name: &str,
-        value: f32,
-    ) -> Result<()>;
-
-    fn get_plugin_param(&self, plugin_idx: usize, param_name: &str) -> Option<f32>;
-}
-
-impl PluginParameterAccess for Track {
-    fn update_plugin_param(
-        &mut self,
-        plugin_idx: usize,
-        param_name: &str,
-        value: f32,
-    ) -> Result<()> {
-        self.plugin_chain
-            .get_mut(plugin_idx)
-            .ok_or_else(|| anyhow!("Plugin index {} out of bounds", plugin_idx))
-            .and_then(|plugin| {
-                if let Some(v) = plugin.params.get_mut(param_name) {
-                    *v = value;
-                    Ok(())
-                } else {
-                    Err(anyhow!("Parameter {} not found", param_name))
-                }
-            })
-    }
-
-    fn get_plugin_param(&self, plugin_idx: usize, param_name: &str) -> Option<f32> {
-        self.plugin_chain
-            .get(plugin_idx)
-            .and_then(|plugin| plugin.params.get(param_name))
-            .copied()
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PluginKind {
     Instrument,
@@ -157,149 +168,37 @@ pub fn classify_plugin_uri(uri: &str) -> Option<PluginKind> {
 }
 
 /// Categorizes plugin (based on name for effect subtypes)
-pub fn categorize_plugin(plugin: &PluginInfo) -> Vec<String> {
-    let mut categories = Vec::new();
-
-    categories.push("All".to_string());
-
-    if plugin.is_instrument
-        || (plugin.has_midi && plugin.audio_outputs > 0 && plugin.audio_inputs == 0)
-    {
-        categories.push("Instruments".to_string());
-    } else if plugin.audio_inputs > 0 && plugin.audio_outputs > 0 {
-        categories.push("Effects".to_string());
-    }
-
-    let name_lower = plugin.name.to_lowercase();
-    let uri_lower = plugin.uri.to_lowercase();
-
-    if name_lower.contains("compressor")
-        || name_lower.contains("limiter")
-        || name_lower.contains("gate")
-        || name_lower.contains("expander")
-        || uri_lower.contains("compressor")
-        || uri_lower.contains("limiter")
-    {
-        categories.push("Dynamics".to_string());
-    }
-
-    if name_lower.contains("eq")
-        || name_lower.contains("equalizer")
-        || name_lower.contains("filter")
-        || uri_lower.contains("eq")
-        || uri_lower.contains("equalizer")
-    {
-        categories.push("EQ".to_string());
-    }
-
-    if name_lower.contains("reverb")
-        || name_lower.contains("room")
-        || name_lower.contains("hall")
-        || uri_lower.contains("reverb")
-    {
-        categories.push("Reverb".to_string());
-    }
-
-    if name_lower.contains("delay") || name_lower.contains("echo") || uri_lower.contains("delay") {
-        categories.push("Delay".to_string());
-    }
-
-    if name_lower.contains("chorus")
-        || name_lower.contains("flanger")
-        || name_lower.contains("phaser")
-        || name_lower.contains("tremolo")
-        || uri_lower.contains("modulation")
-    {
-        categories.push("Modulation".to_string());
-    }
-
-    if name_lower.contains("distortion")
-        || name_lower.contains("overdrive")
-        || name_lower.contains("fuzz")
-        || name_lower.contains("saturation")
-        || uri_lower.contains("distortion")
-    {
-        categories.push("Distortion".to_string());
-    }
-
-    if name_lower.contains("utility")
-        || name_lower.contains("meter")
-        || name_lower.contains("analyzer")
-        || name_lower.contains("scope")
-    {
-        categories.push("Utility".to_string());
-    }
-
-    categories
-}
-
-pub fn categorize_unified_plugin(p: &UnifiedPluginInfo) -> Vec<String> {
+pub fn categorize_plugin(p: &impl PluginCategorizationInfo) -> Vec<String> {
     let mut categories = vec!["All".to_string()];
-    if p.is_instrument || (p.has_midi && p.audio_outputs > 0 && p.audio_inputs == 0) {
+    if p.is_instrument() || (p.has_midi() && p.audio_outputs() > 0 && p.audio_inputs() == 0) {
         categories.push("Instruments".to_string());
-    } else if p.audio_inputs > 0 && p.audio_outputs > 0 {
+    } else if p.audio_inputs() > 0 && p.audio_outputs() > 0 {
         categories.push("Effects".to_string());
     }
-    let name = p.name.to_lowercase();
-    let uri = p.uri.to_lowercase();
+    let name = p.name().to_lowercase();
+    let uri = p.uri().to_lowercase();
 
-    if name.contains("compressor")
-        || name.contains("limiter")
-        || name.contains("gate")
-        || name.contains("expander")
-        || uri.contains("compressor")
-        || uri.contains("limiter")
-    {
+    if name.contains("compressor") || name.contains("limiter") || name.contains("gate") {
         categories.push("Dynamics".to_string());
     }
-
-    if name.contains("eq")
-        || name.contains("equalizer")
-        || name.contains("filter")
-        || uri.contains("eq")
-        || uri.contains("equalizer")
-    {
+    if name.contains("eq") || name.contains("equalizer") || name.contains("filter") {
         categories.push("EQ".to_string());
     }
-
-    if name.contains("reverb")
-        || name.contains("room")
-        || name.contains("hall")
-        || uri.contains("reverb")
-    {
+    if name.contains("reverb") || name.contains("room") || name.contains("hall") {
         categories.push("Reverb".to_string());
     }
-
-    if name.contains("delay") || name.contains("echo") || uri.contains("delay") {
+    if name.contains("delay") || name.contains("echo") {
         categories.push("Delay".to_string());
     }
-
-    if name.contains("chorus")
-        || name.contains("flanger")
-        || name.contains("phaser")
-        || name.contains("tremolo")
-        || uri.contains("modulation")
-    {
+    if name.contains("chorus") || name.contains("flanger") || name.contains("phaser") {
         categories.push("Modulation".to_string());
     }
-
-    if name.contains("distortion")
-        || name.contains("overdrive")
-        || name.contains("fuzz")
-        || name.contains("saturation")
-        || uri.contains("distortion")
-    {
+    if name.contains("distortion") || name.contains("overdrive") || name.contains("saturation") {
         categories.push("Distortion".to_string());
     }
-
-    if name.contains("utility")
-        || name.contains("meter")
-        || name.contains("analyzer")
-        || name.contains("scope")
-    {
+    if name.contains("utility") || name.contains("meter") || name.contains("analyzer") {
         categories.push("Utility".to_string());
     }
-
     categories
 }
 

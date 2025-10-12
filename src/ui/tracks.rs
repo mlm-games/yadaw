@@ -4,16 +4,21 @@ use super::*;
 use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
 use crate::messages::AudioCommand;
+use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
 use crate::model::track::Track;
 use crate::plugin::get_control_port_info;
+use crate::project::AppState;
 use crate::track_manager::{mute_track, solo_track};
 
 pub struct TracksPanel {
     track_meters: HashMap<u64, LevelMeter>,
     show_mixer_strip: bool,
     show_automation_buttons: bool,
+    cached_plugin_chains: HashMap<u64, (u64, Vec<PluginDescriptor>)>,
 }
+
+static EMPTY_PLUGIN_CHAIN: Vec<PluginDescriptor> = Vec::new();
 
 impl TracksPanel {
     pub fn new() -> Self {
@@ -21,6 +26,7 @@ impl TracksPanel {
             track_meters: HashMap::new(),
             show_mixer_strip: true,
             show_automation_buttons: true,
+            cached_plugin_chains: HashMap::new(),
         }
     }
 
@@ -30,6 +36,27 @@ impl TracksPanel {
             let samples = [left.max(right)];
             meter.update(&samples, 1.0 / 60.0);
         }
+    }
+
+    fn get_plugin_chain(&mut self, track_id: u64, state: &AppState) -> &Vec<PluginDescriptor> {
+        let track = match state.tracks.get(&track_id) {
+            Some(t) => t,
+            None => return &EMPTY_PLUGIN_CHAIN,
+        };
+
+        let generation = track.plugin_chain.len() as u64;
+
+        let entry = self
+            .cached_plugin_chains
+            .entry(track_id)
+            .or_insert_with(|| (generation, track.plugin_chain.clone()));
+
+        if entry.0 != generation {
+            entry.0 = generation;
+            entry.1 = track.plugin_chain.clone();
+        }
+
+        &entry.1
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
@@ -389,7 +416,12 @@ impl TracksPanel {
         action
     }
 
-    fn draw_plugin_chain(&self, ui: &mut egui::Ui, track_id: u64, app: &mut super::app::YadawApp) {
+    fn draw_plugin_chain(
+        &mut self,
+        ui: &mut egui::Ui,
+        track_id: u64,
+        app: &mut super::app::YadawApp,
+    ) {
         ui.separator();
         ui.horizontal(|ui| {
             ui.label("Plugins:");
@@ -399,55 +431,72 @@ impl TracksPanel {
         });
 
         let mut plugin_to_remove: Option<u64> = None;
+        let mut move_action: Option<(usize, usize)> = None;
 
-        let plugin_chain = {
+        // Get cached chain to avoid cloning every frame
+        let chain_len = {
             let state = app.state.lock().unwrap();
             state
                 .tracks
                 .get(&track_id)
-                .map(|t| t.plugin_chain.clone())
-                .unwrap_or_default()
+                .map(|t| t.plugin_chain.len())
+                .unwrap_or(0)
         };
-        let chain_len = plugin_chain.len();
 
-        for (plugin_idx, plugin) in plugin_chain.iter().enumerate() {
-            let plugin_id = plugin.id;
-            let mut bypass = plugin.bypass;
+        // Only lock when we need to read plugin data
+        for plugin_idx in 0..chain_len {
+            let (plugin_id, plugin_name, plugin_uri, bypass, params) = {
+                let state = app.state.lock().unwrap();
+                let track = match state.tracks.get(&track_id) {
+                    Some(t) => t,
+                    None => continue,
+                };
 
-            egui::CollapsingHeader::new(&plugin.name)
+                let plugin = match track.plugin_chain.get(plugin_idx) {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+                (
+                    plugin.id,
+                    plugin.name.clone(),
+                    plugin.uri.clone(),
+                    plugin.bypass,
+                    plugin.params.clone(),
+                )
+            };
+
+            let mut bypass_local = bypass;
+
+            egui::CollapsingHeader::new(&plugin_name)
                 .id_salt(("plugin", track_id, plugin_id))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.checkbox(&mut bypass, "Bypass").changed() {
-                            let _ = app
-                                .command_tx
-                                .send(AudioCommand::SetPluginBypass(track_id, plugin_id, bypass));
+                        if ui.checkbox(&mut bypass_local, "Bypass").changed() {
+                            let _ = app.command_tx.send(AudioCommand::SetPluginBypass(
+                                track_id,
+                                plugin_id,
+                                bypass_local,
+                            ));
                         }
                         if ui.small_button("✕").clicked() {
                             plugin_to_remove = Some(plugin_id);
                         }
                         if plugin_idx > 0 && ui.small_button("▲").clicked() {
-                            let _ = app.command_tx.send(AudioCommand::MovePlugin(
-                                track_id,
-                                plugin_idx,
-                                plugin_idx - 1,
-                            ));
+                            move_action = Some((plugin_idx, plugin_idx - 1));
                         }
                         if plugin_idx < chain_len - 1 && ui.small_button("▼").clicked() {
-                            let _ = app.command_tx.send(AudioCommand::MovePlugin(
-                                track_id,
-                                plugin_idx,
-                                plugin_idx + 1,
-                            ));
+                            move_action = Some((plugin_idx, plugin_idx + 1));
                         }
                     });
 
-                    for (pname, &pval) in &plugin.params {
+                    // Draw parameters
+                    for (pname, &pval) in &params {
                         let mut v = pval;
                         ui.horizontal(|ui| {
                             ui.label(pname);
 
-                            let meta = get_control_port_info(&plugin.uri, pname);
+                            let meta = get_control_port_info(&plugin_uri, pname);
                             let (min_v, max_v, default_v) = meta
                                 .as_ref()
                                 .map(|m| (m.min, m.max, m.default))
@@ -480,10 +529,21 @@ impl TracksPanel {
                     }
                 });
         }
+
+        // Apply actions after iteration
         if let Some(id_to_remove) = plugin_to_remove {
             let _ = app
                 .command_tx
                 .send(AudioCommand::RemovePlugin(track_id, id_to_remove));
+            // Invalidate cache
+            self.cached_plugin_chains.remove(&track_id);
+        }
+
+        if let Some((from, to)) = move_action {
+            let _ = app
+                .command_tx
+                .send(AudioCommand::MovePlugin(track_id, from, to));
+            self.cached_plugin_chains.remove(&track_id);
         }
     }
 

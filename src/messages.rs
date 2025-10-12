@@ -215,6 +215,16 @@ pub enum UIUpdate {
         params: Vec<(String, f32, f32, f32)>,
     },
     NotesCutToClipboard(Vec<MidiNote>),
-    ExportProgress(f32),
+    ExportStateUpdate(ExportState),
     RecordingStateChanged(bool),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExportState {
+    Rendering(f32),
+    Normalizing,
+    Finalizing,
+    Complete(String),
+    Cancelled,
+    Error(String),
 }

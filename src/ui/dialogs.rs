@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use egui_file_dialog::FileDialog;
 
 use super::*;
+use crate::audio_export::ExportConfig;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::actions::{ActionContext, AppAction};
 use crate::input::shortcuts::ShortcutRegistry;
 use crate::input::InputManager;
-use crate::messages::AudioCommand;
+use crate::messages::{AudioCommand, ExportState};
 use crate::model::plugin_api::BackendKind;
-use crate::plugin::categorize_unified_plugin;
+use crate::plugin::categorize_plugin;
 use crate::ui::theme;
 
 macro_rules! simple_dialog {
@@ -629,7 +630,7 @@ impl PluginBrowserDialog {
                         }
                         // category filter
                         if self.selected_category != "All" {
-                            let cats = categorize_unified_plugin(plugin);
+                            let cats = categorize_plugin(plugin);
                             if !cats.contains(&self.selected_category) {
                                 continue;
                             }
@@ -642,7 +643,7 @@ impl PluginBrowserDialog {
 
                         // Show category hint in “All”
                         let display_name = if self.selected_category == "All" {
-                            let cats = categorize_unified_plugin(plugin);
+                            let cats = categorize_plugin(plugin);
                             let main_cat = cats.iter().find(|c| *c != "All").map(|c| c.as_str()).unwrap_or("Unknown");
                             format!("{} {} [{}]", backend_badge, plugin.name, main_cat)
                         } else {
@@ -1420,6 +1421,15 @@ enum ExportQuality {
     Lossless,
 }
 
+#[derive(PartialEq, Clone, Copy)]
+enum ExportRange {
+    EntireProject,
+    LoopRegion,
+    Custom,
+}
+
+
+
 pub struct ExportDialog {
     closed: bool,
     path: PathBuf,
@@ -1427,16 +1437,11 @@ pub struct ExportDialog {
     export_range: ExportRange,
     start_beat_input: String,
     end_beat_input: String,
-    is_exporting: bool,
-    progress: f32,
+    
+    state: Option<ExportState>,
+    
     file_dialog: FileDialog,
-}
-
-#[derive(PartialEq, Clone, Copy)]
-enum ExportRange {
-    EntireProject,
-    LoopRegion,
-    Custom,
+    normalize: bool,
 }
 
 impl ExportDialog {
@@ -1448,21 +1453,23 @@ impl ExportDialog {
             export_range: ExportRange::LoopRegion,
             start_beat_input: "0.0".to_string(),
             end_beat_input: "16.0".to_string(),
-            is_exporting: false,
-            progress: 0.0,
+            state: None, // Start in idle state
             file_dialog: FileDialog::new()
                 .title("Export to WAV")
                 .add_file_filter("WAV Audio", Arc::new(|path| path.extension().unwrap_or_default() == "wav")),
+            normalize: false,
         }
     }
 
-    pub fn set_progress(&mut self, progress: f32) {
-        self.progress = progress;
-        if progress >= 1.0 {
-            self.is_exporting = false;
+    pub fn set_state(&mut self, state: ExportState) {
+        if matches!(state, ExportState::Complete(_) | ExportState::Error(_) | ExportState::Cancelled) {
+            // Can be closed now
+        } else {
+            // Is in progress
+            self.state = Some(state);
         }
     }
-
+    
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
         let mut open = true;
         
@@ -1470,16 +1477,33 @@ impl ExportDialog {
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                if self.is_exporting {
-                    ui.label("Exporting...");
-                    ui.add(egui::ProgressBar::new(self.progress).show_percentage());
+                // Check the state first
+                if let Some(state) = &self.state {
+                    match state {
+                        ExportState::Rendering(progress) => {
+                            ui.label("Rendering...");
+                            ui.add(egui::ProgressBar::new(*progress).show_percentage());
+                        }
+                        ExportState::Normalizing => {
+                            ui.label("Normalizing audio...");
+                            ui.add(egui::ProgressBar::new(1.0)); // Show full bar
+                        }
+                        ExportState::Finalizing => {
+                            ui.label("Finalizing file...");
+                            ui.add(egui::Spinner::new());
+                        }
+                        // These states are handled after the window closes
+                        _ => {}
+                    }
                     if ui.button("Cancel").clicked() {
-                        // TODO: Implement cancellation
-                        self.is_exporting = false;
+                        // TODO: Implement cancellation logic via AudioExporter
+                        self.state = Some(ExportState::Cancelled);
                         self.closed = true;
                     }
                     return;
                 }
+
+                // --- Configuration UI (only shown when not exporting) ---
 
                 // File path
                 ui.horizontal(|ui| {
@@ -1505,6 +1529,8 @@ impl ExportDialog {
                     ui.radio_value(&mut self.bit_depth, 32, "32-bit Float");
                 });
 
+                ui.checkbox(&mut self.normalize, "Normalize Peak to -0.1 dB");
+
                 // Export Range
                 ui.separator();
                 ui.label("Export Range:");
@@ -1528,7 +1554,6 @@ impl ExportDialog {
                     if ui.button("Export").clicked() {
                         let (start_beat, end_beat) = match self.export_range {
                             ExportRange::EntireProject => {
-                                let state = app.state.lock().unwrap();
                                 let end = app.timeline_ui.compute_project_end_beats(app);
                                 (0.0, end)
                             }
@@ -1546,10 +1571,12 @@ impl ExportDialog {
                             bit_depth: self.bit_depth,
                             start_beat,
                             end_beat,
+                            normalize: self.normalize,
                         };
                         
                         let _ = app.command_tx.send(AudioCommand::ExportAudio(config));
-                        self.is_exporting = true;
+                        // Set initial state to start showing progress bar
+                        self.state = Some(ExportState::Rendering(0.0));
                     }
                     if ui.button("Cancel").clicked() {
                         self.closed = true;
@@ -1561,7 +1588,6 @@ impl ExportDialog {
             self.closed = true;
         }
     }
-
     pub fn is_closed(&self) -> bool {
         self.closed
     }
@@ -1927,9 +1953,12 @@ impl TrackGroupingDialog {
                     ui.label("Select tracks to group:");
 
                     let state = app.state.lock().unwrap();
-                    for (idx, track) in state.tracks.iter().enumerate() {
+                    for (track_id, track) in state.tracks.iter() {
+                        let Some(idx) = state.track_order.iter().position(|&id| id == *track_id) else {
+                            return None;
+                        };
                         let mut is_selected = self.selected_tracks.contains(&idx);
-                        if ui.checkbox(&mut is_selected, &track.1.name).changed() {
+                        if ui.checkbox(&mut is_selected, &track.name).changed() {
                             if is_selected {
                                 self.selected_tracks.push(idx);
                             } else {
@@ -1939,14 +1968,14 @@ impl TrackGroupingDialog {
                     }
                     drop(state);
 
-                    if ui.button("Create Group").clicked() && !self.selected_tracks.is_empty() {
+                    Some(if ui.button("Create Group").clicked() && !self.selected_tracks.is_empty() {
                         app.track_manager.create_group(
                             self.new_group_name.clone(),
                             self.selected_tracks.clone(),
                         );
                         self.selected_tracks.clear();
                         self.new_group_name = String::from("New Group");
-                    }
+                    })
                 });
 
                 ui.separator();

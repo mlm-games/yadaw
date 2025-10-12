@@ -93,6 +93,36 @@ impl ThemeManager {
     pub fn get_custom_themes(&self) -> &[CustomTheme] {
         &self.custom_themes
     }
+    pub fn save_custom_themes(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        let json = serde_json::to_string_pretty(&self.custom_themes)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn load_custom_themes(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        if !path.exists() {
+            return Ok(());
+        }
+        let json = std::fs::read_to_string(path)?;
+        let themes: Vec<CustomTheme> = serde_json::from_str(&json)?;
+        self.custom_themes = themes;
+        Ok(())
+    }
+
+    pub fn save_current_theme(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        let json = serde_json::to_string_pretty(&self.current_theme)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn load_current_theme(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        if !path.exists() {
+            return Ok(());
+        }
+        let json = std::fs::read_to_string(path)?;
+        self.current_theme = serde_json::from_str(&json)?;
+        Ok(())
+    }
 }
 
 // Predefined theme presets
