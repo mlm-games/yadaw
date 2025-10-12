@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 
 use crossbeam_channel::{Receiver, Sender};
 
+use crate::audio_export::AudioExporter;
 use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, UIUpdate};
 use crate::model::plugin_api::BackendKind;
@@ -799,6 +800,18 @@ fn process_command(
             }
             state.ensure_ids(); // Assign IDs to newly pasted notes
             send_tracks_snapshot_locked(&state, realtime_tx);
+        }
+        AudioCommand::ExportAudio(config) => {
+            let app_state_clone = app_state.lock().unwrap().clone();
+            let audio_state_clone = audio_state.clone();
+            let ui_tx_clone = ui_tx.clone();
+
+            AudioExporter::export_to_wav(
+                app_state_clone,
+                audio_state_clone,
+                config.clone(),
+                ui_tx_clone,
+            );
         }
         _ => {
             // Stub for unhandled commands

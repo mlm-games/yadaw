@@ -16,6 +16,7 @@ use crate::project_manager::ProjectManager;
 
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
+use crate::ui::dialogs::ExportDialog;
 use crossbeam_channel::{Receiver, Sender};
 use dirs::config_dir;
 use eframe::egui;
@@ -925,9 +926,7 @@ impl YadawApp {
     }
 
     pub fn export_audio_dialog(&mut self) {
-        // TODO: Implement audio export
-        self.dialogs
-            .show_message("Audio export not yet implemented");
+        self.dialogs.show_export_dialog();
     }
 
     pub fn is_selected_track_midi(&self) -> bool {
@@ -1037,6 +1036,11 @@ impl YadawApp {
             }
             UIUpdate::NotesCutToClipboard(notes) => {
                 self.note_clipboard = Some(notes);
+            }
+            UIUpdate::ExportProgress(progress) => {
+                if let Some(dialog) = &mut self.dialogs.export_dialog {
+                    dialog.set_progress(progress);
+                }
             }
             _ => {}
         }

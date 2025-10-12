@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use egui_file_dialog::FileDialog;
 
 use super::*;
@@ -469,6 +471,9 @@ impl DialogManager {
         let mut editor = ShortcutsEditorDialog::new();
         editor.open = true;
         self.shortcuts_editor = Some(editor);
+    }
+    pub fn show_export_dialog(&mut self) {
+        self.export_dialog = Some(ExportDialog::new());
     }
 }
 
@@ -1399,14 +1404,6 @@ impl Default for ShortcutsEditorDialog {
     }
 }
 
-pub struct ExportDialog {
-    closed: bool,
-    format: ExportFormat,
-    quality: ExportQuality,
-    normalize: bool,
-    dither: bool,
-}
-
 #[derive(Clone, Copy, PartialEq)]
 enum ExportFormat {
     Wav,
@@ -1423,53 +1420,137 @@ enum ExportQuality {
     Lossless,
 }
 
+pub struct ExportDialog {
+    closed: bool,
+    path: PathBuf,
+    bit_depth: u16,
+    export_range: ExportRange,
+    start_beat_input: String,
+    end_beat_input: String,
+    is_exporting: bool,
+    progress: f32,
+    file_dialog: FileDialog,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum ExportRange {
+    EntireProject,
+    LoopRegion,
+    Custom,
+}
+
 impl ExportDialog {
     pub fn new() -> Self {
         Self {
             closed: false,
-            format: ExportFormat::Wav,
-            quality: ExportQuality::High,
-            normalize: true,
-            dither: false,
+            path: PathBuf::from("untitled.wav"),
+            bit_depth: 24,
+            export_range: ExportRange::LoopRegion,
+            start_beat_input: "0.0".to_string(),
+            end_beat_input: "16.0".to_string(),
+            is_exporting: false,
+            progress: 0.0,
+            file_dialog: FileDialog::new()
+                .title("Export to WAV")
+                .add_file_filter("WAV Audio", Arc::new(|path| path.extension().unwrap_or_default() == "wav")),
+        }
+    }
+
+    pub fn set_progress(&mut self, progress: f32) {
+        self.progress = progress;
+        if progress >= 1.0 {
+            self.is_exporting = false;
         }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
         let mut open = true;
-
+        
         egui::Window::new("Export Audio")
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Format:");
-                    ui.radio_value(&mut self.format, ExportFormat::Wav, "WAV");
-                    ui.radio_value(&mut self.format, ExportFormat::Mp3, "MP3");
-                    ui.radio_value(&mut self.format, ExportFormat::Flac, "FLAC");
-                    ui.radio_value(&mut self.format, ExportFormat::Ogg, "OGG");
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Quality:");
-                    ui.radio_value(&mut self.quality, ExportQuality::Low, "Low");
-                    ui.radio_value(&mut self.quality, ExportQuality::Medium, "Medium");
-                    ui.radio_value(&mut self.quality, ExportQuality::High, "High");
-                    ui.radio_value(&mut self.quality, ExportQuality::Lossless, "Lossless");
-                });
-
-                ui.separator();
-
-                ui.checkbox(&mut self.normalize, "Normalize");
-                ui.checkbox(&mut self.dither, "Apply Dither");
-
-                ui.separator();
-
-                ui.horizontal(|ui| {
-                    if ui.button("Export").clicked() {
-                        // Perform export
+                if self.is_exporting {
+                    ui.label("Exporting...");
+                    ui.add(egui::ProgressBar::new(self.progress).show_percentage());
+                    if ui.button("Cancel").clicked() {
+                        // TODO: Implement cancellation
+                        self.is_exporting = false;
                         self.closed = true;
                     }
+                    return;
+                }
 
+                // File path
+                ui.horizontal(|ui| {
+                    ui.label("File Path:");
+                    ui.label(self.path.to_string_lossy());
+                    if ui.button("Browse...").clicked() {
+                        self.file_dialog.save_file();
+                    }
+                });
+                
+                self.file_dialog.update(ctx);
+                if let Some(path) = self.file_dialog.take_picked() {
+                    self.path = path;
+                }
+
+                // Format
+                ui.separator();
+                ui.label("Format: WAV");
+                ui.horizontal(|ui| {
+                    ui.label("Bit Depth:");
+                    ui.radio_value(&mut self.bit_depth, 16, "16-bit");
+                    ui.radio_value(&mut self.bit_depth, 24, "24-bit");
+                    ui.radio_value(&mut self.bit_depth, 32, "32-bit Float");
+                });
+
+                // Export Range
+                ui.separator();
+                ui.label("Export Range:");
+                ui.radio_value(&mut self.export_range, ExportRange::EntireProject, "Entire Project");
+                ui.radio_value(&mut self.export_range, ExportRange::LoopRegion, "Loop Region");
+                ui.radio_value(&mut self.export_range, ExportRange::Custom, "Custom Range (beats)");
+
+                if self.export_range == ExportRange::Custom {
+                    ui.horizontal(|ui| {
+                        ui.label("Start:");
+                        ui.text_edit_singleline(&mut self.start_beat_input);
+                        ui.label("End:");
+                        ui.text_edit_singleline(&mut self.end_beat_input);
+                    });
+                }
+                
+                ui.separator();
+
+                // Action buttons
+                ui.horizontal(|ui| {
+                    if ui.button("Export").clicked() {
+                        let (start_beat, end_beat) = match self.export_range {
+                            ExportRange::EntireProject => {
+                                let state = app.state.lock().unwrap();
+                                let end = app.timeline_ui.compute_project_end_beats(app);
+                                (0.0, end)
+                            }
+                            ExportRange::LoopRegion => {
+                                (app.audio_state.loop_start.load(), app.audio_state.loop_end.load())
+                            }
+                            ExportRange::Custom => {
+                                (self.start_beat_input.parse().unwrap_or(0.0), self.end_beat_input.parse().unwrap_or(0.0))
+                            }
+                        };
+                        
+                        let config = crate::audio_export::ExportConfig {
+                            path: self.path.clone(),
+                            sample_rate: app.audio_state.sample_rate.load(),
+                            bit_depth: self.bit_depth,
+                            start_beat,
+                            end_beat,
+                        };
+                        
+                        let _ = app.command_tx.send(AudioCommand::ExportAudio(config));
+                        self.is_exporting = true;
+                    }
                     if ui.button("Cancel").clicked() {
                         self.closed = true;
                     }
@@ -1485,6 +1566,7 @@ impl ExportDialog {
         self.closed
     }
 }
+
 
 pub struct PluginManagerDialog {
     closed: bool,

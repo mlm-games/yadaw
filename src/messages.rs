@@ -2,11 +2,14 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{
-    MidiNote,
-    automation::{AutomationMode, AutomationTarget},
-    clip::{AudioClip, MidiClip},
-    plugin_api::BackendKind,
+use crate::{
+    audio_export::ExportConfig,
+    model::{
+        MidiNote,
+        automation::{AutomationMode, AutomationTarget},
+        clip::{AudioClip, MidiClip},
+        plugin_api::BackendKind,
+    },
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +168,7 @@ pub enum AudioCommand {
         clip_id: u64,
         note_ids: Vec<u64>,
     },
+    ExportAudio(ExportConfig),
 }
 
 #[derive(Debug, Clone)]
@@ -210,4 +214,5 @@ pub enum UIUpdate {
         params: Vec<(String, f32, f32, f32)>,
     },
     NotesCutToClipboard(Vec<MidiNote>),
+    ExportProgress(f32),
 }

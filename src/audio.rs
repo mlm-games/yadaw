@@ -419,6 +419,52 @@ pub fn run_audio_thread(
 }
 
 impl AudioEngine {
+    pub fn new_for_offline_render(
+        initial_tracks: &[TrackSnapshot],
+        audio_state: &AudioState,
+        export_sample_rate: f32,
+    ) -> Result<Self, anyhow::Error> {
+        // Use a dummy channel since we don't send UI updates during offline render
+        let (dummy_tx, _) = crossbeam_channel::unbounded();
+
+        let host_cfg = HostConfig {
+            sample_rate: export_sample_rate as f64,
+            max_block: MAX_BUFFER_SIZE,
+        };
+        let host_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
+
+        let mut engine = AudioEngine {
+            tracks: Arc::new(RwLock::new(Vec::new())),
+            track_order: Arc::new(RwLock::new(Vec::new())),
+            audio_state: Arc::new(AudioState::new()), // Use a dummy state
+            track_processors: HashMap::new(),
+            recording_state: RecordingState {
+                is_recording: false,
+                recording_track: None,
+                recording_consumer: rtrb::RingBuffer::<f32>::new(1).1, // Dummy
+                recording_start_position: 0.0,
+                accumulated_samples: Vec::new(),
+                monitor_queue: Vec::new(),
+            },
+            preview_note: None,
+            sample_rate: export_sample_rate as f64,
+            updates: dummy_tx,
+            mixer: MixerEngine::new(),
+            channel_strips: HashMap::new(),
+            xrun_count: 0,
+            paused_last: false,
+            host_facade,
+        };
+
+        // Use the full sync to build the engine state from snapshots
+        engine.full_sync_from_snapshot(initial_tracks);
+
+        // Override BPM from the main state
+        engine.audio_state.bpm.store(audio_state.bpm.load());
+
+        Ok(engine)
+    }
+
     fn process_realtime_command(&mut self, cmd: RealtimeCommand) {
         match cmd {
             RealtimeCommand::UpdateTrackVolume(track_id, vol) => {
@@ -589,7 +635,7 @@ impl AudioEngine {
             .map(|t| t.track_id);
     }
 
-    fn process_audio(
+    pub fn process_audio(
         &mut self,
         output: &mut [f32],
         num_frames: usize,

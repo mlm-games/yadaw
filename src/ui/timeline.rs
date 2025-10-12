@@ -1277,7 +1277,7 @@ impl TimelineView {
         }
     }
 
-    fn compute_project_end_beats(&self, app: &super::app::YadawApp) -> f64 {
+    pub fn compute_project_end_beats(&self, app: &super::app::YadawApp) -> f64 {
         let state = app.state.lock().unwrap();
         let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
         for t in state.tracks.values() {
