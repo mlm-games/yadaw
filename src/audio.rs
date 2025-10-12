@@ -479,6 +479,11 @@ impl AudioEngine {
             host_facade,
         };
 
+        engine
+            .audio_state
+            .loop_enabled
+            .store(false, Ordering::Relaxed);
+
         engine.full_sync_from_snapshot(initial_tracks);
 
         // Override BPM from the main state

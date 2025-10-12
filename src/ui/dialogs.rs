@@ -1462,12 +1462,7 @@ impl ExportDialog {
     }
 
     pub fn set_state(&mut self, state: ExportState) {
-        if matches!(state, ExportState::Complete(_) | ExportState::Error(_) | ExportState::Cancelled) {
-            // Can be closed now
-        } else {
-            // Is in progress
             self.state = Some(state);
-        }
     }
     
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
@@ -1492,8 +1487,27 @@ impl ExportDialog {
                             ui.label("Finalizing file...");
                             ui.add(egui::Spinner::new());
                         }
-                        // These states are handled after the window closes
-                        _ => {}
+                       ExportState::Complete(path) => {
+                            ui.colored_label(egui::Color32::GREEN, "Export Complete!");
+                            ui.label(format!("File saved to: {}", path));
+                            if ui.button("Close").clicked() {
+                                self.closed = true;
+                            }
+                        }
+                        ExportState::Error(err) => {
+                            ui.colored_label(egui::Color32::RED, "Export Failed!");
+                            ui.label(err);
+                            if ui.button("Close").clicked() {
+                                self.closed = true;
+                            }
+                        }
+                        ExportState::Cancelled => {
+                            ui.label("Export Cancelled.");
+                            if ui.button("Close").clicked() {
+                                self.closed = true;
+                            }
+                        }
+                                        _ => {}
                     }
                     if ui.button("Cancel").clicked() {
                         // TODO: Implement cancellation logic via AudioExporter
