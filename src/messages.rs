@@ -28,7 +28,8 @@ pub enum AudioCommand {
     SetTrackPan(u64, f32),
     SetTrackMute(u64, bool),
     SetTrackSolo(u64, bool),
-    SetTrackArmed(u64, bool),
+    ArmForRecording(u64, bool),
+    FinalizeRecording,
     SetTrackInput(u64, Option<String>),
     SetTrackOutput(u64, Option<String>),
     SetTrackMonitor(u64, bool),
@@ -215,4 +216,5 @@ pub enum UIUpdate {
     },
     NotesCutToClipboard(Vec<MidiNote>),
     ExportProgress(f32),
+    RecordingStateChanged(bool),
 }

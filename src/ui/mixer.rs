@@ -389,12 +389,12 @@ impl MixerWindow {
                         .on_hover_text("Record Arm")
                         .clicked()
                     {
-                        let _ = app
-                            .command_tx
-                            .send(crate::messages::AudioCommand::SetTrackArmed(
-                                track_id,
-                                !track.armed,
-                            ));
+                        let _ =
+                            app.command_tx
+                                .send(crate::messages::AudioCommand::ArmForRecording(
+                                    track_id,
+                                    !track.armed,
+                                ));
                     }
                 });
             });

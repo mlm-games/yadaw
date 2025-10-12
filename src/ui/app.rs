@@ -85,6 +85,8 @@ pub struct YadawApp {
     pub(super) note_clipboard: Option<Vec<MidiNote>>,
     pub(super) active_edit_target: ActiveEditTarget,
     pub(crate) last_real_metrics_at: Option<Instant>,
+
+    pub is_recording_ui: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,6 +186,7 @@ impl YadawApp {
 
             input_manager: input_mgr,
             last_real_metrics_at: None,
+            is_recording_ui: false,
         }
     }
 
@@ -1000,12 +1003,23 @@ impl YadawApp {
                 self.tracks_ui.update_levels(levels);
             }
             UIUpdate::RecordingFinished(track_id, mut clip) => {
+                self.push_undo();
                 let mut state = self.state.lock().unwrap();
                 clip.id = state.fresh_id();
                 if let Some(track) = state.tracks.get_mut(&track_id) {
-                    track.audio_clips.push(clip);
+                    if !track.is_midi {
+                        // Extra safety check
+                        track.audio_clips.push(clip);
+                    }
                 }
+                drop(state);
+                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
             }
+
+            UIUpdate::RecordingStateChanged(is_recording) => {
+                self.is_recording_ui = is_recording;
+            }
+
             UIUpdate::RecordingLevel(_level) => {}
             UIUpdate::MasterLevel(_left, _right) => {}
             UIUpdate::PushUndo(snapshot) => {
@@ -1098,8 +1112,16 @@ impl YadawApp {
             }
 
             Record => {
-                if let Some(transport) = &self.transport_ui.transport {
-                    transport.record();
+                // The `Record` command now toggles the *intent* to record.
+                // The audio thread will handle the actual start/stop.
+                let should_record = !self.audio_state.recording.load(Ordering::Relaxed);
+                self.audio_state
+                    .recording
+                    .store(should_record, Ordering::Relaxed);
+
+                // If we are starting a recording, also ensure playback is on.
+                if should_record {
+                    self.audio_state.playing.store(true, Ordering::Relaxed);
                 }
             }
 

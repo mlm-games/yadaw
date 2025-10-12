@@ -288,19 +288,13 @@ pub fn run_audio_thread(
 
         data.fill(0.0);
 
-        let now_playing = engine.audio_state.playing.load(Ordering::Relaxed);
+        let is_playing = engine.audio_state.playing.load(Ordering::Relaxed);
+        let should_be_recording = engine.audio_state.recording.load(Ordering::Relaxed);
+        let is_actually_recording = engine.recording_state.is_recording;
 
         // Drain RT commands at block start
         while let Ok(cmd) = realtime_commands.try_recv() {
             engine.process_realtime_command(cmd);
-        }
-
-        // Pull new input samples
-        while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
-            engine.recording_state.monitor_queue.push(sample);
-            if engine.recording_state.is_recording {
-                engine.recording_state.accumulated_samples.push(sample);
-            }
         }
 
         // Cap monitor queue
@@ -309,29 +303,45 @@ pub fn run_audio_thread(
             engine.recording_state.monitor_queue.drain(0..drop_n);
         }
 
-        // Handle recording finalization
-        if !engine.audio_state.recording.load(Ordering::Relaxed)
-            && engine.recording_state.is_recording
-        {
+        if is_playing && should_be_recording && !is_actually_recording {
+            // START RECORDING
+            if engine.recording_state.recording_track.is_some() {
+                engine.recording_state.is_recording = true;
+                // Capture the precise start position in samples
+                engine.recording_state.recording_start_position = engine.audio_state.get_position();
+                engine.recording_state.accumulated_samples.clear();
+                let _ = engine
+                    .updates
+                    .try_send(UIUpdate::RecordingStateChanged(true));
+            }
+        } else if (!is_playing || !should_be_recording) && is_actually_recording {
+            // STOP RECORDING
             engine.recording_state.is_recording = false;
+            engine.audio_state.recording.store(false, Ordering::Relaxed); // Sync atomic back
+            let _ = engine
+                .updates
+                .try_send(UIUpdate::RecordingStateChanged(false));
 
-            if let Some(track_id) = engine.recording_state.recording_track
-                && !engine.recording_state.accumulated_samples.is_empty()
-            {
-                {
-                    let converter =
-                        TimeConverter::new(sample_rate as f32, engine.audio_state.bpm.load());
+            if let Some(track_id) = engine.recording_state.recording_track {
+                if !engine.recording_state.accumulated_samples.is_empty() {
+                    let converter = TimeConverter::new(
+                        engine.sample_rate as f32,
+                        engine.audio_state.bpm.load(),
+                    );
                     let start_beat =
                         converter.samples_to_beats(engine.recording_state.recording_start_position);
-                    let end_beat = converter.samples_to_beats(engine.audio_state.get_position());
+
+                    // Calculate length from number of samples recorded
+                    let num_samples = engine.recording_state.accumulated_samples.len();
+                    let length_beats = converter.samples_to_beats(num_samples as f64);
 
                     let clip = AudioClip {
                         id: 0, // Will be assigned by UI thread
-                        name: format!("Recording {}", chrono::Local::now().format("%H:%M:%S")),
+                        name: format!("Rec {}", chrono::Local::now().format("%H:%M:%S")),
                         start_beat,
-                        length_beats: end_beat - start_beat,
+                        length_beats,
                         samples: engine.recording_state.accumulated_samples.clone(),
-                        sample_rate: sample_rate as f32,
+                        sample_rate: engine.sample_rate as f32,
                         ..Default::default()
                     };
 
@@ -343,7 +353,20 @@ pub fn run_audio_thread(
             }
         }
 
-        if !now_playing {
+        // Accumulate samples ONLY if actually recording
+        if engine.recording_state.is_recording {
+            while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
+                engine.recording_state.accumulated_samples.push(sample);
+                engine.recording_state.monitor_queue.push(sample);
+            }
+        } else {
+            // If not recording, just drain the consumer into the monitor queue
+            while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
+                engine.recording_state.monitor_queue.push(sample);
+            }
+        }
+
+        if !is_playing {
             if !engine.paused_last {
                 engine.midi_panic();
                 engine.paused_last = true;

@@ -290,7 +290,7 @@ impl TracksPanel {
             {
                 let _ = app
                     .command_tx
-                    .send(AudioCommand::SetTrackArmed(track_id, !armed));
+                    .send(AudioCommand::ArmForRecording(track_id, !armed));
             }
             if !is_midi
                 && ui

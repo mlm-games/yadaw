@@ -103,12 +103,28 @@ fn process_command(
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackSolo(*track_id, *solo));
         }
-        AudioCommand::SetTrackArmed(track_id, armed) => {
+        AudioCommand::ArmForRecording(track_id, armed) => {
             let mut state = app_state.lock().unwrap();
-            if let Some(track) = state.tracks.get_mut(track_id) {
-                track.armed = *armed;
+
+            if *armed {
+                for (id, track) in state.tracks.iter_mut() {
+                    // Only disarm other audio tracks.
+                    if !track.is_midi {
+                        track.armed = *id == *track_id;
+                    }
+                }
+            } else {
+                if let Some(track) = state.tracks.get_mut(track_id) {
+                    track.armed = false;
+                }
             }
+
             send_tracks_snapshot_locked(&state, realtime_tx);
+        }
+        AudioCommand::FinalizeRecording => {
+            //HACK?, this is just a no-op for the processor.
+            // Only for pending state checks for the end of recording. The acual logic is in the audio callback.
+            log::info!("FinalizeRecording command received.");
         }
 
         // Plugin commands

@@ -81,17 +81,26 @@ impl TransportUI {
                             ui.style().visuals.text_color()
                         };
 
-                        if ui
-                            .add(egui::Button::new("⏺").fill(if is_recording {
-                                egui::Color32::from_rgb(50, 0, 0)
-                            } else {
-                                egui::Color32::TRANSPARENT
-                            }))
-                            .on_hover_text("Record")
-                            .clicked()
-                            && let Some(transport) = &self.transport
-                        {
-                            transport.record();
+                        let is_recording = app.is_recording_ui;
+
+                        let record_button = egui::Button::new("⏺").fill(if is_recording {
+                            // Blinking effect for recording
+                            let time = ctx.input(|i| i.time);
+                            let alpha = (time.sin() * 0.5 + 0.5) as f32; // Varies between 0 and 1
+                            egui::Color32::from_rgb(150 + (105.0 * alpha) as u8, 0, 0)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        });
+
+                        if ui.add(record_button).on_hover_text("Record").clicked() {
+                            let should_record = !app.audio_state.recording.load(Ordering::Relaxed);
+                            app.audio_state
+                                .recording
+                                .store(should_record, Ordering::Relaxed);
+
+                            if should_record {
+                                app.audio_state.playing.store(true, Ordering::Relaxed);
+                            }
                         }
 
                         if ui.button("⏩").on_hover_text("Fast Forward").clicked()
