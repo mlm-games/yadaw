@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use crate::lv2_plugin_host::{ControlPortInfo, PluginInfo};
 use crate::messages::AudioCommand;
 use crate::model::plugin::PluginDescriptor;
-use crate::model::plugin_api::UnifiedPluginInfo;
+use crate::model::plugin_api::{BackendKind, UnifiedPluginInfo};
 use crate::model::track::Track;
 use crate::plugin_host::{get_available_plugins, with_host};
 
@@ -52,6 +52,7 @@ pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDesc
         id: 0,
         uri: uri.to_string(),
         name: plugin_info.name.clone(),
+        backend: BackendKind::Clap,
         bypass: false,
         params,
         preset_name: None,

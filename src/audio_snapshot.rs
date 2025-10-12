@@ -110,6 +110,7 @@ fn plugin_desc_to_snapshot(p: &PluginDescriptor) -> PluginDescriptorSnapshot {
         plugin_id: p.id,
         uri: p.uri.clone(),
         name: p.name.clone(),
+        backend: p.backend,
         bypass: p.bypass,
         params,
     }

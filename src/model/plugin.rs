@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::model::plugin_api::BackendKind;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginDescriptor {
     pub id: u64,
     pub uri: String,
     pub name: String,
+    pub backend: BackendKind,
     pub bypass: bool,
     pub params: HashMap<String, f32>,
     pub preset_name: Option<String>,

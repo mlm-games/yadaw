@@ -192,6 +192,7 @@ pub struct PluginDescriptorSnapshot {
     pub plugin_id: u64,
     pub uri: String,
     pub name: String,
+    pub backend: BackendKind,
     pub bypass: bool,
     pub params: Arc<DashMap<String, f32>>,
 }

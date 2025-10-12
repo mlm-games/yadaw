@@ -227,11 +227,13 @@ fn process_command(
                         id: 0,
                         uri: uri.clone(),
                         name: display_name.clone(),
+                        backend: *backend,
                         bypass: false,
                         params: std::collections::HashMap::new(),
                         preset_name: None,
                         custom_name: None,
                     });
+                desc.backend = *backend;
                 desc.id = plugin_id;
                 desc.name = display_name.clone();
 

@@ -28,33 +28,58 @@ use std::time::Instant;
 
 use crate::model::plugin_api::PluginInstance as UnifiedInstance;
 
+struct PluginSlot {
+    instance: Option<Box<dyn UnifiedInstance>>,
+    generation: u64,
+}
+
 thread_local! {
     static PLUGIN_STORE: std::cell::RefCell<PluginStore> =
-        std::cell::RefCell::new(PluginStore { slots: Vec::new() });
+        std::cell::RefCell::new(PluginStore {
+            slots: Vec::new(),
+            current_generation: 0,
+        });
 }
 
 struct PluginStore {
-    slots: Vec<Option<Box<dyn UnifiedInstance>>>,
+    slots: Vec<PluginSlot>,
+    current_generation: u64,
 }
 
 impl PluginStore {
-    fn insert(&mut self, inst: Box<dyn UnifiedInstance>) -> usize {
-        // reuse holes first
+    fn insert(&mut self, inst: Box<dyn UnifiedInstance>) -> (usize, u64) {
+        self.current_generation += 1;
+        let r#gen = self.current_generation;
+
         for (i, slot) in self.slots.iter_mut().enumerate() {
-            if slot.is_none() {
-                *slot = Some(inst);
-                return i;
+            if slot.instance.is_none() {
+                *slot = PluginSlot {
+                    instance: Some(inst),
+                    generation: r#gen,
+                };
+                return (i, r#gen);
             }
         }
-        self.slots.push(Some(inst));
-        self.slots.len() - 1
+
+        self.slots.push(PluginSlot {
+            instance: Some(inst),
+            generation: r#gen,
+        });
+        (self.slots.len() - 1, r#gen)
     }
-    fn get_mut(&mut self, id: usize) -> Option<&mut Box<dyn UnifiedInstance>> {
-        self.slots.get_mut(id).and_then(|s| s.as_mut())
+
+    fn get_mut(&mut self, id: usize, expected_gen: u64) -> Option<&mut Box<dyn UnifiedInstance>> {
+        self.slots
+            .get_mut(id)
+            .filter(|s| s.generation == expected_gen)
+            .and_then(|s| s.instance.as_mut())
     }
-    fn remove(&mut self, id: usize) {
+
+    fn mark_removed(&mut self, id: usize, expected_gen: u64) {
         if let Some(slot) = self.slots.get_mut(id) {
-            *slot = None;
+            if slot.generation == expected_gen {
+                slot.instance = None;
+            }
         }
     }
 }
@@ -129,7 +154,7 @@ impl TrackProcessor {
 
 struct PluginProcessorUnified {
     plugin_id: u64,
-    rt_instance_id: Option<usize>,
+    rt_instance_id: Option<(usize, u64)>,
     backend: BackendKind,
     uri: String,
     bypass: bool,
@@ -444,7 +469,7 @@ impl AudioEngine {
             RealtimeCommand::UpdatePluginParam(track_id, plugin_id, param_name, value) => {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     if let Some(plugin) = proc.plugins.get(&plugin_id) {
-                        if let Some(rt_id) = plugin.rt_instance_id {
+                        if let Some((rt_id, r#gen)) = plugin.rt_instance_id {
                             let key = match plugin.backend {
                                 BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
                                 BackendKind::Clap => plugin
@@ -454,7 +479,7 @@ impl AudioEngine {
                                     .unwrap_or(ParamKey::Clap(0)),
                             };
                             PLUGIN_STORE.with(|st| {
-                                if let Some(inst) = st.borrow_mut().get_mut(rt_id) {
+                                if let Some(inst) = st.borrow_mut().get_mut(rt_id, r#gen) {
                                     inst.set_param(&key, value);
                                 }
                             });
@@ -499,11 +524,12 @@ impl AudioEngine {
                         for p in inst.params() {
                             name_to_key.insert(p.name.clone(), p.key.clone());
                         }
-                        let rt_id = PLUGIN_STORE.with(|st| st.borrow_mut().insert(inst));
+
+                        let (rt_id, r#gen) = PLUGIN_STORE.with(|st| st.borrow_mut().insert(inst));
 
                         let plugin = PluginProcessorUnified {
                             plugin_id,
-                            rt_instance_id: Some(rt_id),
+                            rt_instance_id: Some((rt_id, r#gen)),
                             backend,
                             uri: uri.clone(),
                             bypass: false,
@@ -523,8 +549,8 @@ impl AudioEngine {
             } => {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     if let Some(plugin) = proc.plugins.remove(&plugin_id) {
-                        if let Some(rt_id) = plugin.rt_instance_id {
-                            PLUGIN_STORE.with(|st| st.borrow_mut().remove(rt_id));
+                        if let Some((rt_id, r#gen)) = plugin.rt_instance_id {
+                            PLUGIN_STORE.with(|st| st.borrow_mut().mark_removed(rt_id, r#gen));
                         }
                     }
                     proc.plugin_order.retain(|&id| id != plugin_id);
@@ -532,9 +558,7 @@ impl AudioEngine {
             }
 
             RealtimeCommand::UpdateTracks(new_tracks) => {
-                *self.tracks.write() = new_tracks.clone();
-                *self.track_order.write() = new_tracks.iter().map(|t| t.track_id).collect();
-                self.update_track_processors_without_plugins(&new_tracks);
+                self.full_sync_from_snapshot(&new_tracks);
             }
             _ => {}
         }
@@ -819,7 +843,7 @@ impl AudioEngine {
 
         for proc in self.track_processors.values_mut() {
             for ppu in proc.plugins.values_mut() {
-                if let Some(id) = ppu.rt_instance_id {
+                if let Some((id, r#gen)) = ppu.rt_instance_id {
                     let dl = [0.0f32; 64];
                     let mut ol = [0.0f32; 64];
                     let mut or_ = [0.0f32; 64];
@@ -850,7 +874,7 @@ impl AudioEngine {
                         })
                         .collect();
                     PLUGIN_STORE.with(|st| {
-                        if let Some(inst) = st.borrow_mut().get_mut(id) {
+                        if let Some(inst) = st.borrow_mut().get_mut(id, r#gen) {
                             let _ = inst.process(&ctx, &inputs, &mut outputs, &panic_events);
                         }
                     });
@@ -862,6 +886,86 @@ impl AudioEngine {
             proc.notes_triggered_this_loop.clear();
             proc.last_block_end_samples = 0.0;
         }
+    }
+
+    fn full_sync_from_snapshot(&mut self, tracks: &[TrackSnapshot]) {
+        self.track_processors.clear();
+        self.channel_strips.clear();
+        PLUGIN_STORE.with(|st| {
+            let mut store = st.borrow_mut();
+            store.slots.clear();
+        });
+
+        *self.tracks.write() = tracks.to_vec();
+        *self.track_order.write() = tracks.iter().map(|t| t.track_id).collect();
+
+        for track_snapshot in tracks {
+            let mut proc = TrackProcessor::new(track_snapshot.track_id);
+
+            // Instantiate ALL plugins for this track
+            for plugin_snapshot in &track_snapshot.plugin_chain {
+                match self
+                    .host_facade
+                    .instantiate(plugin_snapshot.backend, &plugin_snapshot.uri)
+                {
+                    Ok(mut inst) => {
+                        for param_entry in plugin_snapshot.params.iter() {
+                            let key = match plugin_snapshot.backend {
+                                BackendKind::Lv2 => ParamKey::Lv2(param_entry.key().clone()),
+                                BackendKind::Clap => {
+                                    // Find the ParamKey from the instance's parameter list
+                                    inst.params()
+                                        .iter()
+                                        .find(|p| p.name == *param_entry.key())
+                                        .map(|p| p.key.clone())
+                                        .unwrap_or(ParamKey::Clap(0)) // Fallback, should not happen
+                                }
+                            };
+                            inst.set_param(&key, *param_entry.value());
+                        }
+
+                        let (rt_id, r#gen) =
+                            PLUGIN_STORE.with(|st| st.borrow_mut().insert(Box::from(inst)));
+
+                        let plugin_processor = PluginProcessorUnified {
+                            plugin_id: plugin_snapshot.plugin_id,
+                            rt_instance_id: Some((rt_id, r#gen)),
+                            backend: plugin_snapshot.backend,
+                            uri: plugin_snapshot.uri.clone(),
+                            bypass: plugin_snapshot.bypass,
+                            param_name_to_key: HashMap::new(), // Can be rebuilt if needed
+                        };
+
+                        proc.plugins
+                            .insert(plugin_snapshot.plugin_id, plugin_processor);
+                        proc.plugin_order.push(plugin_snapshot.plugin_id);
+                    }
+                    Err(e) => eprintln!(
+                        "Failed to instantiate plugin on project load {}: {}",
+                        plugin_snapshot.uri, e
+                    ),
+                }
+            }
+
+            // Add the fully-configured processor to the engine
+            self.track_processors.insert(track_snapshot.track_id, proc);
+
+            // Configure the channel strip (volume, pan, etc.)
+            let strip = self
+                .channel_strips
+                .entry(track_snapshot.track_id)
+                .or_default();
+            strip.gain = track_snapshot.volume;
+            strip.pan = track_snapshot.pan;
+            strip.mute = track_snapshot.muted;
+            strip.solo = track_snapshot.solo;
+        }
+
+        // Update recording track info
+        self.recording_state.recording_track = tracks
+            .iter()
+            .find(|t| t.armed && !t.is_midi)
+            .map(|t| t.track_id);
     }
 }
 
@@ -984,15 +1088,17 @@ fn process_audio_track(
 
     for clip in &track.audio_clips {
         let clip_start_samples = converter.beats_to_samples(clip.start_beat);
-        let clip_end_samples = clip_start_samples
-            + clip.samples.len() as f64 * (sample_rate / clip.sample_rate as f64);
 
-        // Intersect with current buffer (all in project-rate samples)
+        let clip_length_samples = converter.beats_to_samples(clip.length_beats);
+        let clip_end_samples = clip_start_samples + clip_length_samples;
+
         let overlap_start = buffer_start.max(clip_start_samples);
         let overlap_end = buffer_end.min(clip_end_samples);
         if overlap_end <= overlap_start {
             continue;
         }
+
+        let offset_samples = converter.beats_to_samples(clip.offset_beats);
 
         let frames = (overlap_end - overlap_start) as usize;
         let start_in_buffer = (overlap_start - buffer_start) as usize;
@@ -1012,7 +1118,7 @@ fn process_audio_track(
             // Project sample offset inside the clip window (dst/project domain)
             let proj_off = (overlap_start - clip_start_samples) + i as f64;
             // Source float index (clip domain)
-            let src_pos = proj_off * ratio;
+            let src_pos = (proj_off + offset_samples) * ratio;
             let src_idx = src_pos.floor() as usize;
             let frac = (src_pos - src_idx as f64) as f32;
 
@@ -1266,12 +1372,10 @@ fn process_track_plugins(
         let Some(ppu) = processor.plugins.get_mut(&plugin_id) else {
             continue;
         };
-
         if ppu.bypass {
             continue;
         }
-
-        let Some(rt_id) = ppu.rt_instance_id else {
+        let Some((rt_id, r#gen)) = ppu.rt_instance_id else {
             continue;
         };
 
@@ -1288,7 +1392,7 @@ fn process_track_plugins(
                         .unwrap_or(ParamKey::Clap(0)),
                 };
                 PLUGIN_STORE.with(|st| {
-                    if let Some(inst) = st.borrow_mut().get_mut(rt_id) {
+                    if let Some(inst) = st.borrow_mut().get_mut(rt_id, r#gen) {
                         inst.set_param(&key, value);
                     }
                 });
@@ -1322,7 +1426,7 @@ fn process_track_plugins(
 
         let t0 = Instant::now();
         PLUGIN_STORE.with(|st| {
-            if let Some(inst) = st.borrow_mut().get_mut(rt_id) {
+            if let Some(inst) = st.borrow_mut().get_mut(rt_id, r#gen) {
                 let _ = inst.process(&ctx, &inputs, &mut outputs, events_slice);
             }
         });
