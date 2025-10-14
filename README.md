@@ -13,7 +13,6 @@ A basic daw for sound effects (works on Android too)
 
 #### Known Issues
 
-- "Plugin crashes are caught, but may require a restart."
 - "No VST support (LV2 and CLAP only)."
 - "No MP3/FLAC export (WAV only)."
 - No MIDI hardware support (will eventually add, mostly when midir supports android)

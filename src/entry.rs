@@ -7,6 +7,7 @@ use crate::{
     messages::{AudioCommand, UIUpdate},
     plugin_host, ui,
 };
+use crate::{audio_state::AudioGraphSnapshot, model::plugin_api::HostConfig, project};
 use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "android")]
@@ -16,7 +17,6 @@ use android_activity::AndroidApp;
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Logging
 
-    use crate::{audio_state::AudioGraphSnapshot, model::plugin_api::HostConfig, project};
     #[cfg(not(target_os = "android"))]
     env_logger::init();
     // #[cfg(target_os = "android")]
@@ -56,7 +56,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         max_block: constants::MAX_BUFFER_SIZE,
     };
     let ui_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
-    let unified_plugins = ui_facade.scan().unwrap_or_default();
+    let available_plugins = ui_facade.scan().unwrap_or_default();
 
     // Start audio thread
     {
@@ -104,7 +104,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 audio_state.clone(),
                 command_tx.clone(),
                 ui_rx,
-                unified_plugins,
+                available_plugins,
                 config,
             )))
         }),
@@ -137,6 +137,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     let (command_tx, command_rx) = crossbeam_channel::unbounded::<AudioCommand>();
     let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
     let (ui_tx, ui_rx) = crossbeam_channel::unbounded::<UIUpdate>();
+    let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded::<AudioGraphSnapshot>(1);
 
     // Initialize plugin host
     plugin_host::init(
@@ -145,17 +146,20 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     )?;
 
     log::info!("Scanning for plugins...");
-    let mut plugin_scanner = PluginScanner::new();
-    plugin_scanner.discover_plugins();
-    let available_plugins = plugin_scanner.get_plugins();
-    log::info!("Found {} LV2 plugins", available_plugins.len());
+    let host_cfg = HostConfig {
+        sample_rate: audio_state.sample_rate.load() as f64, // or device_rate if you queried CPAL first
+        max_block: constants::MAX_BUFFER_SIZE,
+    };
+    let ui_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
+    let available_plugins = ui_facade.scan().unwrap_or_default();
 
     // Start audio thread
     {
         let audio_state_clone = audio_state.clone();
         let ui_tx_audio = ui_tx.clone();
+        let snapshot_tx_audio = snapshot_tx.clone();
         std::thread::spawn(move || {
-            audio::run_audio_thread(audio_state_clone, realtime_rx, ui_tx_audio);
+            audio::run_audio_thread(audio_state_clone, realtime_rx, ui_tx_audio, snapshot_rx);
         });
     }
 
@@ -171,6 +175,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
                 command_rx,
                 realtime_tx,
                 ui_tx_clone,
+                snapshot_tx,
             );
         });
     }

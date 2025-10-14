@@ -16,7 +16,7 @@
 2. Select plugin from browser
 3. Adjust parameters
 
-## Exporting (TODO)
+## Exporting
 1. File → Export
 2. Choose format
 3. Select loop region or all
