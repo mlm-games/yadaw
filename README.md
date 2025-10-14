@@ -9,3 +9,11 @@ A basic daw for sound effects (works on Android too)
 - Follow the instructions in the third_party folder's md.
 - Plugins should be compiled beforehand for android (plan to add a default robust one later)
 - Hint: Saving and loading works on Android (is a hack for now, will implement proper perms later; currently only works for certain internal folders)
+
+
+#### Known Issues
+
+- "Plugin crashes are caught, but may require a restart."
+- "No VST support (LV2 and CLAP only)."
+- "No MP3/FLAC export (WAV only)."
+- No MIDI hardware support (will eventually add, mostly when midir supports android)
