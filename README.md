@@ -2,7 +2,7 @@
 
 A basic daw for sound effects (works on Android too)
 
-Current intention is to not add too much code for outdated parts + to keep it minimal, might implement a plugin system like blender if needed (for example, midi controller lanes feature could be implemented as a plugin, etc..)
+Current intention is to not add too much code for outdated parts, and to keep it minimal (helps refactoring later on, might implement a plugin system like blender if needed (for example, midi controller lanes feature could be implemented as a plugin, etc..)
 
 ### Build from source
 #### Desktop
