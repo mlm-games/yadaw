@@ -1,6 +1,7 @@
+use crate::audio_snapshot;
 use crate::audio_state::{
-    AudioState, MidiClipSnapshot, RealtimeCommand, RtAutomationLaneSnapshot, RtAutomationTarget,
-    RtCurveType, TrackSnapshot,
+    AudioGraphSnapshot, AudioState, MidiClipSnapshot, RealtimeCommand, RtAutomationLaneSnapshot,
+    RtAutomationTarget, RtCurveType, TrackSnapshot,
 };
 use crate::audio_utils::{calculate_stereo_gains, soft_clip};
 use crate::constants::{
@@ -19,6 +20,7 @@ use crate::time_utils::TimeConverter;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
 use std::collections::HashMap;
@@ -28,65 +30,22 @@ use std::time::Instant;
 
 use crate::model::plugin_api::PluginInstance as UnifiedInstance;
 
-struct PluginSlot {
-    instance: Option<Box<dyn UnifiedInstance>>,
-    generation: u64,
-}
+type PluginInstanceHandle = (usize, u64);
+type PluginMap = DashMap<PluginInstanceHandle, Box<dyn UnifiedInstance>>;
 
-thread_local! {
-    static PLUGIN_STORE: std::cell::RefCell<PluginStore> =
-        std::cell::RefCell::new(PluginStore {
-            slots: Vec::new(),
-            current_generation: 0,
-        });
-}
+static PLUGIN_STORE: Lazy<DashMap<PluginInstanceHandle, Box<dyn UnifiedInstance>>> =
+    Lazy::new(DashMap::new);
+static PLUGIN_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static PLUGIN_ID_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
-struct PluginStore {
-    slots: Vec<PluginSlot>,
-    current_generation: u64,
-}
-
-impl PluginStore {
-    fn insert(&mut self, inst: Box<dyn UnifiedInstance>) -> (usize, u64) {
-        self.current_generation += 1;
-        let r#gen = self.current_generation;
-
-        for (i, slot) in self.slots.iter_mut().enumerate() {
-            if slot.instance.is_none() {
-                *slot = PluginSlot {
-                    instance: Some(inst),
-                    generation: r#gen,
-                };
-                return (i, r#gen);
-            }
-        }
-
-        self.slots.push(PluginSlot {
-            instance: Some(inst),
-            generation: r#gen,
-        });
-        (self.slots.len() - 1, r#gen)
-    }
-
-    fn get_mut(&mut self, id: usize, expected_gen: u64) -> Option<&mut Box<dyn UnifiedInstance>> {
-        self.slots
-            .get_mut(id)
-            .filter(|s| s.generation == expected_gen)
-            .and_then(|s| s.instance.as_mut())
-    }
-
-    fn mark_removed(&mut self, id: usize, expected_gen: u64) {
-        if let Some(slot) = self.slots.get_mut(id) {
-            if slot.generation == expected_gen {
-                slot.instance = None;
-            }
-        }
-    }
+fn generate_plugin_handle() -> PluginInstanceHandle {
+    let id = PLUGIN_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let r#gen = PLUGIN_GENERATION.fetch_add(1, Ordering::Relaxed);
+    (id, r#gen)
 }
 
 pub(crate) struct AudioEngine {
-    tracks: Arc<RwLock<Vec<TrackSnapshot>>>,
-    track_order: Arc<RwLock<Vec<u64>>>,
+    graph_snapshot: AudioGraphSnapshot,
     track_processors: HashMap<u64, TrackProcessor>,
     audio_state: Arc<AudioState>,
     recording_state: RecordingState,
@@ -188,13 +147,13 @@ pub fn run_audio_thread(
     audio_state: Arc<AudioState>,
     realtime_commands: Receiver<RealtimeCommand>,
     updates: Sender<UIUpdate>,
+    snapshot_rx: Receiver<AudioGraphSnapshot>,
 ) {
     let host = cpal::default_host();
     let device = host.default_output_device().expect("No output device");
     let config = device.default_output_config().expect("No default config");
     let sample_rate = config.sample_rate().0 as f64;
     let channels = config.channels() as usize;
-    let track_order = Arc::new(RwLock::new(Vec::new()));
 
     audio_state.sample_rate.store(sample_rate as f32);
 
@@ -209,11 +168,9 @@ pub fn run_audio_thread(
     let (recording_producer, recording_consumer) = RingBuffer::<f32>::new(RECORDING_BUFFER_SIZE);
 
     // Initialize engine
-    let tracks = Arc::new(RwLock::new(Vec::new()));
 
     let mut engine = AudioEngine {
-        tracks: tracks.clone(),
-        track_order: track_order.clone(),
+        graph_snapshot: AudioGraphSnapshot::default(),
         audio_state: audio_state.clone(),
         track_processors: HashMap::new(),
         recording_state: RecordingState {
@@ -295,6 +252,10 @@ pub fn run_audio_thread(
         // Drain RT commands at block start
         while let Ok(cmd) = realtime_commands.try_recv() {
             engine.process_realtime_command(cmd);
+        }
+
+        if let Ok(new_snapshot) = snapshot_rx.try_recv() {
+            engine.apply_new_snapshot(new_snapshot);
         }
 
         // Cap monitor queue
@@ -447,7 +408,7 @@ impl AudioEngine {
         audio_state: &AudioState,
         export_sample_rate: f32,
     ) -> Result<Self, anyhow::Error> {
-        // Use a dummy channel since we don't send UI updates during offline render
+        // Create a dummy channel since we don't send UI updates
         let (dummy_tx, _) = crossbeam_channel::unbounded();
 
         let host_cfg = HostConfig {
@@ -456,15 +417,24 @@ impl AudioEngine {
         };
         let host_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
 
+        let offline_audio_state = AudioState::new();
+
+        offline_audio_state
+            .loop_enabled
+            .store(false, Ordering::Relaxed);
+
+        // Copy BPM from the main project state
+        offline_audio_state.bpm.store(audio_state.bpm.load());
+
         let mut engine = AudioEngine {
-            tracks: Arc::new(RwLock::new(Vec::new())),
-            track_order: Arc::new(RwLock::new(Vec::new())),
-            audio_state: Arc::new(AudioState::new()), // Use a dummy state
+            graph_snapshot: AudioGraphSnapshot::default(), // Will be populated by setup method
+            audio_state: Arc::new(offline_audio_state),
             track_processors: HashMap::new(),
             recording_state: RecordingState {
                 is_recording: false,
                 recording_track: None,
-                recording_consumer: rtrb::RingBuffer::<f32>::new(1).1, // Dummy
+                // Use dummy ring buffer for offline mode
+                recording_consumer: rtrb::RingBuffer::<f32>::new(1).1,
                 recording_start_position: 0.0,
                 accumulated_samples: Vec::new(),
                 monitor_queue: Vec::new(),
@@ -479,17 +449,114 @@ impl AudioEngine {
             host_facade,
         };
 
-        engine
-            .audio_state
-            .loop_enabled
-            .store(false, Ordering::Relaxed);
-
-        engine.full_sync_from_snapshot(initial_tracks);
-
-        // Override BPM from the main state
-        engine.audio_state.bpm.store(audio_state.bpm.load());
+        engine.full_sync_for_offline_setup(initial_tracks);
 
         Ok(engine)
+    }
+
+    fn full_sync_for_offline_setup(&mut self, tracks: &[TrackSnapshot]) {
+        // This method combines logic from the old `full_sync_from_snapshot`
+        // with the state ownership of the new architecture.
+
+        // 1. Clear any existing state
+        self.track_processors.clear();
+        self.channel_strips.clear();
+
+        // 2. Build new processors and instantiate all plugins
+        for track_snapshot in tracks {
+            let track_id = track_snapshot.track_id;
+
+            // Create a processor for the track
+            let mut proc = TrackProcessor::new(track_id);
+
+            // Instantiate this track's entire plugin chain
+            for plugin_snapshot in &track_snapshot.plugin_chain {
+                let plugin_id = plugin_snapshot.plugin_id;
+
+                match self
+                    .host_facade
+                    .instantiate(plugin_snapshot.backend, &plugin_snapshot.uri)
+                {
+                    Ok(mut inst) => {
+                        // Apply all saved parameters to the new instance
+                        for param_entry in plugin_snapshot.params.iter() {
+                            let param_name = param_entry.key();
+                            let param_value = *param_entry.value();
+                            let maybe_key = inst
+                                .params()
+                                .iter()
+                                .find(|p| p.name == *param_name)
+                                .map(|p| p.key.clone());
+                            if let Some(key) = maybe_key {
+                                inst.set_param(&key, param_value);
+                            }
+                        }
+
+                        let handle = generate_plugin_handle();
+                        PLUGIN_STORE.insert(handle, Box::from(inst));
+
+                        let param_name_to_key: HashMap<String, ParamKey> = PLUGIN_STORE
+                            .get(&handle)
+                            .map(|inst| {
+                                inst.params()
+                                    .iter()
+                                    .map(|p| (p.name.clone(), p.key.clone()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        let plugin_processor = PluginProcessorUnified {
+                            plugin_id,
+                            rt_instance_id: Some(handle),
+                            backend: plugin_snapshot.backend,
+                            uri: plugin_snapshot.uri.clone(),
+                            bypass: plugin_snapshot.bypass,
+                            param_name_to_key,
+                        };
+
+                        proc.plugins.insert(plugin_id, plugin_processor);
+                        proc.plugin_order.push(plugin_id);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Offline Render: Failed to instantiate plugin {}: {}",
+                            plugin_snapshot.uri, e
+                        );
+                        // Create a disabled placeholder to avoid breaking the chain
+                        let placeholder = PluginProcessorUnified {
+                            plugin_id,
+                            rt_instance_id: None,
+                            backend: plugin_snapshot.backend,
+                            uri: plugin_snapshot.uri.clone(),
+                            bypass: true,
+                            param_name_to_key: HashMap::new(),
+                        };
+                        proc.plugins.insert(plugin_id, placeholder);
+                        proc.plugin_order.push(plugin_id);
+                    }
+                }
+            }
+            self.track_processors.insert(track_id, proc);
+
+            // Configure the channel strip for this track
+            let strip = self.channel_strips.entry(track_id).or_default();
+            strip.gain = track_snapshot.volume;
+            strip.pan = track_snapshot.pan;
+            strip.mute = track_snapshot.muted;
+            strip.solo = track_snapshot.solo;
+        }
+
+        // 3. Set the graph snapshot for the engine
+        self.graph_snapshot = AudioGraphSnapshot {
+            tracks: tracks.to_vec(),
+            track_order: tracks.iter().map(|t| t.track_id).collect(),
+        };
+
+        // 4. Update the recording track reference (though it won't be used)
+        self.recording_state.recording_track = tracks
+            .iter()
+            .find(|t| t.armed && !t.is_midi)
+            .map(|t| t.track_id);
     }
 
     fn process_realtime_command(&mut self, cmd: RealtimeCommand) {
@@ -498,36 +565,20 @@ impl AudioEngine {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.gain = vol;
                 }
-                let mut tracks_guard = self.tracks.write();
-                if let Some(track) = tracks_guard.iter_mut().find(|t| t.track_id == track_id) {
-                    track.volume = vol;
-                }
             }
             RealtimeCommand::UpdateTrackPan(track_id, pan) => {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.pan = pan;
-                }
-                let mut tracks_guard = self.tracks.write();
-                if let Some(track) = tracks_guard.iter_mut().find(|t| t.track_id == track_id) {
-                    track.pan = pan;
                 }
             }
             RealtimeCommand::UpdateTrackMute(track_id, mute) => {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.mute = mute;
                 }
-                let mut tracks_guard = self.tracks.write();
-                if let Some(track) = tracks_guard.iter_mut().find(|t| t.track_id == track_id) {
-                    track.muted = mute;
-                }
             }
             RealtimeCommand::UpdateTrackSolo(track_id, solo) => {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.solo = solo;
-                }
-                let mut tracks_guard = self.tracks.write();
-                if let Some(track) = tracks_guard.iter_mut().find(|t| t.track_id == track_id) {
-                    track.solo = solo;
                 }
             }
 
@@ -535,28 +586,6 @@ impl AudioEngine {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     if let Some(plugin) = proc.plugins.get_mut(&plugin_id) {
                         plugin.bypass = bypass;
-                    }
-                }
-            }
-
-            RealtimeCommand::UpdatePluginParam(track_id, plugin_id, param_name, value) => {
-                if let Some(proc) = self.track_processors.get_mut(&track_id) {
-                    if let Some(plugin) = proc.plugins.get(&plugin_id) {
-                        if let Some((rt_id, r#gen)) = plugin.rt_instance_id {
-                            let key = match plugin.backend {
-                                BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
-                                BackendKind::Clap => plugin
-                                    .param_name_to_key
-                                    .get(&param_name)
-                                    .cloned()
-                                    .unwrap_or(ParamKey::Clap(0)),
-                            };
-                            PLUGIN_STORE.with(|st| {
-                                if let Some(inst) = st.borrow_mut().get_mut(rt_id, r#gen) {
-                                    inst.set_param(&key, value);
-                                }
-                            });
-                        }
                     }
                 }
             }
@@ -598,11 +627,13 @@ impl AudioEngine {
                             name_to_key.insert(p.name.clone(), p.key.clone());
                         }
 
-                        let (rt_id, r#gen) = PLUGIN_STORE.with(|st| st.borrow_mut().insert(inst));
+                        // --- REPLACEMENT ---
+                        let handle = generate_plugin_handle();
+                        PLUGIN_STORE.insert(handle, inst);
 
                         let plugin = PluginProcessorUnified {
                             plugin_id,
-                            rt_instance_id: Some((rt_id, r#gen)),
+                            rt_instance_id: Some(handle), // Store the (id, gen) handle
                             backend,
                             uri: uri.clone(),
                             bypass: false,
@@ -622,16 +653,38 @@ impl AudioEngine {
             } => {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     if let Some(plugin) = proc.plugins.remove(&plugin_id) {
-                        if let Some((rt_id, r#gen)) = plugin.rt_instance_id {
-                            PLUGIN_STORE.with(|st| st.borrow_mut().mark_removed(rt_id, r#gen));
+                        if let Some(handle) = plugin.rt_instance_id {
+                            PLUGIN_STORE.remove(&handle);
                         }
                     }
                     proc.plugin_order.retain(|&id| id != plugin_id);
                 }
             }
 
+            RealtimeCommand::UpdatePluginParam(track_id, plugin_id, param_name, value) => {
+                if let Some(proc) = self.track_processors.get_mut(&track_id) {
+                    if let Some(plugin) = proc.plugins.get(&plugin_id) {
+                        if let Some(handle) = plugin.rt_instance_id {
+                            // handle is (id, gen)
+                            let key = match plugin.backend {
+                                BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
+                                BackendKind::Clap => plugin
+                                    .param_name_to_key
+                                    .get(&param_name)
+                                    .cloned()
+                                    .unwrap_or(ParamKey::Clap(0)),
+                            };
+
+                            if let Some(mut inst) = PLUGIN_STORE.get_mut(&handle) {
+                                inst.set_param(&key, value);
+                            }
+                        }
+                    }
+                }
+            }
+
             RealtimeCommand::UpdateTracks(new_tracks) => {
-                self.full_sync_from_snapshot(&new_tracks);
+                self.full_sync_for_offline_setup(&new_tracks);
             }
             _ => {}
         }
@@ -670,9 +723,8 @@ impl AudioEngine {
         mut current_position: f64,
         plugin_time_ms_accum: &mut f32,
     ) -> f64 {
-        let tracks_guard = self.tracks.read();
-        let tracks: &Vec<TrackSnapshot> = &*tracks_guard;
-        let track_order = self.track_order.read().clone();
+        let tracks: &Vec<TrackSnapshot> = &self.graph_snapshot.tracks;
+        let track_order: &Vec<u64> = &self.graph_snapshot.track_order;
 
         let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
@@ -740,13 +792,20 @@ impl AudioEngine {
             let is_recording_now = self.audio_state.recording.load(Ordering::Relaxed);
             let rec_track_id = self.recording_state.recording_track;
 
-            for &track_id in &track_order {
+            for &track_id in track_order {
                 let track = match tracks.iter().find(|t| t.track_id == track_id) {
                     Some(t) => t,
                     None => continue,
                 };
 
-                if track.muted || (any_track_soloed && !track.solo) {
+                let strip = self.channel_strips.get(&track_id);
+
+                let strip_mute = strip.map_or(track.muted, |s| s.mute);
+                let strip_solo = strip.map_or(track.solo, |s| s.solo);
+
+                let any_track_soloed = self.channel_strips.values().any(|s| s.solo);
+
+                if strip_mute || (any_track_soloed && !strip_solo) {
                     continue;
                 }
 
@@ -835,6 +894,9 @@ impl AudioEngine {
                     let vol_automation = processor.automation_sample_buffers.get("volume");
                     let pan_automation = processor.automation_sample_buffers.get("pan");
 
+                    let strip_volume = strip.map_or(track.volume, |s| s.gain);
+                    let strip_pan = strip.map_or(track.pan, |s| s.pan);
+
                     let mut tp_l = 0.0f32;
                     let mut tp_r = 0.0f32;
 
@@ -845,7 +907,7 @@ impl AudioEngine {
                                 if processor.automated_volume.is_finite() {
                                     processor.automated_volume
                                 } else {
-                                    track.volume
+                                    strip_volume
                                 }
                             },
                             |buf| buf[i],
@@ -856,7 +918,7 @@ impl AudioEngine {
                                 if processor.automated_pan.is_finite() {
                                     processor.automated_pan
                                 } else {
-                                    track.pan
+                                    strip_pan
                                 }
                             },
                             |buf| buf[i] * 2.0 - 1.0, // convert 0..1 to -1..1
@@ -941,7 +1003,7 @@ impl AudioEngine {
 
         for proc in self.track_processors.values_mut() {
             for ppu in proc.plugins.values_mut() {
-                if let Some((id, r#gen)) = ppu.rt_instance_id {
+                if let Some(handle) = ppu.rt_instance_id {
                     let dl = [0.0f32; 64];
                     let mut ol = [0.0f32; 64];
                     let mut or_ = [0.0f32; 64];
@@ -971,11 +1033,9 @@ impl AudioEngine {
                             ]
                         })
                         .collect();
-                    PLUGIN_STORE.with(|st| {
-                        if let Some(inst) = st.borrow_mut().get_mut(id, r#gen) {
-                            let _ = inst.process(&ctx, &inputs, &mut outputs, &panic_events);
-                        }
-                    });
+                    if let Some(mut inst) = PLUGIN_STORE.get_mut(&handle) {
+                        let _ = inst.process(&ctx, &inputs, &mut outputs, &panic_events);
+                    }
                 }
             }
             proc.active_notes.clear();
@@ -986,169 +1046,37 @@ impl AudioEngine {
         }
     }
 
-    fn full_sync_from_snapshot(&mut self, tracks: &[TrackSnapshot]) {
-        // Build a new state representation without modifying the current one.
-        let mut new_processors: HashMap<u64, TrackProcessor> = HashMap::new();
-        let mut new_channel_strips: HashMap<u64, ChannelStrip> = HashMap::new();
-        let new_track_order: Vec<u64> = tracks.iter().map(|t| t.track_id).collect();
+    fn apply_new_snapshot(&mut self, new_snapshot: AudioGraphSnapshot) {
+        let new_track_ids: std::collections::HashSet<u64> =
+            new_snapshot.track_order.iter().cloned().collect();
 
-        let mut reusable_plugins: HashMap<(u64, u64), PluginProcessorUnified> = HashMap::new();
-        let existing_track_ids: Vec<u64> = self.track_processors.keys().cloned().collect();
-        for track_id in existing_track_ids {
-            if let Some(mut existing_proc) = self.track_processors.remove(&track_id) {
-                for (plugin_id, plugin) in existing_proc.plugins.drain() {
-                    reusable_plugins.insert((track_id, plugin_id), plugin);
-                }
-                // Put back the empty processor for now.
-                self.track_processors.insert(track_id, existing_proc);
-            }
-        }
+        // Remove processors and channel strips for tracks that no longer exist.
+        self.track_processors
+            .retain(|track_id, _| new_track_ids.contains(track_id));
+        self.channel_strips
+            .retain(|track_id, _| new_track_ids.contains(track_id));
 
-        for track_snapshot in tracks {
+        // Add/update processors and channel strips for all tracks.
+        for track_snapshot in &new_snapshot.tracks {
             let track_id = track_snapshot.track_id;
 
-            // Start with a fresh processor for this track.
-            let mut proc = TrackProcessor::new(track_id);
+            self.track_processors
+                .entry(track_id)
+                .or_insert_with(|| TrackProcessor::new(track_id));
 
-            // Rebuild this track's plugin chain.
-            for plugin_snapshot in &track_snapshot.plugin_chain {
-                let plugin_id = plugin_snapshot.plugin_id;
-                let reuse_key = (track_id, plugin_id);
-
-                let maybe_reused = reusable_plugins.remove(&reuse_key).filter(|p| {
-                    p.uri == plugin_snapshot.uri && p.backend == plugin_snapshot.backend
-                });
-
-                let plugin_processor = if let Some(mut reused) = maybe_reused {
-                    //  Just update plugin parameters (if found).
-                    if let Some((rt_id, r#gen)) = reused.rt_instance_id {
-                        for param_entry in plugin_snapshot.params.iter() {
-                            let param_name = param_entry.key();
-                            let param_value = *param_entry.value();
-                            let key = reused
-                                .param_name_to_key
-                                .get(param_name)
-                                .cloned()
-                                .unwrap_or(ParamKey::Clap(0)); // Fallback for safety
-
-                            PLUGIN_STORE.with(|st| {
-                                if let Some(inst) = st.borrow_mut().get_mut(rt_id, r#gen) {
-                                    inst.set_param(&key, param_value);
-                                }
-                            });
-                        }
-                        reused.bypass = plugin_snapshot.bypass;
-                    }
-                    reused
-                } else {
-                    // No matching plugin found, so we must create a new one.
-                    match self
-                        .host_facade
-                        .instantiate(plugin_snapshot.backend, &plugin_snapshot.uri)
-                    {
-                        Ok(mut inst) => {
-                            for param_entry in plugin_snapshot.params.iter() {
-                                let param_name = param_entry.key();
-                                let param_value = *param_entry.value();
-                                let maybe_key = inst
-                                    .params()
-                                    .iter()
-                                    .find(|p| p.name == *param_name)
-                                    .map(|p| p.key.clone());
-                                if let Some(key) = maybe_key {
-                                    inst.set_param(&key, param_value);
-                                }
-                            }
-
-                            let (rt_id, r#gen) =
-                                PLUGIN_STORE.with(|st| st.borrow_mut().insert(Box::from(inst)));
-
-                            let param_name_to_key = {
-                                let mut map = HashMap::new();
-                                PLUGIN_STORE.with(|st| {
-                                    if let Some(inst) = st.borrow_mut().get_mut(rt_id, r#gen) {
-                                        for p in inst.params() {
-                                            map.insert(p.name.clone(), p.key.clone());
-                                        }
-                                    }
-                                });
-                                map
-                            };
-
-                            PluginProcessorUnified {
-                                plugin_id,
-                                rt_instance_id: Some((rt_id, r#gen)),
-                                backend: plugin_snapshot.backend,
-                                uri: plugin_snapshot.uri.clone(),
-                                bypass: plugin_snapshot.bypass,
-                                param_name_to_key,
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "Failed to instantiate plugin on sync {}: {}",
-                                plugin_snapshot.uri, e
-                            );
-                            // Create a disabled placeholder to avoid breaking the chain
-                            PluginProcessorUnified {
-                                plugin_id,
-                                rt_instance_id: None,
-                                backend: plugin_snapshot.backend,
-                                uri: plugin_snapshot.uri.clone(),
-                                bypass: true,
-                                param_name_to_key: HashMap::new(),
-                            }
-                        }
-                    }
-                };
-
-                proc.plugins.insert(plugin_id, plugin_processor);
-                proc.plugin_order.push(plugin_id);
-            }
-
-            new_processors.insert(track_id, proc);
-
-            // Configure the channel strip for this track.
-            let strip = new_channel_strips.entry(track_id).or_default();
+            // Update the corresponding channel strip.
+            let strip = self.channel_strips.entry(track_id).or_default();
             strip.gain = track_snapshot.volume;
             strip.pan = track_snapshot.pan;
             strip.mute = track_snapshot.muted;
             strip.solo = track_snapshot.solo;
         }
 
-        // Cleanup
-        for ((track_id, plugin_id), unused_plugin) in reusable_plugins {
-            if let Some((rt_id, r#gen)) = unused_plugin.rt_instance_id {
-                PLUGIN_STORE.with(|st| st.borrow_mut().mark_removed(rt_id, r#gen));
-                log::debug!(
-                    "Deallocated unused plugin instance {} ({}) on track {}",
-                    unused_plugin.uri,
-                    plugin_id,
-                    track_id
-                );
-            }
-        }
+        self.graph_snapshot = new_snapshot;
 
-        let removed_track_ids: Vec<u64> = self.track_processors.keys().cloned().collect();
-        for track_id in removed_track_ids {
-            if !new_track_order.contains(&track_id) {
-                if let Some(removed_processor) = self.track_processors.remove(&track_id) {
-                    for (_plugin_id, removed_plugin) in removed_processor.plugins {
-                        if let Some((rt_id, r#gen)) = removed_plugin.rt_instance_id {
-                            PLUGIN_STORE.with(|st| st.borrow_mut().mark_removed(rt_id, r#gen));
-                        }
-                    }
-                }
-            }
-        }
-
-        // swap the engine's state with the new state.
-        self.track_processors = new_processors;
-        self.channel_strips = new_channel_strips;
-        *self.track_order.write() = new_track_order;
-        *self.tracks.write() = tracks.to_vec();
-
-        self.recording_state.recording_track = tracks
+        self.recording_state.recording_track = self
+            .graph_snapshot
+            .tracks
             .iter()
             .find(|t| t.armed && !t.is_midi)
             .map(|t| t.track_id);
@@ -1517,8 +1445,6 @@ fn process_track_plugins(
         processor.plugin_active_notes.clear();
     }
 
-    // Build MIDI events for this block if it's a MIDI track
-    let mut all_midi_events: Vec<MidiEvent> = Vec::new();
     if track.is_midi {
         let contiguous =
             (processor.last_block_end_samples - block_start_samples).abs() <= f64::EPSILON;
@@ -1561,7 +1487,7 @@ fn process_track_plugins(
         if ppu.bypass {
             continue;
         }
-        let Some((rt_id, r#gen)) = ppu.rt_instance_id else {
+        let Some(handle) = ppu.rt_instance_id else {
             continue;
         };
 
@@ -1577,11 +1503,9 @@ fn process_track_plugins(
                         .cloned()
                         .unwrap_or(ParamKey::Clap(0)),
                 };
-                PLUGIN_STORE.with(|st| {
-                    if let Some(inst) = st.borrow_mut().get_mut(rt_id, r#gen) {
-                        inst.set_param(&key, value);
-                    }
-                });
+                if let Some(mut inst) = PLUGIN_STORE.get_mut(&handle) {
+                    inst.set_param(&key, value);
+                }
             }
         }
 
@@ -1611,11 +1535,9 @@ fn process_track_plugins(
         };
 
         let t0 = Instant::now();
-        PLUGIN_STORE.with(|st| {
-            if let Some(inst) = st.borrow_mut().get_mut(rt_id, r#gen) {
-                let _ = inst.process(&ctx, &inputs, &mut outputs, events_slice);
-            }
-        });
+        if let Some(mut inst) = PLUGIN_STORE.get_mut(&handle) {
+            let _ = inst.process(&ctx, &inputs, &mut outputs, events_slice);
+        }
         *plugin_time_ms_accum += t0.elapsed().as_secs_f32() * 1000.0;
 
         // Feed next plugin
@@ -1762,4 +1684,24 @@ fn debug_print_output_peak(uri: &str, left: &[f32], right: &[f32]) {
     let lp = left.iter().fold(0.0_f32, |a, &s| a.max(s.abs()));
     let rp = right.iter().fold(0.0_f32, |a, &s| a.max(s.abs()));
     println!("[LV2][{}] OUT peak: L={:.6} R={:.6}", uri, lp, rp);
+}
+
+impl Drop for AudioEngine {
+    fn drop(&mut self) {
+        // When the engine is dropped, remove all its plugin instances
+        for processor in self.track_processors.values() {
+            for plugin in processor.plugins.values() {
+                if let Some(handle) = plugin.rt_instance_id {
+                    PLUGIN_STORE.remove(&handle);
+                }
+            }
+        }
+        log::debug!(
+            "AudioEngine dropped and cleaned up {} plugin instances.",
+            self.track_processors
+                .values()
+                .map(|p| p.plugins.len())
+                .sum::<usize>()
+        );
+    }
 }

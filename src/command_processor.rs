@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::audio_export::AudioExporter;
-use crate::audio_state::{AudioState, MidiNoteSnapshot, RealtimeCommand};
+use crate::audio_state::{AudioGraphSnapshot, AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, UIUpdate};
 use crate::model::plugin_api::BackendKind;
 use crate::model::{AutomationPoint, PluginDescriptor};
@@ -17,9 +17,17 @@ pub fn run_command_processor(
     command_rx: Receiver<AudioCommand>,
     realtime_tx: Sender<RealtimeCommand>,
     ui_tx: Sender<UIUpdate>,
+    snapshot_tx: Sender<AudioGraphSnapshot>,
 ) {
     while let Ok(command) = command_rx.recv() {
-        process_command(&command, &app_state, &audio_state, &realtime_tx, &ui_tx);
+        process_command(
+            &command,
+            &app_state,
+            &audio_state,
+            &realtime_tx,
+            &ui_tx,
+            &snapshot_tx,
+        );
     }
 }
 
@@ -41,6 +49,7 @@ fn process_command(
     audio_state: &Arc<AudioState>,
     realtime_tx: &Sender<RealtimeCommand>,
     ui_tx: &Sender<UIUpdate>,
+    snapshot_tx: &Sender<AudioGraphSnapshot>,
 ) {
     match command {
         AudioCommand::Play => {
@@ -71,7 +80,7 @@ fn process_command(
 
         AudioCommand::UpdateTracks => {
             let state = app_state.lock().unwrap();
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         // Track commands using IDs
@@ -119,7 +128,7 @@ fn process_command(
                 }
             }
 
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
         AudioCommand::FinalizeRecording => {
             //HACK?, this is just a no-op for the processor.
@@ -143,7 +152,7 @@ fn process_command(
                 plugin_id: *plugin_id,
             });
 
-            send_tracks_snapshot_locked(&app_state.lock().unwrap(), realtime_tx);
+            send_graph_snapshot_locked(&app_state.lock().unwrap(), snapshot_tx);
         }
 
         AudioCommand::SetPluginBypass(track_id, plugin_id, bypass) => {
@@ -213,7 +222,7 @@ fn process_command(
             }
             drop(state);
 
-            send_tracks_snapshot_locked(&app_state.lock().unwrap(), realtime_tx);
+            send_graph_snapshot_locked(&app_state.lock().unwrap(), snapshot_tx);
         }
 
         AudioCommand::LoadPluginPreset(_, _, _) | AudioCommand::SavePluginPreset(_, _, _) => {}
@@ -279,7 +288,7 @@ fn process_command(
                 });
 
                 let state = app_state.lock().unwrap();
-                send_tracks_snapshot_locked(&state, realtime_tx);
+                send_graph_snapshot_locked(&state, snapshot_tx);
             }
         }
 
@@ -318,7 +327,7 @@ fn process_command(
 
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::DeleteMidiClip { clip_id } => {
@@ -330,7 +339,7 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::MoveMidiClip { clip_id, new_start } => {
@@ -342,7 +351,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::ResizeMidiClip {
@@ -359,7 +368,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::DuplicateMidiClip { clip_id } => {
@@ -397,7 +406,7 @@ fn process_command(
                         );
                     }
                 }
-                send_tracks_snapshot_locked(&state, realtime_tx);
+                send_graph_snapshot_locked(&state, snapshot_tx);
             }
         }
 
@@ -411,7 +420,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::ResizeAudioClip {
@@ -432,7 +441,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::DuplicateAudioClip { clip_id } => {
@@ -470,7 +479,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&app_state.lock().unwrap(), realtime_tx);
+            send_graph_snapshot_locked(&app_state.lock().unwrap(), snapshot_tx);
         }
 
         AudioCommand::DeleteAudioClip { clip_id } => {
@@ -481,7 +490,7 @@ fn process_command(
                     state.clips_by_id.remove(clip_id);
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         // ---------- AUTOMATION ----------
@@ -517,7 +526,7 @@ fn process_command(
                 }
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
         AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
             let mut state = app_state.lock().unwrap();
@@ -527,7 +536,7 @@ fn process_command(
                 lane.points.retain(|p| (p.beat - beat).abs() > 0.001);
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
         AudioCommand::UpdateAutomationPoint {
             track_id,
@@ -553,7 +562,7 @@ fn process_command(
 
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
         AudioCommand::SetAutomationMode(_, _, _) | AudioCommand::ClearAutomationLane(_, _) => {}
 
@@ -576,7 +585,7 @@ fn process_command(
                 track.monitor_enabled = *enabled;
                 let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::AddSend(_, _, _)
@@ -600,7 +609,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::MakeClipAlias { clip_id } => {
@@ -639,7 +648,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::MakeClipUnique { clip_id } => {
@@ -651,7 +660,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::SetClipQuantize {
@@ -672,7 +681,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::DuplicateMidiClipAsAlias { clip_id } => {
@@ -746,7 +755,7 @@ fn process_command(
                 );
             }
 
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::SetClipContentOffset {
@@ -763,7 +772,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
         AudioCommand::CutSelectedNotes { clip_id, note_ids } => {
             let mut clipboard_notes = Vec::new();
@@ -788,7 +797,7 @@ fn process_command(
             if !clipboard_notes.is_empty() {
                 let _ = ui_tx.send(UIUpdate::NotesCutToClipboard(clipboard_notes));
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::DeleteSelectedNotes { clip_id, note_ids } => {
@@ -800,7 +809,7 @@ fn process_command(
                     }
                 }
             }
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
         AudioCommand::PasteNotes { clip_id, notes } => {
@@ -815,7 +824,7 @@ fn process_command(
                 }
             }
             state.ensure_ids(); // Assign IDs to newly pasted notes
-            send_tracks_snapshot_locked(&state, realtime_tx);
+            send_graph_snapshot_locked(&state, snapshot_tx);
         }
         AudioCommand::ExportAudio(config) => {
             let app_state_clone = app_state.lock().unwrap().clone();
@@ -835,7 +844,22 @@ fn process_command(
     }
 }
 
-fn send_tracks_snapshot_locked(state: &AppState, realtime_tx: &Sender<RealtimeCommand>) {
-    let snapshots = crate::audio_snapshot::build_track_snapshots(state);
-    let _ = realtime_tx.send(RealtimeCommand::UpdateTracks(snapshots));
+fn send_graph_snapshot_locked(state: &AppState, snapshot_tx: &Sender<AudioGraphSnapshot>) {
+    if snapshot_tx.is_full() {
+        log::trace!("Skipping snapshot send, audio thread is busy.");
+        return;
+    }
+
+    let snapshot = AudioGraphSnapshot {
+        tracks: crate::audio_snapshot::build_track_snapshots(state),
+        track_order: state.track_order.clone(),
+    };
+
+    if let Err(e) = snapshot_tx.try_send(snapshot) {
+        if e.is_full() {
+            // This is okay, another thread sent a snapshot just before we did.
+        } else {
+            log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
+        }
+    }
 }

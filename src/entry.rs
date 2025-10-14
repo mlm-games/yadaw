@@ -16,7 +16,7 @@ use android_activity::AndroidApp;
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Logging
 
-    use crate::{model::plugin_api::HostConfig, project};
+    use crate::{audio_state::AudioGraphSnapshot, model::plugin_api::HostConfig, project};
     #[cfg(not(target_os = "android"))]
     env_logger::init();
     // #[cfg(target_os = "android")]
@@ -42,6 +42,8 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
     let (ui_tx, ui_rx) = crossbeam_channel::unbounded::<UIUpdate>();
 
+    let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded::<AudioGraphSnapshot>(1);
+
     // Initialize the global LV2 plugin host with current audio settings
     plugin_host::init(
         audio_state.sample_rate.load() as f64,
@@ -61,7 +63,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         let audio_state_clone = audio_state.clone();
         let ui_tx_audio = ui_tx.clone();
         std::thread::spawn(move || {
-            audio::run_audio_thread(audio_state_clone, realtime_rx, ui_tx_audio);
+            audio::run_audio_thread(audio_state_clone, realtime_rx, ui_tx_audio, snapshot_rx);
         });
     }
 
@@ -77,6 +79,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 command_rx,
                 realtime_tx,
                 ui_tx_clone,
+                snapshot_tx,
             );
         });
     }

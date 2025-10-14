@@ -211,6 +211,9 @@ mod clap_impl {
         pending_param_changes: Vec<(u32, f64)>,
     }
 
+    unsafe impl Send for ClapInstance {} // HACK, should be safe
+    unsafe impl Sync for ClapInstance {}
+
     impl ClapInstance {
         fn ensure_started(&mut self, frames: usize) -> Result<()> {
             if self.started.is_none() {
@@ -243,11 +246,11 @@ mod clap_impl {
             let frames = ctx.frames;
             self.ensure_started(frames)?;
 
-            // Clear and reuse event buffers
+            // Clear and build event lists
             self.note_ons.clear();
             self.note_offs.clear();
 
-            // Build typed note events
+            // Convert incoming MIDI to typed events
             for e in events {
                 let time = (e.time_frames.clamp(0, frames as i64) as u32).min(frames as u32 - 1);
                 let port = 0u16;
@@ -255,7 +258,6 @@ mod clap_impl {
                 let key = e.data1 as u16;
                 let note_id = key as u32;
                 let velocity = (e.data2 as f32 / 127.0) as f64;
-
                 let pckn = Pckn::new(port, channel, key, note_id);
 
                 match e.status & 0xF0 {
@@ -269,11 +271,11 @@ mod clap_impl {
                 }
             }
 
-            // Sort by time
+            // Sort events by time
             self.note_ons.sort_by_key(|e| e.time());
             self.note_offs.sort_by_key(|e| e.time());
 
-            // Copy input audio (InputChannel requires &mut [f32])
+            // Copy input audio
             for (i, &input_channel) in audio_in.iter().enumerate() {
                 if i < self.input_copies.len() {
                     let len = frames.min(input_channel.len());
@@ -309,82 +311,39 @@ mod clap_impl {
             let mut out_buffer = EventBuffer::new();
             let mut out_events = OutputEvents::from_buffer(&mut out_buffer);
 
-            // Process parameter changes first
-            if !self.pending_param_changes.is_empty() {
-                let mut param_buffer = EventBuffer::new();
-                for (id, value) in self.pending_param_changes.drain(..) {
-                    // For parameter changes, use match_all() for PCKN (not note-specific)
-                    param_buffer.push(&ParamValueEvent::new(
-                        0,                 // time
-                        ClapId::new(id),   // param_id
-                        Pckn::match_all(), // pckn - wildcard for all notes
-                        value,             // value
-                        Cookie::empty(),   // cookie
-                    ));
-                }
-                let param_events = InputEvents::from_buffer(&param_buffer);
-                proc.process(
-                    &in_audio,
-                    &mut out_audio,
-                    &param_events,
-                    &mut out_events,
-                    None,
-                    None,
-                )
-                .map_err(|e| anyhow!("CLAP process (params) failed: {e:?}"))?;
+            let mut combined_buffer = EventBuffer::new();
+
+            // Add parameter changes first
+            for (id, value) in self.pending_param_changes.drain(..) {
+                combined_buffer.push(&ParamValueEvent::new(
+                    0,
+                    ClapId::new(id),
+                    Pckn::match_all(),
+                    value,
+                    Cookie::empty(),
+                ));
             }
 
-            // Process note events or empty buffer (ALWAYS process to generate audio)
-            if !self.note_offs.is_empty() || !self.note_ons.is_empty() {
-                // Process offs first
-                if !self.note_offs.is_empty() {
-                    let mut offs_buffer = EventBuffer::new();
-                    for event in &self.note_offs {
-                        offs_buffer.push(event);
-                    }
-                    let offs_events = InputEvents::from_buffer(&offs_buffer);
-                    proc.process(
-                        &in_audio,
-                        &mut out_audio,
-                        &offs_events,
-                        &mut out_events,
-                        None,
-                        None,
-                    )
-                    .map_err(|e| anyhow!("CLAP process (offs) failed: {e:?}"))?;
-                }
-
-                // Then ons
-                if !self.note_ons.is_empty() {
-                    let mut ons_buffer = EventBuffer::new();
-                    for event in &self.note_ons {
-                        ons_buffer.push(event);
-                    }
-                    let ons_events = InputEvents::from_buffer(&ons_buffer);
-                    proc.process(
-                        &in_audio,
-                        &mut out_audio,
-                        &ons_events,
-                        &mut out_events,
-                        None,
-                        None,
-                    )
-                    .map_err(|e| anyhow!("CLAP process (ons) failed: {e:?}"))?;
-                }
-            } else {
-                // No events - still process to continue generating audio
-                let empty_buffer = EventBuffer::new();
-                let empty_events = InputEvents::from_buffer(&empty_buffer);
-                proc.process(
-                    &in_audio,
-                    &mut out_audio,
-                    &empty_events,
-                    &mut out_events,
-                    None,
-                    None,
-                )
-                .map_err(|e| anyhow!("CLAP process (empty) failed: {e:?}"))?;
+            // Add note-offs
+            for event in &self.note_offs {
+                combined_buffer.push(event);
             }
+
+            // Add note-ons
+            for event in &self.note_ons {
+                combined_buffer.push(event);
+            }
+
+            let combined_events = InputEvents::from_buffer(&combined_buffer);
+            proc.process(
+                &in_audio,
+                &mut out_audio,
+                &combined_events,
+                &mut out_events,
+                None,
+                None,
+            )
+            .map_err(|e| anyhow!("CLAP process failed: {e:?}"))?;
 
             Ok(())
         }
@@ -401,6 +360,14 @@ mod clap_impl {
 
         fn params(&self) -> &[UnifiedParamInfo] {
             &self.params
+        }
+
+        fn save_state(&mut self) -> Option<Vec<u8>> {
+            None
+        }
+
+        fn load_state(&mut self, _data: &[u8]) -> bool {
+            false
         }
     }
 

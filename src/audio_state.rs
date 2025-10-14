@@ -240,3 +240,9 @@ pub struct AudioClipSnapshot {
     pub fade_out: Option<f64>,
     pub gain: f32,
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct AudioGraphSnapshot {
+    pub tracks: Vec<TrackSnapshot>,
+    pub track_order: Vec<u64>,
+}

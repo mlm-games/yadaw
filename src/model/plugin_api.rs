@@ -59,7 +59,7 @@ pub struct MidiEvent {
     pub time_frames: i64,
 }
 
-pub trait PluginInstance {
+pub trait PluginInstance: Send + Sync {
     fn process(
         &mut self,
         ctx: &ProcessCtx,
