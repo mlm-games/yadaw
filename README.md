@@ -1,6 +1,6 @@
 ## Yadaw 
 
-A basic daw for sound effects, and which works on Android.
+A basic daw for sound effects (works on Android too)
 
 ### Build from source
 #### Desktop
