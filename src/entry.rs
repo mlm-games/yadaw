@@ -17,16 +17,10 @@ use android_activity::AndroidApp;
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Logging
 
+    use crate::midi_input::MidiInputHandler;
+
     #[cfg(not(target_os = "android"))]
     env_logger::init();
-    // #[cfg(target_os = "android")]
-    // {
-    //     android_logger::init_once(
-    //         android_logger::Config::default()
-    //             .with_min_level(log::Level::Info)
-    //             .with_tag("yadaw"),
-    //     );
-    // }
 
     log::info!("Starting YADAW...");
 
@@ -67,11 +61,20 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    let midi_input_handler = match MidiInputHandler::new(command_tx.clone()) {
+        Ok(handler) => Some(Arc::new(handler)),
+        Err(e) => {
+            log::warn!("Could not create MIDI Input handler: {}", e);
+            None
+        }
+    };
+
     log::info!("Starting command processor thread...");
     {
         let app_state_clone = app_state.clone();
         let audio_state_clone = audio_state.clone();
         let ui_tx_clone = ui_tx.clone();
+        let midi_input_handler_clone = midi_input_handler.clone();
         std::thread::spawn(move || {
             run_command_processor(
                 app_state_clone,
@@ -80,6 +83,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 realtime_tx,
                 ui_tx_clone,
                 snapshot_tx,
+                midi_input_handler_clone,
             );
         });
     }
@@ -99,6 +103,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         "YADAW - Yet Another DAW",
         native_options,
         Box::new(move |_cc| {
+            let ui_midi_handler = midi_input_handler.clone();
             Ok(Box::new(ui::YadawApp::new(
                 app_state.clone(),
                 audio_state.clone(),
@@ -106,6 +111,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 ui_rx,
                 available_plugins,
                 config,
+                ui_midi_handler,
             )))
         }),
     )?;
@@ -163,11 +169,20 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         });
     }
 
-    // Start command processor
+    let midi_input_handler = match MidiInputHandler::new(command_tx.clone()) {
+        Ok(handler) => Some(Arc::new(handler)),
+        Err(e) => {
+            log::warn!("Could not create MIDI Input handler: {}", e);
+            None
+        }
+    };
+
+    log::info!("Starting command processor thread...");
     {
         let app_state_clone = app_state.clone();
         let audio_state_clone = audio_state.clone();
         let ui_tx_clone = ui_tx.clone();
+        let midi_input_handler_clone = midi_input_handler.clone();
         std::thread::spawn(move || {
             run_command_processor(
                 app_state_clone,
@@ -176,6 +191,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
                 realtime_tx,
                 ui_tx_clone,
                 snapshot_tx,
+                midi_input_handler_clone,
             );
         });
     }
@@ -183,9 +199,8 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     // Prime audio graph
     let _ = command_tx.send(AudioCommand::UpdateTracks);
 
-    // Android-specific eframe options
+    // UI
     let native_options = eframe::NativeOptions {
-        android_app: Some(app), // Pass the Android app here!
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
             .with_min_inner_size([800.0, 600.0]),
@@ -196,6 +211,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         "YADAW - Yet Another DAW",
         native_options,
         Box::new(move |_cc| {
+            let ui_midi_handler = midi_input_handler.clone();
             Ok(Box::new(ui::YadawApp::new(
                 app_state.clone(),
                 audio_state.clone(),
@@ -203,6 +219,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
                 ui_rx,
                 available_plugins,
                 config,
+                ui_midi_handler,
             )))
         }),
     )?;

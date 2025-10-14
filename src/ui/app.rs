@@ -6,6 +6,7 @@ use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
+use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::{AudioClip, MidiNote, Track};
@@ -90,6 +91,9 @@ pub struct YadawApp {
 
     last_autosave: Instant,
     autosave_interval: Duration,
+
+    pub midi_input_handler: Option<Arc<MidiInputHandler>>,
+    pub available_midi_ports: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +125,7 @@ impl YadawApp {
         ui_rx: Receiver<UIUpdate>,
         available_plugins: Vec<UnifiedPluginInfo>,
         config: Config,
+        midi_input_handler: Option<Arc<MidiInputHandler>>,
     ) -> Self {
         let transport = Transport::new(audio_state.clone(), command_tx.clone());
         let theme = match config.ui.theme {
@@ -147,6 +152,11 @@ impl YadawApp {
             .into_iter()
             .map(|p| (p.uri.clone(), p))
             .collect();
+
+        let available_midi_ports = midi_input_handler
+            .as_ref()
+            .map(|h| h.list_ports())
+            .unwrap_or_default();
 
         let mut input_manager = InputManager::new();
 
@@ -211,6 +221,9 @@ impl YadawApp {
             autosave_interval: Duration::from_secs(
                 config.behavior.auto_save_interval_minutes as u64 * 60,
             ),
+
+            midi_input_handler,
+            available_midi_ports,
         }
     }
 
@@ -1136,16 +1149,10 @@ impl YadawApp {
             }
 
             Record => {
-                // The `Record` command now toggles the *intent* to record.
-                // The audio thread will handle the actual start/stop.
-                let should_record = !self.audio_state.recording.load(Ordering::Relaxed);
-                self.audio_state
-                    .recording
-                    .store(should_record, Ordering::Relaxed);
-
-                // If we are starting a recording, also ensure playback is on.
-                if should_record {
-                    self.audio_state.playing.store(true, Ordering::Relaxed);
+                if self.audio_state.recording.load(Ordering::Relaxed) {
+                    let _ = self.command_tx.send(AudioCommand::StopRecording);
+                } else {
+                    let _ = self.command_tx.send(AudioCommand::StartRecording);
                 }
             }
 

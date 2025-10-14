@@ -116,6 +116,7 @@ impl TrackBuilder {
             frozen: false,
             frozen_buffer: None,
             plugin_by_id: HashMap::new(),
+            midi_input_port: None,
         }
     }
 

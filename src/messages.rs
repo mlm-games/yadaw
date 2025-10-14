@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     audio_export::ExportConfig,
+    midi_input::RawMidiMessage,
     model::{
         MidiNote,
         automation::{AutomationMode, AutomationTarget},
@@ -17,7 +18,8 @@ pub enum AudioCommand {
     Play,
     Stop,
     Pause,
-    Record,
+    StartRecording,
+    StopRecording,
     SetPosition(f64),
     SetBPM(f32),
     SetMasterVolume(f32),
@@ -170,6 +172,8 @@ pub enum AudioCommand {
         note_ids: Vec<u64>,
     },
     ExportAudio(ExportConfig),
+    SetTrackMidiInput(u64, Option<String>),
+    MidiInput(RawMidiMessage),
 }
 
 #[derive(Debug, Clone)]

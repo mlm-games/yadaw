@@ -1507,7 +1507,6 @@ impl ExportDialog {
                                 self.closed = true;
                             }
                         }
-                                        _ => {}
                     }
                     if ui.button("Cancel").clicked() {
                         // TODO: Implement cancellation logic via AudioExporter

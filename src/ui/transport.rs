@@ -82,25 +82,24 @@ impl TransportUI {
                         };
 
                         let is_recording = app.is_recording_ui;
+                        let is_recording_active = app.audio_state.recording.load(Ordering::Relaxed);
 
-                        let record_button = egui::Button::new("⏺").fill(if is_recording {
-                            // Blinking effect for recording
+                        let record_button = egui::Button::new("⏺").fill(if is_recording_active {
+                            // Blinking effect
                             let time = ctx.input(|i| i.time);
-                            let alpha = (time.sin() * 0.5 + 0.5) as f32; // Varies between 0 and 1
+                            let alpha = (time.sin() * 0.5 + 0.5) as f32;
                             egui::Color32::from_rgb(150 + (105.0 * alpha) as u8, 0, 0)
                         } else {
                             egui::Color32::TRANSPARENT
                         });
 
                         if ui.add(record_button).on_hover_text("Record").clicked() {
-                            let should_record = !app.audio_state.recording.load(Ordering::Relaxed);
-                            app.audio_state
-                                .recording
-                                .store(should_record, Ordering::Relaxed);
-
-                            if should_record {
-                                app.audio_state.playing.store(true, Ordering::Relaxed);
-                            }
+                            let cmd = if is_recording_active {
+                                AudioCommand::StopRecording
+                            } else {
+                                AudioCommand::StartRecording
+                            };
+                            let _ = app.command_tx.send(cmd);
                         }
 
                         if ui.button("⏩").on_hover_text("Fast Forward").clicked()

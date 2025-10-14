@@ -53,7 +53,11 @@ impl Transport {
     }
 
     pub fn record(&self) {
-        let _ = self.command_tx.send(AudioCommand::Record);
+        if self.audio_state.recording.load(Ordering::Relaxed) {
+            let _ = self.command_tx.send(AudioCommand::StopRecording);
+        } else {
+            let _ = self.command_tx.send(AudioCommand::StartRecording);
+        }
     }
 
     pub fn toggle_playback(&self) {

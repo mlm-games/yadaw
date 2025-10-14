@@ -146,6 +146,7 @@ impl TracksPanel {
                     }
 
                     self.draw_plugin_chain(ui, track_id, app);
+                    self.draw_io_section(ui, track_id, app);
 
                     header_resp
                 })
@@ -544,6 +545,63 @@ impl TracksPanel {
                 .command_tx
                 .send(AudioCommand::MovePlugin(track_id, from, to));
             self.cached_plugin_chains.remove(&track_id);
+        }
+    }
+
+    fn draw_io_section(&self, ui: &mut egui::Ui, track_id: u64, app: &mut super::app::YadawApp) {
+        let track = {
+            let state = app.state.lock().unwrap();
+            state.tracks.get(&track_id).cloned()
+        };
+
+        if let Some(track) = track {
+            if track.is_midi {
+                ui.horizontal(|ui| {
+                    ui.label("MIDI In:");
+
+                    let mut selected_port = track
+                        .midi_input_port
+                        .clone()
+                        .unwrap_or_else(|| "None".to_string());
+
+                    let response = egui::ComboBox::from_id_salt(("midi_in", track_id))
+                        .selected_text(&selected_port)
+                        .show_ui(ui, |ui| {
+                            let mut changed = ui
+                                .selectable_value(&mut selected_port, "None".to_string(), "None")
+                                .changed();
+                            for port_name in &app.available_midi_ports {
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut selected_port,
+                                        port_name.clone(),
+                                        port_name,
+                                    )
+                                    .changed();
+                            }
+                            changed
+                        });
+
+                    if response.inner.unwrap_or(false) {
+                        // Check if the value changed
+                        let new_selection = if selected_port == "None" {
+                            None
+                        } else {
+                            Some(selected_port)
+                        };
+
+                        let _ = app
+                            .command_tx
+                            .send(AudioCommand::SetTrackMidiInput(track_id, new_selection));
+                    }
+                });
+            } else {
+                // Placeholder for audio input selection
+                ui.horizontal(|ui| {
+                    ui.label("Audio In:");
+                    ui.label("Default Input");
+                });
+            }
         }
     }
 

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -6,8 +7,9 @@ use crossbeam_channel::{Receiver, Sender};
 use crate::audio_export::AudioExporter;
 use crate::audio_state::{AudioGraphSnapshot, AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, UIUpdate};
+use crate::midi_input::{MidiInputHandler, RawMidiMessage};
 use crate::model::plugin_api::BackendKind;
-use crate::model::{AutomationPoint, PluginDescriptor};
+use crate::model::{AutomationPoint, MidiClip, PluginDescriptor};
 use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::AppState;
 
@@ -18,15 +20,19 @@ pub fn run_command_processor(
     realtime_tx: Sender<RealtimeCommand>,
     ui_tx: Sender<UIUpdate>,
     snapshot_tx: Sender<AudioGraphSnapshot>,
+    midi_input_handler: Option<Arc<MidiInputHandler>>,
 ) {
+    let mut midi_recording_state: Option<MidiRecordingState> = None;
     while let Ok(command) = command_rx.recv() {
         process_command(
             &command,
+            &mut midi_recording_state,
             &app_state,
             &audio_state,
             &realtime_tx,
             &ui_tx,
             &snapshot_tx,
+            &midi_input_handler,
         );
     }
 }
@@ -45,11 +51,13 @@ fn notes_to_snapshot(notes: &[crate::model::MidiNote]) -> Vec<MidiNoteSnapshot> 
 
 fn process_command(
     command: &AudioCommand,
+    midi_recording_state: &mut Option<MidiRecordingState>,
     app_state: &Arc<std::sync::Mutex<AppState>>,
     audio_state: &Arc<AudioState>,
     realtime_tx: &Sender<RealtimeCommand>,
     ui_tx: &Sender<UIUpdate>,
     snapshot_tx: &Sender<AudioGraphSnapshot>,
+    midi_input_handler: &Option<Arc<MidiInputHandler>>,
 ) {
     match command {
         AudioCommand::Play => {
@@ -58,13 +66,14 @@ fn process_command(
         AudioCommand::Stop => {
             audio_state.playing.store(false, Ordering::Relaxed);
             audio_state.recording.store(false, Ordering::Relaxed);
+            if midi_recording_state.is_some() {
+                log::info!("Stopping MIDI recording due to transport stop.");
+                *midi_recording_state = None;
+                send_graph_snapshot_locked(&app_state.lock().unwrap(), snapshot_tx);
+            }
         }
         AudioCommand::Pause => {
             audio_state.playing.store(false, Ordering::Relaxed);
-        }
-        AudioCommand::Record => {
-            audio_state.recording.store(true, Ordering::Relaxed);
-            audio_state.playing.store(true, Ordering::Relaxed);
         }
         AudioCommand::SetPosition(position) => {
             audio_state.set_position(*position);
@@ -115,25 +124,210 @@ fn process_command(
         AudioCommand::ArmForRecording(track_id, armed) => {
             let mut state = app_state.lock().unwrap();
 
+            let target_is_midi = state.tracks.get(track_id).map_or(false, |t| t.is_midi);
+
             if *armed {
                 for (id, track) in state.tracks.iter_mut() {
-                    // Only disarm other audio tracks.
-                    if !track.is_midi {
-                        track.armed = *id == *track_id;
+                    if *id == *track_id {
+                        track.armed = true;
+                    } else if track.is_midi == target_is_midi {
+                        // Disarm other tracks of the same type
+                        track.armed = false;
                     }
                 }
             } else {
+                // If we are disarming, just do it for the target track.
                 if let Some(track) = state.tracks.get_mut(track_id) {
                     track.armed = false;
                 }
             }
 
-            send_graph_snapshot_locked(&state, snapshot_tx);
+            drop(state);
+            send_graph_snapshot_locked(&app_state.lock().unwrap(), snapshot_tx);
         }
+
         AudioCommand::FinalizeRecording => {
             //HACK?, this is just a no-op for the processor.
             // Only for pending state checks for the end of recording. The acual logic is in the audio callback.
             log::info!("FinalizeRecording command received.");
+        }
+
+        AudioCommand::StartRecording => {
+            audio_state.recording.store(true, Ordering::Relaxed);
+            audio_state.playing.store(true, Ordering::Relaxed);
+
+            let (armed_midi_track_id, bpm, sr) = {
+                let state = app_state.lock().unwrap();
+                (
+                    state
+                        .tracks
+                        .values()
+                        .find(|t| t.is_midi && t.armed)
+                        .map(|t| t.id),
+                    state.bpm,
+                    state.sample_rate,
+                )
+            };
+
+            if let Some(track_id) = armed_midi_track_id {
+                if midi_recording_state.is_none() {
+                    let start_beat = crate::time_utils::quick::samples_to_beats(
+                        audio_state.get_position(),
+                        sr,
+                        bpm,
+                    );
+
+                    let mut state = app_state.lock().unwrap();
+                    let track_exists = state.tracks.contains_key(&track_id);
+
+                    if track_exists {
+                        let clip_exists = state.tracks[&track_id].midi_clips.iter().any(|c| {
+                            start_beat >= c.start_beat
+                                && start_beat < (c.start_beat + c.length_beats)
+                        });
+
+                        if !clip_exists {
+                            // Generate the ID *before* mutably borrowing the track
+                            let new_clip_id = state.fresh_id();
+
+                            // Now we can safely get the mutable track reference
+                            let track = state.tracks.get_mut(&track_id).unwrap();
+
+                            log::info!(
+                                "No existing clip at start beat {}. Creating a new one.",
+                                start_beat
+                            );
+                            let new_clip = MidiClip {
+                                id: new_clip_id,
+                                name: format!("Rec @ Beat {:.1}", start_beat),
+                                start_beat: start_beat.floor(),
+                                length_beats: 64.0,
+                                ..Default::default()
+                            };
+                            track.midi_clips.push(new_clip);
+                            track
+                                .midi_clips
+                                .sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap());
+                        }
+                    }
+                    drop(state);
+
+                    log::info!("Starting MIDI recording on track {}", track_id);
+                    *midi_recording_state = Some(MidiRecordingState {
+                        track_id,
+                        active_notes: HashMap::new(),
+                    });
+                }
+            }
+        }
+
+        AudioCommand::StopRecording => {
+            audio_state.recording.store(false, Ordering::Relaxed);
+            if midi_recording_state.is_some() {
+                log::info!("Stopping MIDI recording.");
+                *midi_recording_state = None;
+                send_graph_snapshot_locked(&app_state.lock().unwrap(), snapshot_tx);
+            }
+        }
+
+        AudioCommand::MidiInput(raw_message) => {
+            if let Some(state) = midi_recording_state {
+                let status = raw_message.message[0];
+                let data1 = raw_message.message[1];
+                let data2 = raw_message.message[2];
+                let channel = status & 0x0F;
+                let message_type = status & 0xF0;
+
+                let current_beat = {
+                    let pos_samples = audio_state.get_position();
+                    let sr = audio_state.sample_rate.load();
+                    let bpm = audio_state.bpm.load();
+                    crate::time_utils::quick::samples_to_beats(pos_samples, sr, bpm)
+                };
+
+                match message_type {
+                    0x90 if data2 > 0 => {
+                        // Note On
+                        state
+                            .active_notes
+                            .insert((data1, channel), (current_beat, data2));
+                    }
+                    0x80 | 0x90 => {
+                        // Note Off
+                        if let Some((start_beat, velocity)) =
+                            state.active_notes.remove(&(data1, channel))
+                        {
+                            let duration = (current_beat - start_beat).max(0.01);
+
+                            let mut app_state_guard = app_state.lock().unwrap();
+
+                            // Find the clip first without holding a mutable borrow on it
+                            let clip_exists = app_state_guard.tracks.get(&state.track_id).map_or(
+                                false,
+                                |track| {
+                                    track.midi_clips.iter().any(|c| {
+                                        start_beat >= c.start_beat
+                                            && start_beat < (c.start_beat + c.length_beats)
+                                    })
+                                },
+                            );
+
+                            if clip_exists {
+                                // Generate ID before getting mutable references
+                                let new_note_id = app_state_guard.fresh_id();
+
+                                // Now get the mutable references safely
+                                let track =
+                                    app_state_guard.tracks.get_mut(&state.track_id).unwrap();
+                                let clip = track
+                                    .midi_clips
+                                    .iter_mut()
+                                    .find(|c| {
+                                        start_beat >= c.start_beat
+                                            && start_beat < (c.start_beat + c.length_beats)
+                                    })
+                                    .unwrap();
+
+                                let note = crate::model::MidiNote {
+                                    id: new_note_id,
+                                    pitch: data1,
+                                    velocity,
+                                    start: start_beat - clip.start_beat,
+                                    duration,
+                                };
+                                clip.notes.push(note);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        AudioCommand::SetTrackMidiInput(track_id, port_name) => {
+            let mut state = app_state.lock().unwrap();
+            if let Some(track) = state.tracks.get_mut(track_id) {
+                track.midi_input_port = port_name.clone();
+
+                // Logic to ensure only one track is connected at a time
+                if let Some(p_name) = port_name {
+                    if let Some(handler) = midi_input_handler {
+                        if let Err(e) = handler.connect(p_name) {
+                            log::error!("Failed to connect to MIDI port {}: {}", p_name, e);
+                        }
+                    }
+                    // Disconnect other tracks
+                    for (id, t) in state.tracks.iter_mut() {
+                        if *id != *track_id {
+                            t.midi_input_port = None;
+                        }
+                    }
+                } else {
+                    // Disconnect if "None" was selected
+                    if let Some(handler) = midi_input_handler {
+                        handler.disconnect();
+                    }
+                }
+            }
         }
 
         // Plugin commands
@@ -862,4 +1056,11 @@ fn send_graph_snapshot_locked(state: &AppState, snapshot_tx: &Sender<AudioGraphS
             log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
         }
     }
+}
+
+/// State for an in-progress MIDI recording.
+struct MidiRecordingState {
+    /// The track ID we are recording to.
+    track_id: u64,
+    active_notes: HashMap<(u8, u8), (f64, u8)>,
 }
