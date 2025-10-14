@@ -795,27 +795,74 @@ impl TimelineView {
                         let mut delta = current - *start_drag_beat;
                         delta = snap(delta, self.grid_snap);
 
-                        for (clip_id, original_start) in clip_ids_and_starts.iter().copied() {
-                            let new_start = (original_start + delta).max(0.0);
-                            let state = app.state.lock().unwrap();
-                            let is_midi = state
-                                .clips_by_id
-                                .get(&clip_id)
-                                .map(|r| r.is_midi)
-                                .unwrap_or(false);
-                            drop(state);
+                        let mut allow_move = true;
+                        app.push_undo();
+                        let state = app.state.lock().unwrap();
 
-                            if is_midi {
-                                let _ = app
-                                    .command_tx
-                                    .send(AudioCommand::MoveMidiClip { clip_id, new_start });
-                            } else {
-                                let _ = app
-                                    .command_tx
-                                    .send(AudioCommand::MoveAudioClip { clip_id, new_start });
+                        'outer: for (clip_id, original_start) in clip_ids_and_starts.iter().copied()
+                        {
+                            let new_start = (original_start + delta).max(0.0);
+
+                            if let Some((track, loc)) = state.find_clip(clip_id) {
+                                let new_length = match loc {
+                                    ClipLocation::Midi(idx) => track.midi_clips[idx].length_beats,
+                                    ClipLocation::Audio(idx) => track.audio_clips[idx].length_beats,
+                                };
+                                let new_end = new_start + new_length;
+
+                                for other in &track.midi_clips {
+                                    if other.id == clip_id
+                                        || clip_ids_and_starts.iter().any(|(id, _)| *id == other.id)
+                                    {
+                                        continue; // Don't check against self or other moving clips
+                                    }
+                                    let other_end = other.start_beat + other.length_beats;
+                                    if new_start < other_end && new_end > other.start_beat {
+                                        allow_move = false;
+                                        break 'outer;
+                                    }
+                                }
+                                // Check against other Audio clips on the same track
+                                for other in &track.audio_clips {
+                                    if other.id == clip_id
+                                        || clip_ids_and_starts.iter().any(|(id, _)| *id == other.id)
+                                    {
+                                        continue;
+                                    }
+                                    let other_end = other.start_beat + other.length_beats;
+                                    if new_start < other_end && new_end > other.start_beat {
+                                        allow_move = false;
+                                        break 'outer;
+                                    }
+                                }
                             }
                         }
-                        app.push_undo();
+
+                        if allow_move {
+                            for (clip_id, original_start) in clip_ids_and_starts.iter().copied() {
+                                let new_start = (original_start + delta).max(0.0);
+                                let is_midi = state
+                                    .clips_by_id
+                                    .get(&clip_id)
+                                    .map(|r| r.is_midi)
+                                    .unwrap_or(false);
+
+                                if is_midi {
+                                    let _ = app
+                                        .command_tx
+                                        .send(AudioCommand::MoveMidiClip { clip_id, new_start });
+                                } else {
+                                    let _ = app
+                                        .command_tx
+                                        .send(AudioCommand::MoveAudioClip { clip_id, new_start });
+                                }
+                            }
+                        } else {
+                            // Invalid move, show a warning
+                            app.dialogs.show_message(
+                                "Cannot move clip here: it would overlap with another clip.",
+                            );
+                        }
                     }
 
                     TimelineInteraction::ResizeClipLeft {

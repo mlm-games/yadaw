@@ -12,7 +12,7 @@ use crate::model::{AudioClip, MidiNote, Track};
 use crate::paths::config_path;
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project::{AppState, AppStateSnapshot};
-use crate::project_manager::ProjectManager;
+use crate::project_manager::{self, ProjectManager};
 
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
@@ -87,6 +87,9 @@ pub struct YadawApp {
     pub(crate) last_real_metrics_at: Option<Instant>,
 
     pub is_recording_ui: bool,
+
+    last_autosave: Instant,
+    autosave_interval: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -145,12 +148,16 @@ impl YadawApp {
             .map(|p| (p.uri.clone(), p))
             .collect();
 
-        let mut input_mgr = InputManager::new();
+        let mut input_manager = InputManager::new();
 
         // Load custom shortcuts if they exist
         if let Some(shortcuts_path) = config_dir().map(|d| d.join("shortcuts.json")) {
-            let _ = input_mgr.load_shortcuts(&shortcuts_path);
+            let _ = input_manager.load_shortcuts(&shortcuts_path);
         }
+
+        let mut project_manager = ProjectManager::new();
+
+        project_manager.set_auto_save(config.behavior.auto_save);
 
         Self {
             transport_ui: super::transport::TransportUI::new(transport),
@@ -166,7 +173,7 @@ impl YadawApp {
             audio_state,
             command_tx,
             ui_rx,
-            config,
+            config: config.clone(),
             available_plugins: available_plugins_map,
 
             selected_track: initial_track_id,
@@ -187,7 +194,7 @@ impl YadawApp {
             show_performance: false,
             performance_monitor: PerformanceMonitor::new(),
             track_manager: TrackManager::new(),
-            project_manager: ProjectManager::new(),
+            project_manager,
 
             touch_state: TouchState {
                 last_touch_pos: None,
@@ -196,9 +203,14 @@ impl YadawApp {
                 tap_times: Vec::new(),
             },
 
-            input_manager: input_mgr,
+            input_manager,
             last_real_metrics_at: None,
             is_recording_ui: false,
+
+            last_autosave: Instant::now(),
+            autosave_interval: Duration::from_secs(
+                config.behavior.auto_save_interval_minutes as u64 * 60,
+            ),
         }
     }
 
@@ -1521,6 +1533,22 @@ impl eframe::App for YadawApp {
 
         // Draw floating windows
         self.show_floating_windows(ctx);
+
+        // Request repaint if playing
+        if self.audio_state.playing.load(Ordering::Relaxed) {
+            ctx.request_repaint();
+        }
+
+        if self.project_manager.get_current_project().is_some()
+            && self.last_autosave.elapsed() > self.autosave_interval
+        {
+            let state_guard = self.state.lock().unwrap();
+            if let Err(e) = self.project_manager.auto_save(&state_guard) {
+                log::error!("Auto-save failed: {}", e);
+                // Non-intrusive feedback, could be a small status bar icon
+            }
+            self.last_autosave = Instant::now();
+        }
 
         // Request repaint if playing
         if self.audio_state.playing.load(Ordering::Relaxed) {

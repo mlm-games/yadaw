@@ -24,6 +24,7 @@ use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -1536,7 +1537,25 @@ fn process_track_plugins(
 
         let t0 = Instant::now();
         if let Some(mut inst) = PLUGIN_STORE.get_mut(&handle) {
-            let _ = inst.process(&ctx, &inputs, &mut outputs, events_slice);
+            // panic catcher
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = inst.process(&ctx, &inputs, &mut outputs, events_slice);
+            }));
+
+            if let Err(e) = result {
+                log::error!(
+                    "Plugin '{}' (URI: {}) panicked during processing. Bypassing automatically.",
+                    ppu.uri, // Using URI as name might not be available here
+                    ppu.uri
+                );
+
+                ppu.bypass = true;
+
+                // let _ = self.updates.try_send(UIUpdate::Error(format!(
+                //     "Plugin {} crashed and has been disabled. Please save your work and restart.",
+                //     ppu.uri
+                // ))); // Hack passing self
+            }
         }
         *plugin_time_ms_accum += t0.elapsed().as_secs_f32() * 1000.0;
 

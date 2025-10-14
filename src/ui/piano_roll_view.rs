@@ -194,8 +194,6 @@ impl PianoRollView {
         let pointer_down = ui.input(|i| i.pointer.any_down());
         if pointer_down && !self.drag_in_progress {
             self.drag_in_progress = true;
-            app.push_undo();
-            self.last_undo_snapshot = Some(std::time::Instant::now());
         }
         if ui.input(|i| i.pointer.any_released()) {
             self.drag_in_progress = false;
@@ -232,6 +230,8 @@ impl PianoRollView {
             }
 
             if !mutation_actions.is_empty() {
+                app.push_undo();
+
                 let mut state = app.state.lock().unwrap();
 
                 // Pre-generate any new IDs needed
