@@ -2,7 +2,8 @@ name: CI
 on:
   pull_request:
   push:
-    branches: "some-rando-branch" # '**' To change when ready for error barrage
+    branches: '**'
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -23,6 +24,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
+      
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all --check
@@ -40,6 +48,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      
       - uses: Swatinem/rust-cache@v2
       - name: Build docs
         env: { RUSTDOCFLAGS: "-D rustdoc::all" }
@@ -53,6 +67,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
+          
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-features
 
@@ -64,6 +84,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-hack }
+        
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      
       - uses: Swatinem/rust-cache@v2
       - run: cargo generate-lockfile -Z minimal-versions || true
       - run: cargo hack build --workspace --all-features --ignore-private --no-dev-deps

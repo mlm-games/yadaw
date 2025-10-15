@@ -31,6 +31,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux dependencies (for audio & UI)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Build (release)
@@ -41,7 +47,6 @@ jobs:
         shell: bash
         run: |
           echo "target=$(rustc -vV | sed -n 's/^host: //p')" >> "$GITHUB_OUTPUT"
-
       - name: Package (tar.gz) [Linux/macOS]
         if: runner.os != 'Windows'
         shell: bash
@@ -56,7 +61,6 @@ jobs:
           cp "target/release/${BIN_NAME}" "$OUTDIR/"
           for f in README* LICENSE* CHANGELOG*; do [ -e "$f" ] && cp "$f" "$OUTDIR/" || true; done
           tar -C "dist" -czf "${OUTDIR}.tar.gz" "$(basename "$OUTDIR")"
-
       - name: Package (zip) [Windows]
         if: runner.os == 'Windows'
         shell: pwsh
@@ -64,7 +68,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           $ErrorActionPreference = "Stop"
-          $ver = $env:TAG.Substring(1)  # strip leading 'v'
+          $ver = $env:TAG.Substring(1)
           $host = & rustc -vV | Select-String '^host:' | ForEach-Object { $_.ToString().Split()[1] }
           $out = "dist/$($env:BIN_NAME)-$ver-$host"
           New-Item -ItemType Directory -Path $out | Out-Null
@@ -73,7 +77,6 @@ jobs:
             Get-ChildItem $f -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName $out\ }
           }
           Compress-Archive -Path "$out\*" -DestinationPath "$out.zip"
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -81,7 +84,6 @@ jobs:
           path: |
             dist/**/*.tar.gz
             dist/**/*.zip
-
   release:
     name: Create GitHub Release
     needs: build
@@ -95,9 +97,8 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
-          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -print0 | xargs -0 -n1 shasum -a 256 > SHA256SUMS.txt
+          find . -type f KATEX_INLINE_OPEN -name "*.tar.gz" -o -name "*.zip" KATEX_INLINE_CLOSE -print0 | xargs -0 -n1 shasum -a 256 > SHA256SUMS.txt
           cat SHA256SUMS.txt
-
       - name: Create/Update Release
         uses: softprops/action-gh-release@v2
         with:
