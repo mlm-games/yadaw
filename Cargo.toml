@@ -43,7 +43,7 @@ dashmap = "6.1"
 parking_lot = "0.12"
 crossbeam = "0.8"
 rand = "0.9.2"
-midir = "0.11"
+midir = "0.11.1"
 lru = "0.16.0"
 rayon = "1.11.0"
 num_cpus = "1.17.0"
@@ -104,7 +104,7 @@ label = "YADAW"
 # uses-permission = ["android.permission.RECORD_AUDIO"] # havent added mic support yet
 
 [package.metadata.android.sdk]
-min_sdk_version = 26
+min_sdk_version = 29
 target_sdk_version = 36
 # max_sdk_version = 29
 
@@ -120,4 +120,4 @@ livi = { git = "https://github.com/mlm-games/livi-rs", branch = "main" }
 lilv = { git = "https://github.com/mlm-games/lilv-rs", branch = "main" }
 lv2_raw = { git = "https://github.com/mlm-games/lv2_raw" }
 lilv-sys = { git = "https://github.com/mlm-games/lilv-sys-rs", branch = "main" }
-midir = { git = "https://github.com/mlm-games/midir", branch = "pr" }
+midir = { git = "https://github.com/mlm-games/midir", rev = "28e276a3731f2480bddac0b7813a4bab573037f8" }

@@ -1,3 +1,4 @@
+use crate::midi_input::MidiInputHandler;
 use crate::{
     audio,
     audio_state::{AudioState, RealtimeCommand},
@@ -16,8 +17,6 @@ use android_activity::AndroidApp;
 #[cfg(not(target_os = "android"))]
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Logging
-
-    use crate::midi_input::MidiInputHandler;
 
     #[cfg(not(target_os = "android"))]
     env_logger::init();
@@ -201,6 +200,8 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
 
     // UI
     let native_options = eframe::NativeOptions {
+        android_app: Some(app), // Pass the Android app here!
+
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
             .with_min_inner_size([800.0, 600.0]),
