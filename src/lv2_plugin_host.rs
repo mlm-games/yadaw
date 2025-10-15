@@ -151,7 +151,7 @@ pub struct LV2PluginInstance {
     features: Arc<Features>,
     port_counts: PortCounts,
     params: Arc<DashMap<String, f32>>,
-    pub(crate) midi_sequence: Option<LV2AtomSequence>,
+    pub midi_sequence: Option<LV2AtomSequence>,
     control_port_indices: HashMap<String, livi::PortIndex>,
 
     // Pre-allocated for RT safety

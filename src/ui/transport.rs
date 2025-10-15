@@ -17,10 +17,13 @@ pub struct TransportUI {
 impl TransportUI {
     pub fn new(transport: Transport) -> Self {
         let bpm = transport.get_bpm();
+        let loop_start = transport.audio_state.loop_start.load();
+        let loop_end = transport.audio_state.loop_end.load();
+
         Self {
             transport: Some(transport),
-            loop_start_input: "0".to_string(),
-            loop_end_input: "16".to_string(),
+            loop_start_input: format!("{:.1}", loop_start),
+            loop_end_input: format!("{:.1}", loop_end),
             bpm_input: format!("{:.1}", bpm),
             position_display: "1.1.1".to_string(),
         }

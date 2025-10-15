@@ -8,8 +8,8 @@ use crate::project::AppState;
 use crate::ui::piano_roll::{PianoRoll, PianoRollAction};
 
 pub struct PianoRollView {
-    pub(crate) piano_roll: PianoRoll,
-    pub(crate) selected_clip: Option<u64>,
+    pub piano_roll: PianoRoll,
+    pub selected_clip: Option<u64>,
 
     // View settings
     show_velocity_lane: bool,

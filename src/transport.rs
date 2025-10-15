@@ -20,7 +20,7 @@ pub enum LoopMode {
 }
 
 pub struct Transport {
-    audio_state: Arc<AudioState>,
+    pub audio_state: Arc<AudioState>,
     command_tx: Sender<AudioCommand>,
     pub metronome_enabled: bool,
     pub count_in_enabled: bool,

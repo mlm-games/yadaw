@@ -61,7 +61,7 @@ impl PluginCategorizationInfo for UnifiedPluginInfo {
 }
 
 pub struct PluginScanner {
-    pub(crate) plugins: Vec<PluginInfo>,
+    pub plugins: Vec<PluginInfo>,
 }
 
 impl Default for PluginScanner {

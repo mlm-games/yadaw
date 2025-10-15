@@ -85,7 +85,7 @@ pub struct YadawApp {
 
     pub(super) note_clipboard: Option<Vec<MidiNote>>,
     pub(super) active_edit_target: ActiveEditTarget,
-    pub(crate) last_real_metrics_at: Option<Instant>,
+    pub last_real_metrics_at: Option<Instant>,
 
     pub is_recording_ui: bool,
 

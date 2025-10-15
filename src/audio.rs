@@ -45,7 +45,7 @@ fn generate_plugin_handle() -> PluginInstanceHandle {
     (id, r#gen)
 }
 
-pub(crate) struct AudioEngine {
+pub struct AudioEngine {
     graph_snapshot: AudioGraphSnapshot,
     track_processors: HashMap<u64, TrackProcessor>,
     audio_state: Arc<AudioState>,
