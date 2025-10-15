@@ -35,7 +35,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev pkg-config lilv-dev libsuil-dev libsratom-dev
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config liblilv-dev libsuil-dev libsratom-dev
 
       - uses: Swatinem/rust-cache@v2
 
