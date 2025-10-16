@@ -183,8 +183,7 @@ jobs:
         shell: bash
         run: cargo install cargo-apk --locked
 
-      - name: Prepare release keystore (if present)
-        if: ${{ secrets.ANDROID_KEYSTORE_JKS_B64 != '' || secrets.ANDROID_KEYSTORE_ASC != '' }}
+      - name: Prepare release keystore (optional)
         shell: bash
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_JKS_B64 }}
@@ -194,26 +193,29 @@ jobs:
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
+          if [[ -z "${KS_B64:-}" && -z "${KS_ASC:-}" ]]; then
+            echo "No keystore secret provided; building unsigned APK."
+            exit 0
+          fi
+
           if [[ -n "${KS_B64:-}" ]]; then
             printf '%s' "$KS_B64" | base64 -d > release.keystore
-          elif [[ -n "${KS_ASC:-}" && "${KS_ASC}" == *"BEGIN PGP MESSAGE"* ]]; then
+          else
             if [[ -z "${KS_PASSPHRASE:-}" ]]; then
               echo "Missing ANDROID_KEYSTORE_PASSPHRASE for ASC" >&2; exit 1
             fi
             printf '%s' "$KS_ASC" > release.keystore.asc
             gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "$KS_PASSPHRASE" \
-              --decrypt release.keystore.asc > release.keystore
+                --passphrase "$KS_PASSPHRASE" \
+                --decrypt release.keystore.asc > release.keystore
             rm -f release.keystore.asc
-          else
-            echo "No keystore secret provided."
-            exit 0
           fi
+
           if [[ -z "${KS_PASS:-}" ]]; then
             echo "ANDROID_KEYSTORE_PASSWORD must be set when providing a keystore" >&2
             exit 1
           fi
-          # If alias specified, keep single alias (optional)
+
           if [[ -n "${KS_ALIAS:-}" ]]; then
             keytool -importkeystore -noprompt \
               -srckeystore  release.keystore     -srcstorepass  "$KS_PASS" -srcalias  "$KS_ALIAS" \
@@ -221,6 +223,7 @@ jobs:
               -deststoretype JKS
             mv release.single.jks release.keystore
           fi
+
           echo "CARGO_APK_RELEASE_KEYSTORE=$PWD/release.keystore" >> "$GITHUB_ENV"
           echo "CARGO_APK_RELEASE_KEYSTORE_PASSWORD=$KS_PASS"      >> "$GITHUB_ENV"
 
