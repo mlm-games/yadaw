@@ -5,6 +5,17 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+        upload_releases:
+          description: "Upload releases (create GitHub Release with APKs)"
+          required: true
+          default: true
+          type: boolean
+        mark_prerelease:
+          description: "Mark as prerelease"
+          required: true
+          default: false
+          type: boolean
 
 permissions:
   contents: write
@@ -18,8 +29,101 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version_name: ${{ steps.bump.outputs.version_name }}
+      version_code: ${{ steps.bump.outputs.version_code }}
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+      release_notes: ${{ steps.notes.outputs.release-notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump Cargo version (patch) and set cargo-apk versionCode
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TOML="Cargo.toml"
+
+          # 1) read current version and bump patch
+          OLD_VERSION=$(grep -m1 '^version\s*=\s*"' "$CARGO_TOML" | sed -E 's/.*"([^"]+)".*/\1/')
+          if [[ -z "$OLD_VERSION" ]]; then
+            echo "Could not detect package.version in Cargo.toml" >&2
+            exit 1
+          fi
+          IFS='.' read -r MAJ MIN PAT <<<"$OLD_VERSION"; : "${MAJ:=0}" "${MIN:=0}" "${PAT:=0}"
+          NEW_VERSION="$MAJ.$MIN.$((PAT+1))"
+          sed -i -E "0,/^version\s*=.*/s//version = \"$NEW_VERSION\"/" "$CARGO_TOML"
+
+          # 2) compute cargo-apk versionCode from NEW_VERSION
+          IFS='.' read -r NMAJ NMIN NPAT <<<"$NEW_VERSION"
+          APK_ID=1
+          VERSION_CODE=$(( (APK_ID<<24) | (NMAJ<<16) | (NMIN<<8) | NPAT ))
+
+          # 3) ensure [package.metadata.android.sdk] exists and set version_code = VERSION_CODE
+          if grep -q '^\[package\.metadata\.android\.sdk\]' "$CARGO_TOML"; then
+            if grep -q '^version_code\s*=' "$CARGO_TOML"; then
+              sed -i -E "0,/^version_code\s*=.*/s//version_code = $VERSION_CODE/" "$CARGO_TOML"
+            else
+              awk -v vc="$VERSION_CODE" '
+                BEGIN{printed=0}
+                {print}
+                /^\[package\.metadata\.android\.sdk\]$/ && printed==0 {print "version_code = " vc; printed=1}
+              ' "$CARGO_TOML" > Cargo.toml.new && mv Cargo.toml.new "$CARGO_TOML"
+            fi
+          else
+            {
+              echo ""
+              echo "[package.metadata.android.sdk]"
+              echo "version_code = $VERSION_CODE"
+            } >> "$CARGO_TOML"
+          fi
+
+          echo "version_name=$NEW_VERSION"     >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE"    >> "$GITHUB_OUTPUT"
+          echo "Bumped version: $OLD_VERSION -> $NEW_VERSION; version_code=$VERSION_CODE"
+
+      - name: Generate Release Notes
+        id: notes
+        uses: mlm-games/release-notes-generator@main
+        with:
+          version: ${{ steps.bump.outputs.version_name }}
+          changelog-path: "CHANGELOG.md"
+          version-file-path: "./fastlane/metadata/android/en-US/changelogs/${{ steps.bump.outputs.version_code }}.txt"
+          version-code: "${{ steps.bump.outputs.version_code }}"
+          format: "- {{subject}}"
+          exclude-patterns: "chore:,ci:,docs:,build:,Bump version,Merge pull request,[skip ci]"
+          auto-commit: "false"
+
+      - name: Update Cargo.lock
+        shell: bash
+        run: |
+          set -e
+          cargo update -w
+          git add Cargo.lock || true
+
+      - name: Commit changes
+        id: commit
+        shell: bash
+        run: |
+          set -e
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add Cargo.toml fastlane/metadata/android/en-US/changelogs || true
+          git commit -m "chore: bump to v${{ steps.bump.outputs.version_name }} (code ${{ steps.bump.outputs.version_code }}) [skip ci]" || true
+          git push
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build and package (desktop)
+    needs: prepare-version
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -264,11 +368,15 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Create/Update Release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_releases == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }} ${{ needs.prepare-version.outputs.version_name }}
           generate_release_notes: true
+          tag_name: v${{ needs.prepare-version.outputs.version_name }}
+          target_commitish: ${{ needs.prepare-version.outputs.commit_sha }}
+          prerelease: ${{ inputs.mark_prerelease }}
+          body: ${{ needs.prepare-version.outputs.release_notes }}
           files: |
             dist/**/*.tar.gz
             dist/**/*.zip
