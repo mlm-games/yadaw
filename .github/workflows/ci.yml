@@ -182,7 +182,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       LILV_TERMUX_LIB: ${{ github.workspace }}/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib
-      PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib/pkgconfig:${{ env.PKG_CONFIG_PATH }}
     steps:
       - uses: actions/checkout@v4
 
