@@ -176,7 +176,7 @@ jobs:
         shell: bash
         run: cargo install cargo-apk --locked
 
-      - name: Prepare release keystore (optional)
+      - name: Prepare release keystore
         shell: bash
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_JKS_B64 }}
