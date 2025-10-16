@@ -334,7 +334,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo apk build --release --target $ANDROID_TARGET --lib
-          OUT_DIR="target/$ANDROID_TARGET/release/apk"
+          OUT_DIR="target/release/apk"
           APK_SRC=$(ls -1t "$OUT_DIR"/*.apk | head -n1)
           VER="${TAG#v}"
           mkdir -p dist
