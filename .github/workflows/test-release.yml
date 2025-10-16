@@ -136,7 +136,9 @@ jobs:
           #   toolchain: stable-x86_64-pc-windows-gnu
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare-version.outputs.commit_sha }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
