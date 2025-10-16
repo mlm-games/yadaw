@@ -14,28 +14,70 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BIN_NAME: yadaw   # TODO: SET WHEN COPYING
+  BIN_NAME: yadaw
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-    name: Build and package
+    name: Build and package (desktop)
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: macos-latest
+            toolchain: stable
+          - os: windows-latest
+            toolchain: stable-x86_64-pc-windows-gnu
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
 
       - name: Install Linux dependencies (for audio & UI)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev pkg-config liblilv-dev libsuil-dev libsratom-dev
+          sudo apt-get install -y \
+            libasound2-dev libudev-dev pkg-config \
+            liblilv-dev libsuil-dev libsratom-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install pkg-config lilv suil sratom
+      - name: Configure pkg-config (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> $GITHUB_ENV
+
+      - name: Set up MSYS2 and install Windows dependencies
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: MINGW64
+          install: >-
+            base-devel
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-lilv
+            mingw-w64-x86_64-sratom
+            mingw-w64-x86_64-sord
+            mingw-w64-x86_64-serd
+            mingw-w64-x86_64-suil
+      - name: Configure pkg-config and PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG=C:\msys64\mingw64\bin\pkg-config.exe"
+          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\mingw64\bin"
 
       - uses: Swatinem/rust-cache@v2
 
@@ -47,6 +89,7 @@ jobs:
         shell: bash
         run: |
           echo "target=$(rustc -vV | sed -n 's/^host: //p')" >> "$GITHUB_OUTPUT"
+
       - name: Package (tar.gz) [Linux/macOS]
         if: runner.os != 'Windows'
         shell: bash
@@ -61,6 +104,7 @@ jobs:
           cp "target/release/${BIN_NAME}" "$OUTDIR/"
           for f in README* LICENSE* CHANGELOG*; do [ -e "$f" ] && cp "$f" "$OUTDIR/" || true; done
           tar -C "dist" -czf "${OUTDIR}.tar.gz" "$(basename "$OUTDIR")"
+
       - name: Package (zip) [Windows]
         if: runner.os == 'Windows'
         shell: pwsh
@@ -71,12 +115,13 @@ jobs:
           $ver = $env:TAG.Substring(1)
           $host = & rustc -vV | Select-String '^host:' | ForEach-Object { $_.ToString().Split()[1] }
           $out = "dist/$($env:BIN_NAME)-$ver-$host"
-          New-Item -ItemType Directory -Path $out | Out-Null
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
           Copy-Item "target\release\$($env:BIN_NAME).exe" "$out\"
           foreach ($f in @("README*", "LICENSE*", "CHANGELOG*")) {
             Get-ChildItem $f -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName $out\ }
           }
           Compress-Archive -Path "$out\*" -DestinationPath "$out.zip"
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -84,9 +129,126 @@ jobs:
           path: |
             dist/**/*.tar.gz
             dist/**/*.zip
+
+  build-android:
+    name: Build Android APK (aarch64)
+    runs-on: ubuntu-latest
+    env:
+      APP_NAME: "YADAW"
+      APP_SLUG: "yadaw"
+      ANDROID_API: "35"
+      ANDROID_BUILD_TOOLS: "35.0.0"
+      ANDROID_NDK_VERSION: "27.0.12077973"
+      RUST_TOOLCHAIN: "1.90.0"
+      ANDROID_TARGET: "aarch64-linux-android"
+      LILV_TERMUX_LIB: ${{ github.workspace }}/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Termux libraries presence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$LILV_TERMUX_LIB" || { echo "Missing Termux libs at $LILV_TERMUX_LIB"; exit 1; }
+          if [ ! -f "$LILV_TERMUX_LIB/pkgconfig/lilv-0.pc" ]; then
+            echo "Missing $LILV_TERMUX_LIB/pkgconfig/lilv-0.pc (ensure termux libs are committed or provided)"; exit 1;
+          fi
+
+      - name: Ensure [lib] cdylib target exists
+        shell: bash
+        run: |
+          if ! grep -q '^\[lib\]' Cargo.toml || ! grep -q 'crate-type\s*=\s*\["cdylib"\]' Cargo.toml; then
+            echo "Cargo.toml is missing [lib] crate-type = [\"cdylib\"]."; exit 1;
+          fi
+
+      - name: Set up Android SDK/NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platforms and NDK
+        shell: bash
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Install Rust (host) + Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ env.ANDROID_TARGET }}
+
+      - name: Install cargo-apk
+        shell: bash
+        run: cargo install cargo-apk --locked
+
+      - name: Prepare release keystore (if present)
+        if: ${{ secrets.ANDROID_KEYSTORE_JKS_B64 != '' || secrets.ANDROID_KEYSTORE_ASC != '' }}
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_JKS_B64 }}
+          KS_ASC: ${{ secrets.ANDROID_KEYSTORE_ASC }}
+          KS_PASSPHRASE: ${{ secrets.ANDROID_KEYSTORE_PASSPHRASE }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${KS_B64:-}" ]]; then
+            printf '%s' "$KS_B64" | base64 -d > release.keystore
+          elif [[ -n "${KS_ASC:-}" && "${KS_ASC}" == *"BEGIN PGP MESSAGE"* ]]; then
+            if [[ -z "${KS_PASSPHRASE:-}" ]]; then
+              echo "Missing ANDROID_KEYSTORE_PASSPHRASE for ASC" >&2; exit 1
+            fi
+            printf '%s' "$KS_ASC" > release.keystore.asc
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "$KS_PASSPHRASE" \
+              --decrypt release.keystore.asc > release.keystore
+            rm -f release.keystore.asc
+          else
+            echo "No keystore secret provided."
+            exit 0
+          fi
+          if [[ -z "${KS_PASS:-}" ]]; then
+            echo "ANDROID_KEYSTORE_PASSWORD must be set when providing a keystore" >&2
+            exit 1
+          fi
+          # If alias specified, keep single alias (optional)
+          if [[ -n "${KS_ALIAS:-}" ]]; then
+            keytool -importkeystore -noprompt \
+              -srckeystore  release.keystore     -srcstorepass  "$KS_PASS" -srcalias  "$KS_ALIAS" \
+              -destkeystore release.single.jks   -deststorepass "$KS_PASS" -destalias "$KS_ALIAS" -destkeypass "$KS_PASS" \
+              -deststoretype JKS
+            mv release.single.jks release.keystore
+          fi
+          echo "CARGO_APK_RELEASE_KEYSTORE=$PWD/release.keystore" >> "$GITHUB_ENV"
+          echo "CARGO_APK_RELEASE_KEYSTORE_PASSWORD=$KS_PASS"      >> "$GITHUB_ENV"
+
+      - name: Build Android APK (release, aarch64)
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cargo apk build --release --target $ANDROID_TARGET --lib
+          OUT_DIR="target/$ANDROID_TARGET/release/apk"
+          APK_SRC=$(ls -1t "$OUT_DIR"/*.apk | head -n1)
+          VER="${TAG#v}"
+          mkdir -p dist
+          cp "$APK_SRC" "dist/${{ env.APP_SLUG }}-${VER}-arm64-v8a.apk"
+          ls -la dist
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-android
+          path: dist/*.apk
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs:
+      - build
+      - build-android
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
@@ -95,10 +257,16 @@ jobs:
           path: dist
 
       - name: Generate checksums
+        shell: bash
         run: |
+          set -euo pipefail
           cd dist
-          find . -type f KATEX_INLINE_OPEN -name "*.tar.gz" -o -name "*.zip" KATEX_INLINE_CLOSE -print0 | xargs -0 -n1 shasum -a 256 > SHA256SUMS.txt
+          # Flatten any nested artifact dirs
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.apk" \) -print0 | xargs -0 -I{} sh -c 'sha256sum "{}"'
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.apk" \) -print0 | xargs -0 sha256sum > SHA256SUMS.txt
+          echo "==== SHA256SUMS.txt ===="
           cat SHA256SUMS.txt
+
       - name: Create/Update Release
         uses: softprops/action-gh-release@v2
         with:
@@ -108,4 +276,5 @@ jobs:
           files: |
             dist/**/*.tar.gz
             dist/**/*.zip
+            dist/**/*.apk
             dist/SHA256SUMS.txt
