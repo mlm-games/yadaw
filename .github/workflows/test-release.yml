@@ -236,6 +236,7 @@ jobs:
 
   build-android:
     name: Build Android APK (aarch64)
+    needs: prepare-version
     runs-on: ubuntu-latest
     env:
       APP_NAME: "YADAW"
