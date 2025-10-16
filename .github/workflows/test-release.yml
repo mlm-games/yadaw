@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
         upload_releases:
-          description: "Upload releases (create GitHub Release with APKs)"
+          description: "Upload releases"
           required: true
           default: true
           type: boolean
@@ -374,7 +374,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_releases == true }}
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ github.ref_name }} ${{ needs.prepare-version.outputs.version_name }}
+          name: ${{ env.APP_NAME }} ${{ needs.prepare-version.outputs.version_name }}
           generate_release_notes: true
           tag_name: v${{ needs.prepare-version.outputs.version_name }}
           target_commitish: ${{ needs.prepare-version.outputs.commit_sha }}
