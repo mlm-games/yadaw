@@ -2,7 +2,8 @@ name: CI
 on:
   pull_request:
   push:
-    branches: '**'
+    branches: "rando-branch" #'**' not yet, later... :(
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,28 +19,79 @@ jobs:
     continue-on-error: true
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: macos-latest
+            toolchain: stable
+          # - os: windows-latest
+          #   toolchain: stable-x86_64-pc-windows-gnu
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ matrix.toolchain }}
           components: clippy,rustfmt
-      
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev pkg-config liblilv-dev libsuil-dev libsratom-dev
-      
+          sudo apt-get install -y \
+            libasound2-dev libudev-dev pkg-config \
+            liblilv-dev libsuil-dev libsratom-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install pkg-config lilv suil sratom
+      - name: Configure pkg-config (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Cover both arm64 (/opt/homebrew) and intel (/usr/local)
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> $GITHUB_ENV
+
+      # - name: Set up MSYS2 and install Windows dependencies
+      #   if: runner.os == 'Windows'
+      #   uses: msys2/setup-msys2@v2
+      #   with:
+      #     update: true
+      #     msystem: MINGW64
+      #     install: >-
+      #       base-devel
+      #       mingw-w64-x86_64-pkgconf
+      #       mingw-w64-x86_64-lilv
+      #       mingw-w64-x86_64-sratom
+      #       mingw-w64-x86_64-sord
+      #       mingw-w64-x86_64-serd
+      #       mingw-w64-x86_64-suil
+      # - name: Configure pkg-config (Windows)
+      #   if: runner.os == 'Windows'
+      #   shell: pwsh
+      #   run: |
+      #     # Ensure pkg-config points to Mingw64 and sees the .pc files
+      #     Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG=C:\msys64\mingw64\bin\pkg-config.exe"
+      #     Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig"
+      #     # Ensure Mingw64 DLLs and tools are on PATH for the build
+      #     Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\mingw64\bin"
+
       - uses: Swatinem/rust-cache@v2
+
       - name: Format
         run: cargo fmt --all --check
+
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with: { tool: nextest }
+
       - name: Test (nextest)
         run: cargo nextest run --workspace --all-features
 
@@ -50,12 +102,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev pkg-config liblilv-dev libsuil-dev libsratom-dev
-      
+          sudo apt-get install -y \
+            libasound2-dev libudev-dev pkg-config \
+            liblilv-dev libsuil-dev libsratom-dev
+
       - uses: Swatinem/rust-cache@v2
       - name: Build docs
         env: { RUSTDOCFLAGS: "-D rustdoc::all" }
@@ -67,15 +121,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Replace with your actual MSRV, and keep this job failing if it breaks
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
-          
+          toolchain: stable # Get it from the cargo.toml file
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev pkg-config liblilv-dev libsuil-dev libsratom-dev
-      
+          sudo apt-get install -y \
+            libasound2-dev libudev-dev pkg-config \
+            liblilv-dev libsuil-dev libsratom-dev
+
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-features
 
@@ -87,12 +145,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-hack }
-        
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev pkg-config liblilv-dev libsuil-dev libsratom-dev
-      
+          sudo apt-get install -y \
+            libasound2-dev libudev-dev pkg-config \
+            liblilv-dev libsuil-dev libsratom-dev
+
       - uses: Swatinem/rust-cache@v2
       - run: cargo generate-lockfile -Z minimal-versions || true
       - run: cargo hack build --workspace --all-features --ignore-private --no-dev-deps
@@ -116,3 +176,62 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: obi1kenobi/cargo-semver-checks-action@v2
+
+  android-apk:
+    name: Android (aarch64) APK build
+    runs-on: ubuntu-latest
+    env:
+      LILV_TERMUX_LIB: ${{ github.workspace }}/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib
+      PKG_CONFIG_PATH: ${{ github.workspace }}/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib/pkgconfig:${{ env.PKG_CONFIG_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Termux libraries presence
+        run: |
+          test -d "$LILV_TERMUX_LIB" || { echo "Missing Termux libs at $LILV_TERMUX_LIB"; exit 1; }
+          ls -l "$LILV_TERMUX_LIB" || true
+          # Check for lilv-0.pc (helps fail early with a good error)
+          if [ ! -f "$LILV_TERMUX_LIB/pkgconfig/lilv-0.pc" ]; then
+            echo "Missing $LILV_TERMUX_LIB/pkgconfig/lilv-0.pc (ensure termux libs are committed or downloaded)"; exit 1;
+          fi
+
+      - name: Set up Android SDK/NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platforms and NDK
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.0.12077973"
+
+      - name: Install Rust (host) + Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
+          targets: aarch64-linux-android
+
+      - name: Install cargo-apk
+        run: cargo install cargo-apk --locked
+
+      - name: Build Android APK (aarch64)
+        env:
+          # reproducible 
+          SOURCE_DATE_EPOCH: ${{ github.event.repository.pushed_at || 0 }}
+        run: |
+          cargo apk build --target aarch64-linux-android --lib
+          # Collect artifact
+          OUT_DIR="target/aarch64-linux-android/debug/apk"
+          if [ -d "target/aarch64-linux-android/release/apk" ]; then
+            OUT_DIR="target/aarch64-linux-android/release/apk"
+          fi
+          ls -l "$OUT_DIR"
+          mkdir -p artifacts
+          cp "$(ls -1t "$OUT_DIR"/*.apk | head -n1)" "artifacts/app-aarch64.apk"
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-aarch64-apk
+          path: artifacts/*.apk
