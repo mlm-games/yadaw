@@ -1,6 +1,6 @@
 [package]
 name = "yadaw"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [[bin]]
@@ -101,9 +101,11 @@ winit = "0.30.12"
 [package.metadata.android]
 package = "com.yadaw.app"
 label = "YADAW"
-# uses-permission = ["android.permission.RECORD_AUDIO"] # havent added mic support yet
+uses-permission = ["android.permission.RECORD_AUDIO"]
+build_targets = ["aarch64-linux-android"]
 
 [package.metadata.android.sdk]
+version_code = 16777491
 min_sdk_version = 29
 target_sdk_version = 36
 # max_sdk_version = 29
@@ -114,7 +116,6 @@ target_sdk_version = 36
 # keystore_password = "amidumb?"
 
 [patch.crates-io]
-# android-activity = { version = "0.6.0" }
 livi = { git = "https://github.com/mlm-games/livi-rs", branch = "main" }
 # lilv = { path = "../lilv-rs" }
 lilv = { git = "https://github.com/mlm-games/lilv-rs", branch = "main" }
