@@ -1,0 +1,1 @@
+- Prefix version name with 'v' for tagging releases, add prepare-version dep to gh release step
