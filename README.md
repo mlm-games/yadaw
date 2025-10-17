@@ -15,6 +15,6 @@ Current intention is to not add too much code for outdated parts, and to keep it
 
 #### Known Issues
 
-- "No VST support (LV2 and CLAP only)."
-- "No MP3/FLAC export (WAV only)."
+- No VST support (LV2 and CLAP only).
+- No MP3/FLAC export (WAV only).
 - No MIDI hardware support (will eventually add, mostly when midir supports android)
