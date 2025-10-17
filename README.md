@@ -13,7 +13,7 @@ Current intention is to not add too much code for outdated parts, and to keep it
 - Hint: Saving and loading works on Android (is a hack for now, will implement proper perms later; currently only works for certain internal folders)
 
 
-#### Known Issues (would not be done in the near future)
+#### Missing Essentials? (would not be done in the near future)
 
-- No VST support (LV2 and CLAP only).
+- No VST support (LV2 and CLAP (no params yet due to a bug) only).
 - No MP3/FLAC export (WAV only).
