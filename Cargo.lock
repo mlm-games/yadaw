@@ -4938,7 +4938,7 @@ checksum = "6fd8403733700263c6eb89f192880191f1b83e332f7a20371ddcf421c4a337c7"
 
 [[package]]
 name = "yadaw"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "android-activity",
  "android_logger",
