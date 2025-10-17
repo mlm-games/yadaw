@@ -120,24 +120,6 @@ jobs:
           git push
           echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Compute Tag
-        id: compute_tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          LATEST_TAG=""
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
-            LATEST_TAG="${{ github.ref_name }}"
-            echo "Using pushed tag: $LATEST_TAG"
-          else
-            LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
-            if [[ -z "$LATEST_TAG" ]]; then
-              TAG="v0.1.0"
-              echo "No previous semver tag found. Starting with $LATEST_TAG."
-            fi
-          fi
-          echo "tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-
   build:
     name: Build and package (desktop)
     needs: prepare-version
@@ -220,7 +202,7 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ steps.triple.outputs.target }}
-          TAG: ${{ needs.prepare-version.outputs.tag }}
+          TAG: ${{ needs.prepare-version.outputs.version_name }}
         run: |
           set -euxo pipefail
           VER="${TAG#v}"
@@ -234,7 +216,7 @@ jobs:
       #   if: runner.os == 'Windows'
       #   shell: pwsh
       #   env:
-      #     TAG: ${{ needs.prepare-version.outputs.tag }}
+      #     TAG: ${{ needs.prepare-version.outputs.version_name }}
       #   run: |
       #     $ErrorActionPreference = "Stop"
       #     $ver = $env:TAG.Substring(1)
@@ -345,7 +327,7 @@ jobs:
       - name: Build Android APK (release, aarch64)
         shell: bash
         env:
-          TAG: ${{ needs.prepare-version.outputs.tag }} 
+          TAG: ${{ needs.prepare-version.outputs.version_name }} 
         run: |
           set -euo pipefail
           cargo apk build --release --target $ANDROID_TARGET --lib
@@ -389,8 +371,8 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_releases == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.prepare-version.outputs.tag }}
-          name: ${{ needs.prepare-version.outputs.tag }}
+          tag_name: ${{ needs.prepare-version.outputs.version_name }}
+          name: ${{ needs.prepare-version.outputs.version_name }}
           generate_release_notes: true
           target_commitish: ${{ needs.prepare-version.outputs.commit_sha }}
           prerelease: ${{ inputs.mark_prerelease }}
