@@ -119,6 +119,14 @@ jobs:
           git commit -m "chore: bump to v${{ steps.bump.outputs.version_name }} (code ${{ steps.bump.outputs.version_code }}) [skip ci]" || true
           git push
           echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      
+      - name: Create and push tag
+        shell: bash
+        run: |
+          set -e
+          TAG="${{ steps.bump.outputs.version_name }}"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
 
   build:
     name: Build and package (desktop)
@@ -368,7 +376,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Create/Update Release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_releases == true }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload_releases == true) }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare-version.outputs.version_name }}
