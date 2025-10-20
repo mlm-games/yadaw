@@ -30,6 +30,9 @@ pub struct TimelineView {
 
     last_view_width: f32,
     pending_clip_undo: bool,
+
+    automation_hit_regions: Vec<egui::Rect>,
+    last_track_blocks: Vec<(u64, egui::Rect)>,
 }
 
 #[derive(Clone)]
@@ -88,6 +91,8 @@ impl TimelineView {
             max_track_height: 200.0,
             last_view_width: 800.0,
             pending_clip_undo: false,
+            automation_hit_regions: Vec::new(),
+            last_track_blocks: Vec::new(),
         }
     }
 
@@ -157,71 +162,133 @@ impl TimelineView {
     }
 
     fn draw_timeline(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
+        self.automation_hit_regions.clear();
+        self.last_track_blocks.clear();
+
         if self.pending_clip_undo {
             self.pending_clip_undo = false;
         }
 
+        let track_data: Vec<(u64, Track)> = {
+            let state = app.state.lock().unwrap();
+            state
+                .track_order
+                .iter()
+                .filter_map(|&tid| state.tracks.get(&tid).cloned().map(|t| (tid, t)))
+                .collect()
+        };
+
+        // Compute end of project in beats (for horizontal size)
         let project_end_beats = self
             .compute_project_end_beats(app)
             .max(DEFAULT_MIN_PROJECT_BEATS);
         let margin_beats = 8.0;
         let content_beats = project_end_beats + margin_beats;
 
+        // Visible width and full content width
         let view_w = ui.available_width();
         self.last_view_width = view_w;
         let total_width = view_w.max(content_beats as f32 * self.zoom_x);
 
-        let num_tracks = app.state.lock().unwrap().track_order.len();
-        let total_height = (num_tracks as f32 * self.track_height).max(1.0);
+        // Compute dynamic per-track height: base track + visible lanes (if show_automation)
+        let track_heights: Vec<f32> = track_data
+            .iter()
+            .map(|(_, t)| {
+                if self.show_automation {
+                    let extra: f32 = t
+                        .automation_lanes
+                        .iter()
+                        .filter(|l| l.visible)
+                        .map(|l| l.height.max(20.0))
+                        .sum();
+                    self.track_height + extra
+                } else {
+                    self.track_height
+                }
+            })
+            .collect();
 
+        let total_height: f32 = track_heights.iter().copied().sum::<f32>().max(1.0);
+
+        // Allocate the full drawing surface now that we know height
         let (response, painter) = ui.allocate_painter(
             egui::vec2(total_width, total_height),
             egui::Sense::click_and_drag(),
         );
 
+        // Let the clip editor own the “active edit target” when hovered
         if response.hovered() || response.is_pointer_button_down_on() {
             app.active_edit_target = super::app::ActiveEditTarget::Clips;
         }
 
+        // Draw the grid and horizontal ruler
         let rect = response.rect;
-
         self.draw_grid(&painter, rect, app.state.lock().unwrap().bpm);
 
-        // Draw tracks using IDs
-        {
-            let state = app.state.lock().unwrap();
-            let track_data: Vec<(u64, Track)> = state
-                .track_order
-                .iter()
-                .filter_map(|&tid| state.tracks.get(&tid).map(|t| (tid, t.clone())))
-                .collect();
-            drop(state);
+        // Place each track block at cumulative Y positions
+        let mut y_cursor = rect.top();
 
-            for (idx, (track_id, track)) in track_data.iter().enumerate() {
-                let track_rect = egui::Rect::from_min_size(
-                    rect.min + egui::vec2(0.0, idx as f32 * self.track_height),
-                    egui::vec2(rect.width(), self.track_height),
-                );
-                self.draw_track(&painter, ui, track_rect, &track, *track_id, app);
+        for ((track_id, track), block_h) in track_data.iter().zip(track_heights.iter()) {
+            // The main clip area is the top self.track_height of the block
+            let clip_area = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), y_cursor),
+                egui::vec2(rect.width(), self.track_height),
+            );
+
+            // Track background and name
+            self.draw_track(&painter, ui, clip_area, &track, *track_id, app);
+
+            let sep_color = ui.visuals().widgets.noninteractive.fg_stroke.color;
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left(), y_cursor),
+                    egui::pos2(rect.right(), y_cursor),
+                ],
+                egui::Stroke::new(1.0, sep_color),
+            );
+
+            let block_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left(), y_cursor),
+                egui::pos2(rect.right(), y_cursor + *block_h),
+            );
+
+            // Cache it for hit mapping (Ctrl+click etc.)
+            self.last_track_blocks.push((*track_id, block_rect));
+
+            if self.show_automation {
+                let mut track_clone = track.clone();
+                self.draw_automation_lanes(ui, block_rect, &mut track_clone, *track_id, app);
             }
+
+            // Draw separator at the BOTTOM of the block (not the top)
+            let sep_y = y_cursor + *block_h;
+            let sep_color = ui.visuals().widgets.noninteractive.fg_stroke.color;
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left(), sep_y),
+                    egui::pos2(rect.right(), sep_y),
+                ],
+                egui::Stroke::new(1.0, sep_color),
+            );
+
+            y_cursor += *block_h;
         }
 
+        // Draw loop region overlay
         self.draw_loop_region(&painter, rect, app);
 
-        // Playhead
-        {
-            let position = app.audio_state.get_position();
-            let sample_rate = app.audio_state.sample_rate.load();
-            let bpm = app.audio_state.bpm.load();
-            if sample_rate > 0.0 && bpm > 0.0 {
-                let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
-                let x = rect.left() + (current_beat as f32 * self.zoom_x - self.scroll_x);
-                if x >= rect.left() && x <= rect.right() {
-                    ui.ctx().debug_painter().line_segment(
-                        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                        egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
-                    );
-                }
+        // Draw playhead
+        let position = app.audio_state.get_position();
+        let sample_rate = app.audio_state.sample_rate.load();
+        let bpm = app.audio_state.bpm.load();
+        if sample_rate > 0.0 && bpm > 0.0 {
+            let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
+            let x = rect.left() + (current_beat as f32 * self.zoom_x - self.scroll_x);
+            if x >= rect.left() && x <= rect.right() {
+                ui.ctx().debug_painter().line_segment(
+                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                    egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
+                );
             }
         }
 
@@ -230,6 +297,8 @@ impl TimelineView {
             self.pending_clip_undo = false;
         }
 
+        // Parent-level pointer handling (seek, loop bars, drag clips).
+        // If the pointer is over any lane rect, the automation widgets own it and we return early.
         self.handle_timeline_interaction(&response, ui, app);
     }
 
@@ -241,12 +310,14 @@ impl TimelineView {
         let bar_fg =
             egui::Color32::from_rgba_premultiplied(grid_fg.r(), grid_fg.g(), grid_fg.b(), 220);
 
+        // Top ruler background
         painter.rect_filled(
             egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + ruler_h)),
             0.0,
             bg,
         );
 
+        // Vertical beat lines and bar markers
         let beats_visible = (rect.width() / self.zoom_x) as i32 + 2;
         let start_beat = (self.scroll_x / self.zoom_x) as i32;
 
@@ -269,15 +340,6 @@ impl TimelineView {
                     egui::pos2(x, rect.top() + ruler_h),
                     egui::pos2(x, rect.bottom()),
                 ],
-                egui::Stroke::new(1.0, grid_fg),
-            );
-        }
-
-        let num_tracks = ((rect.height() - ruler_h) / self.track_height) as i32;
-        for track in 0..=num_tracks {
-            let y = rect.top() + ruler_h + track as f32 * self.track_height;
-            painter.line_segment(
-                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
                 egui::Stroke::new(1.0, grid_fg),
             );
         }
@@ -323,11 +385,6 @@ impl TimelineView {
             for clip in &track.audio_clips {
                 self.draw_audio_clip(painter, ui, rect, clip, track_id, app);
             }
-        }
-
-        if self.show_automation {
-            let mut track_clone = track.clone();
-            self.draw_automation_lanes(ui, rect, &mut track_clone, track_id, app);
         }
     }
 
@@ -721,6 +778,12 @@ impl TimelineView {
         ui: &mut egui::Ui,
         app: &mut super::app::YadawApp,
     ) {
+        if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+            if self.automation_hit_regions.iter().any(|r| r.contains(pos)) {
+                return;
+            }
+        }
+
         let rect = response.rect;
         let ruler_h = 18.0;
 
@@ -777,6 +840,9 @@ impl TimelineView {
         if response.dragged()
             && let Some(pos) = response.hover_pos()
         {
+            if self.automation_hit_regions.iter().any(|r| r.contains(pos)) {
+                return; // for the automation widget handle it
+            }
             // Commands cause stuttering
             let _current_beat = beat_at(pos.x);
         }
@@ -838,6 +904,7 @@ impl TimelineView {
                             }
                         }
 
+                        let mut to_send: Vec<AudioCommand> = Vec::new();
                         if allow_move {
                             for (clip_id, original_start) in clip_ids_and_starts.iter().copied() {
                                 let new_start = (original_start + delta).max(0.0);
@@ -848,17 +915,19 @@ impl TimelineView {
                                     .unwrap_or(false);
 
                                 if is_midi {
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::MoveMidiClip { clip_id, new_start });
+                                    to_send.push(AudioCommand::MoveMidiClip { clip_id, new_start });
                                 } else {
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::MoveAudioClip { clip_id, new_start });
+                                    to_send
+                                        .push(AudioCommand::MoveAudioClip { clip_id, new_start });
                                 }
                             }
+                        }
+                        drop(state);
+                        if allow_move {
+                            for cmd in to_send {
+                                let _ = app.command_tx.send(cmd);
+                            }
                         } else {
-                            // Invalid move, show a warning
                             app.dialogs.show_message(
                                 "Cannot move clip here: it would overlap with another clip.",
                             );
@@ -975,28 +1044,40 @@ impl TimelineView {
             && self.timeline_interaction.is_none()
             && let Some(pos) = response.interact_pointer_pos()
         {
-            let grid_pos = pos - response.rect.min;
-            let mut beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
-            beat = snap(beat as f64, self.grid_snap) as f32;
-            let track_idx = (grid_pos.y / self.track_height) as usize;
-
-            let state = app.state.lock().unwrap();
-            let track_id_opt = state.track_order.get(track_idx).copied();
-            let is_midi = track_id_opt
-                .and_then(|tid| state.tracks.get(&tid))
-                .map(|t| t.is_midi)
-                .unwrap_or(false);
-            drop(state);
+            // Map y position to track using the cached block rects
+            let track_id_opt = self
+                .last_track_blocks
+                .iter()
+                .find(|(_, r)| r.contains(pos))
+                .map(|(id, _)| *id);
 
             if let Some(track_id) = track_id_opt
-                && is_midi
                 && ui.input(|i| i.modifiers.ctrl)
             {
-                let _ = app.command_tx.send(AudioCommand::CreateMidiClip {
-                    track_id,
-                    start_beat: beat as f64,
-                    length_beats: DEFAULT_MIDI_CLIP_LEN,
-                });
+                // Only create for MIDI tracks
+                let is_midi = {
+                    let state = app.state.lock().unwrap();
+                    state
+                        .tracks
+                        .get(&track_id)
+                        .map(|t| t.is_midi)
+                        .unwrap_or(false)
+                };
+                if is_midi {
+                    let grid_pos = pos - response.rect.min;
+                    let mut beat = (grid_pos.x + self.scroll_x) / self.zoom_x;
+                    beat = if self.grid_snap > 0.0 {
+                        ((beat as f64 / self.grid_snap as f64).round() * self.grid_snap as f64)
+                            as f32
+                    } else {
+                        beat
+                    };
+                    let _ = app.command_tx.send(AudioCommand::CreateMidiClip {
+                        track_id,
+                        start_beat: beat as f64,
+                        length_beats: DEFAULT_MIDI_CLIP_LEN,
+                    });
+                }
             }
         }
     }
@@ -1056,6 +1137,8 @@ impl TimelineView {
                 lane_rect.max,
             );
 
+            self.automation_hit_regions.push(curve_rect);
+
             let actions = self.automation_widgets[lane_idx].ui(
                 ui,
                 &track.automation_lanes[lane_idx],
@@ -1064,15 +1147,19 @@ impl TimelineView {
                 self.scroll_x,
             );
 
+            let mut pushed_undo_for_move = false;
+
             for action in actions {
                 match action {
                     AutomationAction::AddPoint { beat, value } => {
+                        app.push_undo();
                         let target = track.automation_lanes[lane_idx].parameter.clone();
                         let _ = app.command_tx.send(AudioCommand::AddAutomationPoint(
                             track_id, target, beat, value,
                         ));
                     }
                     AutomationAction::RemovePoint(beat) => {
+                        app.push_undo();
                         let _ = app.command_tx.send(AudioCommand::RemoveAutomationPoint(
                             track_id, lane_idx, beat,
                         ));
@@ -1082,6 +1169,10 @@ impl TimelineView {
                         new_beat,
                         new_value,
                     } => {
+                        if !pushed_undo_for_move {
+                            app.push_undo();
+                            pushed_undo_for_move = true;
+                        }
                         let _ = app.command_tx.send(AudioCommand::UpdateAutomationPoint {
                             track_id,
                             lane_idx,

@@ -90,9 +90,10 @@ branch = "main"
 [dependencies.clack-extensions]
 git = "https://github.com/prokopyl/clack"
 package = "clack-extensions"
-features = ["params"]
 branch = "main"
 optional = true
+default-features = false
+features = ["params", "clack-host"]
 
 
 [target.'cfg(not(target_os = "android"))'.dependencies]

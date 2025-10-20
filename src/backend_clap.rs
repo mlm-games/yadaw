@@ -18,6 +18,7 @@ mod clap_impl {
         BackendKind, HostConfig, MidiEvent, ParamKey, PluginBackend, PluginInstance as UniInstance,
         ProcessCtx, UnifiedParamInfo, UnifiedPluginInfo,
     };
+    use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
 
     struct MyHostShared;
     impl<'a> SharedHandler<'a> for MyHostShared {
@@ -123,6 +124,50 @@ mod clap_impl {
             let path = path.strip_prefix("file://").unwrap_or(path).to_string();
             Ok((path, id.to_string()))
         }
+
+        fn fetch_params(instance: &mut PluginInstance<MyHost>) -> Vec<UnifiedParamInfo> {
+            // Get the params extension from the shared handle
+            let Some(params_ext) = instance.plugin_shared_handle().get_extension::<ParamsExt>()
+            else {
+                return Vec::new();
+            };
+
+            // Get a main-thread plugin handle to call into the plugin
+            let mut plugin = instance.plugin_handle();
+
+            // Count parameters
+            let count = params_ext.count(&mut plugin);
+            let mut out = Vec::with_capacity(count as usize);
+
+            for i in 0..count {
+                let mut buf = ParamInfoBuffer::new();
+                if let Some(info) = params_ext.get_info(&mut plugin, i, &mut buf) {
+                    let id = info.id.get();
+
+                    let name = std::str::from_utf8(info.name)
+                        .ok()
+                        .and_then(|s| s.split('\0').next().map(str::to_string))
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| format!("Param {}", id));
+
+                    let min = info.min_value as f32;
+                    let max = info.max_value as f32;
+                    let def = info.default_value as f32;
+                    let stepped = info.flags.contains(ParamInfoFlags::IS_STEPPED);
+
+                    out.push(UnifiedParamInfo {
+                        key: ParamKey::Clap(id),
+                        name,
+                        min,
+                        max,
+                        default: def,
+                        stepped,
+                        enum_labels: None,
+                    });
+                }
+            }
+            out
+        }
     }
 
     impl PluginBackend for ClapHostBackend {
@@ -169,7 +214,7 @@ mod clap_impl {
                     })
                     .ok_or_else(|| anyhow!("Plugin id not found in bundle: {}", plugin_id))?;
 
-                let inst = PluginInstance::<MyHost>::new(
+                let mut inst = PluginInstance::<MyHost>::new(
                     |_| MyHostShared,
                     |_| (),
                     &bundle,
@@ -178,8 +223,7 @@ mod clap_impl {
                 )
                 .map_err(|e| anyhow!("CLAP instantiate failed: {e:?}"))?;
 
-                // For now, we'll leave params empty - can be added with clack-extensions later
-                let params = Vec::new();
+                let params = Self::fetch_params(&mut inst);
 
                 Ok(Box::new(ClapInstance {
                     instance: inst,

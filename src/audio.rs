@@ -687,6 +687,9 @@ impl AudioEngine {
             RealtimeCommand::UpdateTracks(new_tracks) => {
                 self.full_sync_for_offline_setup(&new_tracks);
             }
+            RealtimeCommand::RebuildTrackChain { track_id, chain } => {
+                self.rebuild_track_chain_rt(track_id, &chain);
+            }
             _ => {}
         }
     }
@@ -1081,6 +1084,94 @@ impl AudioEngine {
             .iter()
             .find(|t| t.armed && !t.is_midi)
             .map(|t| t.track_id);
+    }
+
+    fn rebuild_track_chain_rt(
+        &mut self,
+        track_id: u64,
+        chain: &[crate::audio_state::PluginDescriptorSnapshot],
+    ) {
+        // Ensure a processor exists for this track
+        let proc = self
+            .track_processors
+            .entry(track_id)
+            .or_insert_with(|| TrackProcessor::new(track_id));
+
+        // 1) Drop existing plugin instances for this track
+        for (_, pp) in proc.plugins.drain() {
+            if let Some(handle) = pp.rt_instance_id {
+                PLUGIN_STORE.remove(&handle);
+            }
+        }
+        proc.plugin_order.clear();
+
+        // 2) Recreate chain in order
+        for pdesc in chain {
+            match self.host_facade.instantiate(pdesc.backend, &pdesc.uri) {
+                Ok(mut inst) => {
+                    // apply saved params
+                    for kv in pdesc.params.iter() {
+                        let name = kv.key().clone();
+                        let val = *kv.value();
+                        let key = match pdesc.backend {
+                            crate::model::plugin_api::BackendKind::Lv2 => {
+                                crate::model::plugin_api::ParamKey::Lv2(name.clone())
+                            }
+                            crate::model::plugin_api::BackendKind::Clap => {
+                                // We will remap by name below once params() are available
+                                // Use a placeholder here; then immediately set by actual key when known.
+                                crate::model::plugin_api::ParamKey::Clap(0)
+                            }
+                        };
+                        inst.set_param(&key, val);
+                    }
+
+                    // insert into store and capture param map
+                    let handle = generate_plugin_handle();
+                    let param_map: std::collections::HashMap<String, ParamKey> = inst
+                        .params()
+                        .iter()
+                        .map(|p| (p.name.clone(), p.key.clone()))
+                        .collect();
+
+                    // Re-apply saved params with true keys for CLAP (where we used placeholder)
+                    for kv in pdesc.params.iter() {
+                        let name = kv.key().clone();
+                        let val = *kv.value();
+                        if let Some(actual_key) = param_map.get(&name) {
+                            inst.set_param(actual_key, val);
+                        }
+                    }
+
+                    PLUGIN_STORE.insert(handle, inst);
+
+                    let pp = PluginProcessorUnified {
+                        plugin_id: pdesc.plugin_id,
+                        rt_instance_id: Some(handle),
+                        backend: pdesc.backend,
+                        uri: pdesc.uri.clone(),
+                        bypass: pdesc.bypass,
+                        param_name_to_key: param_map,
+                    };
+
+                    proc.plugins.insert(pdesc.plugin_id, pp);
+                    proc.plugin_order.push(pdesc.plugin_id);
+                }
+                Err(e) => {
+                    log::error!("RebuildChain: instantiate failed {}: {}", pdesc.uri, e);
+                    let pp = PluginProcessorUnified {
+                        plugin_id: pdesc.plugin_id,
+                        rt_instance_id: None,
+                        backend: pdesc.backend,
+                        uri: pdesc.uri.clone(),
+                        bypass: true,
+                        param_name_to_key: std::collections::HashMap::new(),
+                    };
+                    proc.plugins.insert(pdesc.plugin_id, pp);
+                    proc.plugin_order.push(pdesc.plugin_id);
+                }
+            }
+        }
     }
 }
 

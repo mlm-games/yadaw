@@ -628,6 +628,7 @@ impl YadawApp {
                 self.redo_stack.clear();
 
                 let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+                let _ = self.command_tx.send(AudioCommand::RebuildAllRtChains);
             })
             .notify_user(&mut self.dialogs);
     }

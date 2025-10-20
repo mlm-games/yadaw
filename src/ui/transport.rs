@@ -140,43 +140,43 @@ impl TransportUI {
                             .map(|t| t.get_bpm())
                             .unwrap_or(120.0);
 
-                        // Auto-update display if transport BPM changed externally
-                        let displayed_bpm = self.bpm_input.parse::<f32>().unwrap_or(current_bpm);
-                        if (current_bpm - displayed_bpm).abs() > 0.1 {
-                            self.bpm_input = format!("{:.1}", current_bpm);
-                        }
+                        let bpm_edit =
+                            egui::TextEdit::singleline(&mut self.bpm_input).desired_width(60.0);
+                        let bpm_response = ui.add(bpm_edit);
 
-                        let bpm_response = ui.add(
-                            egui::TextEdit::singleline(&mut self.bpm_input).desired_width(60.0),
-                        );
+                        let field_has_focus = bpm_response.has_focus();
 
-                        // Validate and show feedback
-                        let bpm_valid = if let Ok(bpm) = self.bpm_input.parse::<f32>() {
-                            (20.0..=999.0).contains(&bpm)
-                        } else {
-                            false
-                        };
-
-                        // Visual feedback for invalid input
-                        if !bpm_valid && !self.bpm_input.is_empty() {
-                            let bpm_response = bpm_response.clone();
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-                            bpm_response.on_hover_text("BPM must be between 20 and 999");
-                        }
-
-                        // Apply on Enter or focus lost
-                        if (bpm_response.lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                            || (bpm_response.lost_focus() && bpm_valid)
-                        {
-                            if let Ok(bpm) = self.bpm_input.parse::<f32>() {
-                                if (20.0..=999.0).contains(&bpm) {
-                                    if let Some(transport) = &self.transport {
-                                        transport.set_bpm(bpm);
-                                    }
-                                    self.bpm_input = format!("{:.1}", bpm);
-                                }
+                        if !field_has_focus {
+                            // Only update the string if it differs from the model by a small threshold
+                            let parsed = self.bpm_input.parse::<f32>().ok();
+                            if parsed
+                                .map(|v| (v - current_bpm).abs() > 0.1)
+                                .unwrap_or(true)
+                            {
+                                self.bpm_input = format!("{:.1}", current_bpm);
                             }
+                        }
+
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let bpm_valid = self
+                            .bpm_input
+                            .parse::<f32>()
+                            .map(|b| (20.0..=999.0).contains(&b))
+                            .unwrap_or(false);
+
+                        if (enter_pressed || bpm_response.lost_focus()) && bpm_valid {
+                            if let Ok(bpm) = self.bpm_input.parse::<f32>() {
+                                if let Some(transport) = &self.transport {
+                                    transport.set_bpm(bpm);
+                                }
+                                self.bpm_input = format!("{:.1}", bpm);
+
+                                ui.memory_mut(|m| m.surrender_focus(bpm_response.id));
+                            }
+                        }
+
+                        if !bpm_valid && field_has_focus {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
                         }
 
                         ui.separator();

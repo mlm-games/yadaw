@@ -185,6 +185,10 @@ pub enum RealtimeCommand {
         session_id: u64,
         notes: Vec<MidiNoteSnapshot>,
     },
+    RebuildTrackChain {
+        track_id: u64,
+        chain: Vec<PluginDescriptorSnapshot>,
+    },
 }
 
 #[derive(Debug, Clone)]

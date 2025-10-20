@@ -174,6 +174,7 @@ pub enum AudioCommand {
     ExportAudio(ExportConfig),
     SetTrackMidiInput(u64, Option<String>),
     MidiInput(RawMidiMessage),
+    RebuildAllRtChains,
 }
 
 #[derive(Debug, Clone)]

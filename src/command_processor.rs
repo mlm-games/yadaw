@@ -753,8 +753,6 @@ fn process_command(
                 });
                 lane.points
                     .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
-
-                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
             }
             send_graph_snapshot_locked(&state, snapshot_tx);
         }
@@ -1031,6 +1029,18 @@ fn process_command(
                 config.clone(),
                 ui_tx_clone,
             );
+        }
+        AudioCommand::RebuildAllRtChains => {
+            let state = app_state.lock().unwrap();
+            let track_snapshots = crate::audio_snapshot::build_track_snapshots(&state);
+            drop(state);
+
+            for ts in track_snapshots {
+                let _ = realtime_tx.send(RealtimeCommand::RebuildTrackChain {
+                    track_id: ts.track_id,
+                    chain: ts.plugin_chain,
+                });
+            }
         }
         _ => {
             // Stub for unhandled commands

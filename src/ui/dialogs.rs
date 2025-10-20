@@ -673,8 +673,8 @@ impl PluginBrowserDialog {
                             });
 
                             // clear the selection target after adding
-                            app.selected_track_for_plugin = None;
-                            self.closed = true;
+                            // app.selected_track_for_plugin = None;
+                            // self.closed = true;
                         } else if resp.clicked() {
                             self.selected_plugin = Some(plugin.uri.clone());
                         }
