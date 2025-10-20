@@ -1139,12 +1139,15 @@ impl TimelineView {
 
             self.automation_hit_regions.push(curve_rect);
 
+            let id_ns = ui.id().with(("lane", track_id, lane_idx as u64));
+
             let actions = self.automation_widgets[lane_idx].ui(
                 ui,
                 &track.automation_lanes[lane_idx],
                 curve_rect,
                 self.zoom_x,
                 self.scroll_x,
+                id_ns,
             );
 
             let mut pushed_undo_for_move = false;

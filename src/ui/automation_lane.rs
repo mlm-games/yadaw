@@ -27,6 +27,7 @@ impl AutomationLaneWidget {
         lane_rect: egui::Rect,
         zoom_x: f32,
         scroll_x: f32,
+        id_ns: egui::Id,
     ) -> Vec<AutomationAction> {
         let mut actions = Vec::new();
         let painter = ui.painter_at(lane_rect);
@@ -64,20 +65,23 @@ impl AutomationLaneWidget {
 
         // Curve (polyline)
         if pts_screen.len() >= 2 {
-            painter.add(egui::Shape::line(
-                pts_screen.iter().map(|(_, p)| *p).collect(),
+            let mut pts_for_line = pts_screen.iter().map(|(_, p)| *p).collect::<Vec<_>>();
+            pts_for_line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+            ui.painter().add(egui::Shape::line(
+                pts_for_line,
                 egui::Stroke::new(1.5, lane_color),
             ));
         }
 
         // Point handles
         let handle_r = 5.0;
-        let id_base = ui.id().with(("auto_pts", lane as *const _ as usize));
+        let id_base = id_ns.with("auto_pts");
+
         let mut hovered_any = false;
 
         for (i, pos) in pts_screen.iter().cloned() {
             let handle_rect = egui::Rect::from_center_size(pos, egui::vec2(12.0, 12.0));
-            let id = id_base.with(i);
+            let id = id_base.with(i as u64);
             let resp = ui.interact(handle_rect, id, egui::Sense::click_and_drag());
 
             hovered_any |= resp.hovered() || resp.dragged();
@@ -117,11 +121,8 @@ impl AutomationLaneWidget {
         }
 
         // Click empty space to add
-        let lane_resp = ui.interact(
-            lane_rect,
-            ui.id().with(("auto_lane_bg", lane as *const _ as usize)),
-            egui::Sense::click(),
-        );
+        let lane_bg_id = id_ns.with("auto_lane_bg");
+        let lane_resp = ui.interact(lane_rect, lane_bg_id, egui::Sense::click());
         if lane_resp.clicked()
             && !hovered_any
             && let Some(pos) = lane_resp.interact_pointer_pos()

@@ -751,8 +751,6 @@ fn process_command(
                     beat: *new_beat,
                     value: *new_value,
                 });
-                lane.points
-                    .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
             }
             send_graph_snapshot_locked(&state, snapshot_tx);
         }
