@@ -225,6 +225,16 @@ impl TimelineView {
         let rect = response.rect;
         self.draw_grid(&painter, rect, app.state.lock().unwrap().bpm);
 
+        // loop/seek
+        let ruler_h = 18.0;
+        let ruler_rect =
+            egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + ruler_h));
+        let ruler_resp = ui.interact(
+            ruler_rect,
+            ui.id().with("timeline_ruler"),
+            egui::Sense::click_and_drag(),
+        );
+
         // Place each track block at cumulative Y positions
         let mut y_cursor = rect.top();
 
@@ -299,7 +309,7 @@ impl TimelineView {
 
         // Parent-level pointer handling (seek, loop bars, drag clips).
         // If the pointer is over any lane rect, the automation widgets own it and we return early.
-        self.handle_timeline_interaction(&response, ui, app);
+        self.handle_timeline_interaction(&response, &ruler_resp, ui, app);
     }
 
     fn draw_grid(&self, painter: &egui::Painter, rect: egui::Rect, _bpm: f32) {
@@ -775,6 +785,7 @@ impl TimelineView {
     fn handle_timeline_interaction(
         &mut self,
         response: &egui::Response,
+        ruler_resp: &egui::Response,
         ui: &mut egui::Ui,
         app: &mut super::app::YadawApp,
     ) {
@@ -804,18 +815,17 @@ impl TimelineView {
         let min_len = (self.grid_snap.max(0.03125)) as f64;
 
         // Start drag
-        if response.drag_started()
-            && self.timeline_interaction.is_none()
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            let on_ruler = pos.y >= rect.top() && pos.y <= rect.top() + ruler_h;
-            if on_ruler {
+        if ruler_resp.drag_started() && self.timeline_interaction.is_none() {
+            if let Some(pos) = ruler_resp.interact_pointer_pos() {
                 let lb = app.audio_state.loop_start.load();
                 let le = app.audio_state.loop_end.load();
-                let target = beat_at(pos.x);
+                let target = {
+                    let rel = (pos.x - response.rect.left()) + self.scroll_x;
+                    (rel / self.zoom_x) as f64
+                };
                 if app.audio_state.loop_enabled.load(Ordering::Relaxed) && (le > lb) {
-                    let start_x = rect.left() + (lb as f32 * self.zoom_x - self.scroll_x);
-                    let end_x = rect.left() + (le as f32 * self.zoom_x - self.scroll_x);
+                    let start_x = response.rect.left() + (lb as f32 * self.zoom_x - self.scroll_x);
+                    let end_x = response.rect.left() + (le as f32 * self.zoom_x - self.scroll_x);
                     let near = 6.0;
                     if (pos.x - start_x).abs() <= near {
                         self.timeline_interaction = Some(TimelineInteraction::LoopDragStart {
@@ -848,7 +858,8 @@ impl TimelineView {
         }
 
         // END DRAG
-        if response.drag_stopped() {
+        let pointer_released = ui.ctx().input(|i| i.pointer.any_released());
+        if pointer_released {
             if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos())
                 && let Some(interaction) = &self.timeline_interaction
             {
@@ -1022,13 +1033,16 @@ impl TimelineView {
         }
 
         // Click on ruler to set playhead
-        if response.clicked()
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            let on_ruler = pos.y >= rect.top() && pos.y <= rect.top() + ruler_h;
-            if on_ruler {
-                let mut beat = beat_at(pos.x).max(0.0);
-                beat = snap(beat, self.grid_snap);
+        if ruler_resp.clicked() {
+            if let Some(pos) = ruler_resp.interact_pointer_pos() {
+                let rel = (pos.x - response.rect.left()) + self.scroll_x;
+                let mut beat = (rel / self.zoom_x) as f64;
+                beat = if self.grid_snap > 0.0 {
+                    ((beat / self.grid_snap as f64).round() * self.grid_snap as f64)
+                } else {
+                    beat
+                }
+                .max(0.0);
                 let sr = app.audio_state.sample_rate.load() as f64;
                 let bpm = app.audio_state.bpm.load() as f64;
                 if bpm > 0.0 && sr > 0.0 {
