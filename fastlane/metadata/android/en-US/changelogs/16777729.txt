@@ -1,0 +1,3 @@
+- [chore] Bump version from 0.1.9 to 0.2.0
+- automation points now get placed and move properly!
+- automation lanes do not cover the clip, load_from_save loads plugins, improve automation undo handling
