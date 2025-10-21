@@ -1,0 +1,123 @@
+name: Publish to AUR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Version name (e.g., 0.1.2)'
+        required: true
+      increment_pkgrel:
+        description: 'Increment pkgrel (for same version updates)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  update-aur:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Linux x64 build from release
+        run: |
+          mkdir -p linux-build
+          wget -O linux-build/yadaw.zip "https://github.com/mlm-games/yadaw/releases/download/${{ inputs.version_name }}/yadaw.x86_64"
+      
+      - name: Download Linux ARM64 build from release
+        run: |
+          mkdir -p linux-arm64-build
+          wget -O linux-arm64-build/yadaw.arm64 "https://github.com/mlm-games/yadaw/releases/download/${{ inputs.version_name }}/yadaw.arm64"
+      
+      - name: Calculate SHA256 checksums
+        id: checksums
+        run: |
+          X64_HASH=$(sha256sum linux-build/yadaw.x86_64 | cut -d ' ' -f 1)
+          ARM64_HASH=$(sha256sum linux-arm64-build/yadaw.arm64 | cut -d ' ' -f 1)
+          echo "x64_hash=$X64_HASH" >> $GITHUB_OUTPUT
+          echo "arm64_hash=$ARM64_HASH" >> $GITHUB_OUTPUT
+      
+      - name: Get current pkgrel from AUR
+        id: current_pkgrel
+        run: |
+          # Try to get current PKGBUILD from AUR
+          CURRENT_PKGREL=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=yadaw-bin" | grep "^pkgrel=" | cut -d= -f2 || echo "0")
+          echo "current_pkgrel=$CURRENT_PKGREL" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Determine pkgrel
+        id: pkgrel
+        run: |
+          if [[ "${{ inputs.increment_pkgrel }}" == "true" ]]; then
+            CURRENT=${{ steps.current_pkgrel.outputs.current_pkgrel }}
+            NEW_PKGREL=$((CURRENT + 1))
+            echo "pkgrel=$NEW_PKGREL" >> $GITHUB_OUTPUT
+          else
+            echo "pkgrel=1" >> $GITHUB_OUTPUT
+          fi
+
+      
+      - name: Create PKGBUILD
+        run: |
+          mkdir -p aur-package
+          cat > aur-package/PKGBUILD << 'EOF'
+          # Maintainer: MLM-stuff <gfxoxinzh@mozmail.com>
+          pkgname=yadaw-bin
+          pkgver=${{ inputs.version_name }}
+          pkgrel=${{ steps.pkgrel.outputs.pkgrel }}
+          pkgdesc="An image viewer made in godot (binary release)"
+          arch=('x86_64' 'aarch64')
+          url="https://github.com/mlm-games/yadaw"
+          license=('GPL3')
+          depends=('glibc' 'libx11' 'libxcursor' 'libxinerama' 'libxrandr' 'libxi' 'alsa-lib')
+          optdepends=('pipewire-pulse: for PipeWire audio support'
+                      'pulseaudio: for PulseAudio audio support')
+          provides=('yadaw')
+          conflicts=('yadaw')
+          options=('!strip')
+          source=("https://raw.githubusercontent.com/mlm-games/yadaw/main/icon.png")
+          source_x86_64=("yadaw-${{ inputs.version_name }}-x64::https://github.com/mlm-games/yadaw/releases/download/${{ inputs.version_name }}/yadaw.x86_64")
+          source_aarch64=("yadaw-${{ inputs.version_name }}-arm64::https://github.com/mlm-games/yadaw/releases/download/${{ inputs.version_name }}/yadaw.arm64")
+          sha256sums=('SKIP')
+          sha256sums_x86_64=('${{ steps.checksums.outputs.x64_hash }}')
+          sha256sums_aarch64=('${{ steps.checksums.outputs.arm64_hash }}')
+          
+          package() {
+              install -d "${pkgdir}/usr/bin/"
+              install -d "${pkgdir}/usr/share/applications/"
+              install -d "${pkgdir}/usr/share/pixmaps/"
+              install -d "${pkgdir}/opt/${pkgname}/"
+          
+              if [[ $CARCH == "x86_64" ]]; then
+                  install -Dm755 "$srcdir/yadaw-${{ inputs.version_name }}-x64" "${pkgdir}/opt/${pkgname}/yadaw"
+              elif [[ $CARCH == "aarch64" ]]; then
+                  install -Dm755 "$srcdir/yadaw-${{ inputs.version_name }}-arm64" "${pkgdir}/opt/${pkgname}/yadaw"
+              fi
+          
+              ln -s "/opt/${pkgname}/yadaw" "${pkgdir}/usr/bin/yadaw"
+              
+              install -Dm644 "$srcdir/icon.png" "${pkgdir}/usr/share/pixmaps/yadaw.png"
+              install -Dm644 "$srcdir/icon.png" "${pkgdir}/usr/share/icons/yadaw.png"
+          
+              cat > "${pkgdir}/usr/share/applications/yadaw.desktop" << DESKTOP_EOF
+          [Desktop Entry]
+          Name=yadaw
+          Exec=yadaw
+          Terminal=false
+          Type=Application
+          Icon=yadaw
+          Comment=An image viewer made using godot
+          Categories=Utility;Office;
+          StartupNotify=true
+          DESKTOP_EOF
+          }
+          EOF
+      
+      - name: Publish to AUR
+        uses: mlm-games/aur-deploy-action@master
+        with:
+          pkgname: yadaw-bin
+          pkgbuild: aur-package/PKGBUILD
+          commit_username: MLM-stuff
+          commit_email: gfxoxinzh@mozmail.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to version ${{ inputs.version_name }}-${{ steps.pkgrel.outputs.pkgrel }}"
