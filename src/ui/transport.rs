@@ -134,20 +134,47 @@ impl TransportUI {
                         // BPM control
                         ui.label("BPM:");
 
-                        let current_bpm = self
-                            .transport
-                            .as_ref()
-                            .map(|t| t.get_bpm())
-                            .unwrap_or(120.0);
-
                         let bpm_edit =
                             egui::TextEdit::singleline(&mut self.bpm_input).desired_width(60.0);
                         let bpm_response = ui.add(bpm_edit);
 
+                        // Read focus and typed value
                         let field_has_focus = bpm_response.has_focus();
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let typed_ok = self
+                            .bpm_input
+                            .parse::<f32>()
+                            .map(|b| (20.0..=999.0).contains(&b))
+                            .unwrap_or(false);
 
-                        if !field_has_focus {
-                            // Only update the string if it differs from the model by a small threshold
+                        let mut committed_this_frame = false;
+                        let mut committed_bpm: Option<f32> = None;
+
+                        if (enter_pressed || bpm_response.lost_focus()) && typed_ok {
+                            if let Ok(bpm) = self.bpm_input.parse::<f32>() {
+                                if let Some(t) = &self.transport {
+                                    t.audio_state.bpm.store(bpm);
+                                    let _ = app.command_tx.send(AudioCommand::SetBPM(bpm));
+                                }
+                                self.bpm_input = format!("{:.1}", bpm);
+                                committed_this_frame = true;
+                                committed_bpm = Some(bpm);
+
+                                // Drop focus so the field re-syncs cleanly next frame
+                                ui.memory_mut(|m| m.surrender_focus(bpm_response.id));
+                            }
+                        }
+
+                        let current_bpm = if let Some(bpm) = committed_bpm {
+                            bpm
+                        } else {
+                            self.transport
+                                .as_ref()
+                                .map(|t| t.get_bpm())
+                                .unwrap_or(120.0)
+                        };
+
+                        if !field_has_focus && !committed_this_frame {
                             let parsed = self.bpm_input.parse::<f32>().ok();
                             if parsed
                                 .map(|v| (v - current_bpm).abs() > 0.1)
@@ -157,25 +184,7 @@ impl TransportUI {
                             }
                         }
 
-                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        let bpm_valid = self
-                            .bpm_input
-                            .parse::<f32>()
-                            .map(|b| (20.0..=999.0).contains(&b))
-                            .unwrap_or(false);
-
-                        if (enter_pressed || bpm_response.lost_focus()) && bpm_valid {
-                            if let Ok(bpm) = self.bpm_input.parse::<f32>() {
-                                if let Some(transport) = &self.transport {
-                                    transport.set_bpm(bpm);
-                                }
-                                self.bpm_input = format!("{:.1}", bpm);
-
-                                ui.memory_mut(|m| m.surrender_focus(bpm_response.id));
-                            }
-                        }
-
-                        if !bpm_valid && field_has_focus {
+                        if !typed_ok && field_has_focus {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
                         }
 
