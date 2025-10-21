@@ -1,8 +1,9 @@
+use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(target_os = "android")]
 pub fn projects_dir() -> PathBuf {
-    let base = std::path::Path::new("/data/data/com.yadaw.app/files");
+    let base = Path::new("/data/data/com.yadaw.app/files");
     let p = base.join("projects");
     let _ = std::fs::create_dir_all(&p);
     p
@@ -19,7 +20,7 @@ pub fn projects_dir() -> PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn config_path() -> PathBuf {
-    let p = std::path::Path::new("/data/data/com.yadaw.app/files/config");
+    let p = Path::new("/data/data/com.yadaw.app/files/config");
     let _ = std::fs::create_dir_all(p);
     p.join("config.json")
 }
@@ -34,7 +35,7 @@ pub fn config_path() -> PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn cache_dir() -> PathBuf {
-    let p = std::path::Path::new("/data/data/com.yadaw.app/cache");
+    let p = Path::new("/data/data/com.yadaw.app/cache");
     let _ = std::fs::create_dir_all(p);
     p.to_path_buf()
 }
@@ -45,4 +46,24 @@ pub fn cache_dir() -> PathBuf {
         .unwrap()
         .cache_dir()
         .to_path_buf()
+}
+
+#[cfg(target_os = "android")]
+pub fn plugins_dir() -> PathBuf {
+    // let base = Path::new("/data/data/com.yadaw.app/files");
+    let base = Path::new("/storage/emulated/0/Documents");
+    let dir = base.join("plugins").join("clap");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn plugins_dir() -> PathBuf {
+    // Next to the executable: <exedir>/plugins/clap
+
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    let base = exe.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let dir = base.join("plugins").join("clap");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }

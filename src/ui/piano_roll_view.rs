@@ -1,4 +1,5 @@
 use egui::scroll_area::ScrollSource;
+use egui::{Sense, UiBuilder};
 
 use super::*;
 use crate::audio_state::AudioState;
@@ -68,46 +69,53 @@ impl PianoRollView {
                 ui.allocate_painter(egui::vec2(total_w, piano_roll_height), egui::Sense::hover());
             let roll_rect = roll_resp.rect;
 
-            ui.allocate_ui_at_rect(roll_rect, |ui| {
-                ui.set_clip_rect(roll_rect);
-                self.draw_piano_roll(ui, app);
+            let grid_left_roll = roll_rect.left() + crate::constants::PIANO_KEY_WIDTH;
 
-                // Draw playhead
-                if let Some(current_beat) = ui
-                    .ctx()
-                    .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
-                {
-                    let grid_left = roll_rect.left() + PIANO_KEY_WIDTH;
-                    let x = grid_left
-                        + (current_beat as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
+            ui.scope_builder(
+                UiBuilder::new().max_rect(roll_rect).sense(Sense::hover()),
+                |ui| {
+                    self.draw_piano_roll(ui, app);
 
-                    if x >= roll_rect.left() && x <= roll_rect.right() {
-                        ui.painter().line_segment(
-                            [
-                                egui::pos2(x, roll_rect.top()),
-                                egui::pos2(x, roll_rect.bottom()),
-                            ],
-                            egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
-                        );
+                    // Draw playhead
+                    if let Some(current_beat) = ui
+                        .ctx()
+                        .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
+                    {
+                        let x = grid_left_roll
+                            + (current_beat as f32 * self.piano_roll.zoom_x
+                                - self.piano_roll.scroll_x);
+
+                        if x >= roll_rect.left() && x <= roll_rect.right() {
+                            ui.painter().line_segment(
+                                [
+                                    egui::pos2(x, roll_rect.top()),
+                                    egui::pos2(x, roll_rect.bottom()),
+                                ],
+                                egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
+                            );
+                        }
                     }
-                }
-            });
+                },
+            );
 
-            self.handle_touch_pan_zoom(ui.ctx(), roll_rect);
+            self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
 
             // Velocity lane
             if self.show_velocity_lane {
-                ui.add_space(2.0);
                 let (lane_resp, _) = ui.allocate_painter(
                     egui::vec2(total_w, self.velocity_lane_height),
                     egui::Sense::click_and_drag(),
                 );
                 let lane_rect = lane_resp.rect;
 
-                ui.allocate_ui_at_rect(lane_rect, |ui| {
-                    ui.set_clip_rect(lane_rect);
-                    self.draw_velocity_lane(ui, lane_rect, app);
-                });
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(lane_rect)
+                        .sense(Sense::click_and_drag()),
+                    |ui| {
+                        self.draw_velocity_lane(ui, lane_rect, app);
+                    },
+                );
 
                 if lane_resp.hovered() {
                     let scroll_delta = ui.input(|i| i.raw_scroll_delta);
@@ -119,7 +127,7 @@ impl PianoRollView {
                         if (self.piano_roll.zoom_x - old).abs() > f32::EPSILON
                             && let Some(pos) = lane_resp.hover_pos()
                         {
-                            let grid_left = lane_rect.left() + PIANO_KEY_WIDTH;
+                            let grid_left = lane_rect.left() + crate::constants::PIANO_KEY_WIDTH;
                             let cx = (pos.x - grid_left + self.piano_roll.scroll_x) / old;
                             self.piano_roll.scroll_x =
                                 (cx * self.piano_roll.zoom_x - (pos.x - grid_left)).max(0.0);
@@ -130,7 +138,7 @@ impl PianoRollView {
                     }
                 }
 
-                self.handle_touch_pan_zoom(ui.ctx(), lane_rect);
+                self.handle_touch_pan_zoom(ui.ctx(), lane_rect, "vel");
             }
         });
     }
@@ -666,10 +674,11 @@ impl PianoRollView {
         }
     }
 
-    fn handle_touch_pan_zoom(&mut self, ctx: &egui::Context, roll_rect: egui::Rect) {
-        let id_centroid = egui::Id::new(("pr_gesture", "centroid"));
-        let id_dist = egui::Id::new(("pr_gesture", "dist"));
+    fn handle_touch_pan_zoom(&mut self, ctx: &egui::Context, region: egui::Rect, id_salt: &str) {
+        let id_centroid = egui::Id::new(("pr_gesture", id_salt, "centroid"));
+        let id_dist = egui::Id::new(("pr_gesture", id_salt, "dist"));
 
+        // Gather touch points inside region only
         let points: Vec<egui::Pos2> = ctx.input(|i| {
             i.events
                 .iter()
@@ -677,7 +686,7 @@ impl PianoRollView {
                     if let egui::Event::Touch { pos, phase, .. } = e {
                         match phase {
                             egui::TouchPhase::Start | egui::TouchPhase::Move => {
-                                if roll_rect.contains(*pos) {
+                                if region.contains(*pos) {
                                     Some(*pos)
                                 } else {
                                     None
@@ -707,17 +716,21 @@ impl PianoRollView {
             });
 
             if let (Some(pc), Some(pd)) = (prev_centroid, prev_dist) {
+                // Pan by delta in region space
                 let delta = centroid - pc;
                 self.piano_roll.scroll_x = (self.piano_roll.scroll_x - delta.x).max(0.0);
-                self.piano_roll.scroll_y = (self.piano_roll.scroll_y - delta.y).max(0.0);
+                if id_salt == "roll" {
+                    self.piano_roll.scroll_y = (self.piano_roll.scroll_y - delta.y).max(0.0);
+                }
 
+                // Pinch zoom horizontally around centroid
                 if pd > 1.0 {
                     let scale = (dist / pd).clamp(0.5, 2.0);
                     let old_zoom_x = self.piano_roll.zoom_x;
                     self.piano_roll.zoom_x = (self.piano_roll.zoom_x * scale).clamp(10.0, 500.0);
 
                     if (self.piano_roll.zoom_x - old_zoom_x).abs() > f32::EPSILON {
-                        let grid_left = roll_rect.left() + PIANO_KEY_WIDTH;
+                        let grid_left = region.left() + crate::constants::PIANO_KEY_WIDTH;
                         let cx = (centroid.x - grid_left + self.piano_roll.scroll_x) / old_zoom_x;
                         self.piano_roll.scroll_x =
                             (cx * self.piano_roll.zoom_x - (centroid.x - grid_left)).max(0.0);

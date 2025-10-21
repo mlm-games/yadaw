@@ -48,6 +48,12 @@ mod clap_impl {
 
         fn scan_dirs() -> Vec<PathBuf> {
             let mut v = Vec::new();
+
+            // App-local directory (first)
+            let local = crate::paths::plugins_dir();
+            v.push(local);
+
+            // User and system locations
             if let Ok(home) = std::env::var("HOME") {
                 v.push(PathBuf::from(format!("{home}/.clap")));
             }
