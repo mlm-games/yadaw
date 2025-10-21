@@ -1,4 +1,3 @@
-use crate::audio_snapshot;
 use crate::audio_state::{
     AudioGraphSnapshot, AudioState, MidiClipSnapshot, RealtimeCommand, RtAutomationLaneSnapshot,
     RtAutomationTarget, RtCurveType, TrackSnapshot,
@@ -21,7 +20,6 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use rtrb::{Consumer, RingBuffer};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;

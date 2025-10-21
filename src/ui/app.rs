@@ -13,15 +13,13 @@ use crate::model::{AudioClip, MidiNote, Track};
 use crate::paths::config_path;
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project::{AppState, AppStateSnapshot};
-use crate::project_manager::{self, ProjectManager};
+use crate::project_manager::ProjectManager;
 
 use crate::track_manager::{TrackManager, TrackType};
 use crate::transport::Transport;
-use crate::ui::dialogs::ExportDialog;
 use crossbeam_channel::{Receiver, Sender};
 use dirs::config_dir;
 use eframe::egui;
-use egui::KeyboardShortcut;
 use egui::ahash::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;

@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
-use crate::messages::AudioCommand;
-use crate::model::Track;
 
 pub struct MixerWindow {
     pub visible: bool,

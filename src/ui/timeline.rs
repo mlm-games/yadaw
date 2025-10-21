@@ -1,8 +1,7 @@
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
 
 use super::*;
-use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS, MAGNETIC_SNAP_THRESHOLD};
+use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
 use crate::model::{AudioClip, AutomationTarget, MidiClip, Track};
 use crate::project::ClipLocation;
@@ -1038,7 +1037,7 @@ impl TimelineView {
                 let rel = (pos.x - response.rect.left()) + self.scroll_x;
                 let mut beat = (rel / self.zoom_x) as f64;
                 beat = if self.grid_snap > 0.0 {
-                    ((beat / self.grid_snap as f64).round() * self.grid_snap as f64)
+                    (beat / self.grid_snap as f64).round() * self.grid_snap as f64
                 } else {
                     beat
                 }

@@ -4,7 +4,6 @@ use crate::lv2_plugin_host::{ControlPortInfo, PluginInfo};
 use crate::messages::AudioCommand;
 use crate::model::plugin::PluginDescriptor;
 use crate::model::plugin_api::{BackendKind, UnifiedPluginInfo};
-use crate::model::track::Track;
 use crate::plugin_host::{get_available_plugins, with_host};
 
 pub use crate::lv2_plugin_host::PluginInfo as PluginScanResult;

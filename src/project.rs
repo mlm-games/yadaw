@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::constants::DEFAULT_LOOP_LEN;
-use crate::model::{AudioClip, MidiClip, Track};
+use crate::model::Track;
 use crate::time_utils::TimeConverter;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

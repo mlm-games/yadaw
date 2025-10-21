@@ -1,4 +1,4 @@
-use super::actions::{ActionContext, AppAction};
+use super::actions::AppAction;
 use egui::{Key, KeyboardShortcut, Modifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

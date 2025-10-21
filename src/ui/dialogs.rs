@@ -3,15 +3,14 @@ use std::path::PathBuf;
 use egui_file_dialog::FileDialog;
 
 use super::*;
-use crate::audio_export::ExportConfig;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::actions::{ActionContext, AppAction};
-use crate::input::shortcuts::ShortcutRegistry;
 use crate::input::InputManager;
 use crate::messages::{AudioCommand, ExportState};
 use crate::model::plugin_api::BackendKind;
 use crate::plugin::categorize_plugin;
 use crate::ui::theme;
+use crate::input::shortcuts::{Keybind, KeyCode};
 
 macro_rules! simple_dialog {
     ($name:ident, $title:expr, $content:expr) => {
@@ -1151,8 +1150,6 @@ impl ThemeEditorDialog {
         self.closed
     }
 }
-
-use crate::input::shortcuts::{Keybind, KeyCode, ModifierSet};
 
 pub struct ShortcutsEditorDialog {
     open: bool,

@@ -10,9 +10,8 @@ use anyhow::{Result, anyhow};
 use crossbeam_channel::Sender;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

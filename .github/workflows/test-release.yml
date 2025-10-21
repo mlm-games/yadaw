@@ -259,7 +259,9 @@ jobs:
       ANDROID_TARGET: "aarch64-linux-android"
       LILV_TERMUX_LIB: ${{ github.workspace }}/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare-version.outputs.commit_sha }}
       
       - name: Verify Termux libraries presence
         shell: bash

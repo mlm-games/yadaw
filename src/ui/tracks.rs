@@ -6,10 +6,8 @@ use crate::level_meter::LevelMeter;
 use crate::messages::AudioCommand;
 use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
-use crate::model::track::Track;
 use crate::plugin::get_control_port_info;
 use crate::project::AppState;
-use crate::track_manager::{mute_track, solo_track};
 
 pub struct TracksPanel {
     track_meters: HashMap<u64, LevelMeter>,

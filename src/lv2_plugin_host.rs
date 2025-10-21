@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use livi::event::LV2AtomSequence;
 use livi::{
-    EmptyPortConnections, Features, FeaturesBuilder, Instance, PortCounts, PortType, World,
+    Features, FeaturesBuilder, Instance, PortCounts, PortType, World,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
