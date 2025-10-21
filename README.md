@@ -6,7 +6,7 @@ Current intention is to not add too much code for outdated parts, and to keep it
 
 ### Build from source
 #### Desktop
-- Just run using `cargo run` for desktops.
+- Just run using `cargo run` for windows, mac or linux (windows needs to be compiled manually for now, maybe donation only in future? Need some sort of revenue ig).
 #### Android
 - Follow the instructions in the third_party folder's md.
 - Plugins should be compiled beforehand for android (plan to add a default robust one later)
@@ -15,5 +15,5 @@ Current intention is to not add too much code for outdated parts, and to keep it
 
 #### Missing Essentials? (would not be done in the near future)
 
-- No VST support (LV2 and CLAP (no params yet due to a bug) only).
+- No VST support (LV2 and CLAP only).
 - No MP3/FLAC export (WAV only).

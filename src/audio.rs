@@ -643,6 +643,28 @@ impl AudioEngine {
 
                         proc.plugins.insert(plugin_id, plugin);
                         proc.plugin_order.push(plugin_id);
+
+                        let plugin_idx = proc
+                            .plugin_order
+                            .iter()
+                            .position(|&id| id == plugin_id)
+                            .unwrap_or(proc.plugin_order.len().saturating_sub(1));
+
+                        let params_for_ui: Vec<(String, f32, f32, f32)> =
+                            if let Some(inst) = PLUGIN_STORE.get(&handle) {
+                                inst.params()
+                                    .iter()
+                                    .map(|p| (p.name.clone(), p.min, p.max, p.default))
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+
+                        let _ = self.updates.try_send(UIUpdate::PluginParamsDiscovered {
+                            track_id,
+                            plugin_idx,
+                            params: params_for_ui,
+                        });
                     }
                     Err(e) => eprintln!("Plugin instantiate failed {}: {}", uri, e),
                 }

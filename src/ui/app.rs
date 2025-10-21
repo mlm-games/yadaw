@@ -1094,6 +1094,22 @@ impl YadawApp {
                     dialog.set_state(state);
                 }
             }
+            UIUpdate::PluginParamsDiscovered {
+                track_id,
+                plugin_idx,
+                params,
+            } => {
+                let mut state = self.state.lock().unwrap();
+                if let Some(track) = state.tracks.get_mut(&track_id) {
+                    if plugin_idx < track.plugin_chain.len() {
+                        let desc = &mut track.plugin_chain[plugin_idx];
+                        for (name, _min, _max, default) in params {
+                            // Only insert if not present to keep user edits
+                            desc.params.entry(name).or_insert(default);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
