@@ -144,6 +144,8 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     let (ui_tx, ui_rx) = crossbeam_channel::unbounded::<UIUpdate>();
     let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded::<AudioGraphSnapshot>(1);
 
+    import_clap_bundles_from_external();
+
     // Initialize plugin host
     plugin_host::init(
         audio_state.sample_rate.load() as f64,
@@ -226,4 +228,48 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     )?;
 
     Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn import_clap_bundles_from_external() {
+    use std::{fs, io, path::Path};
+    fn copy_dir(src: &Path, dst: &Path) -> io::Result<()> {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let sp = entry.path();
+            let dp = dst.join(entry.file_name());
+            if sp.is_dir() {
+                copy_dir(&sp, &dp)?;
+            } else {
+                // overwrite if needed
+                fs::copy(&sp, &dp)?;
+            }
+        }
+        Ok(())
+    }
+
+    let src_docs = crate::paths::projects_dir();
+    let src_legacy = Path::new("/storage/emulated/0/Android/data/com.yadaw.app/files")
+        .join("plugins")
+        .join("clap");
+
+    let dst = crate::paths::plugins_dir(); // internal exec dir
+
+    for src in [src_docs, src_legacy] {
+        if let Ok(entries) = fs::read_dir(&src) {
+            for e in entries.flatten() {
+                let p = e.path();
+                // We only import .clap bundles (directories ending with .clap)
+                if p.is_dir() && p.extension().and_then(|s| s.to_str()) == Some("clap") {
+                    let target = dst.join(p.file_name().unwrap());
+                    if !target.exists() {
+                        if let Err(err) = copy_dir(&p, &target) {
+                            eprintln!("Import of {:?} failed: {}", p, err);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

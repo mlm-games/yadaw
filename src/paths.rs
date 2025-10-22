@@ -50,8 +50,9 @@ pub fn cache_dir() -> PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn plugins_dir() -> PathBuf {
-    // let base = Path::new("/data/data/com.yadaw.app/files");
-    let base = Path::new("/storage/emulated/0/Documents");
+    let base = Path::new("/data/data/com.yadaw.app/files");
+    // let base = Path::new("/storage/emulated/0/Android/data/com.yadaw.app/files");
+    // let base = Path::new("/storage/emulated/0/Documents");
     let dir = base.join("plugins").join("clap");
     let _ = std::fs::create_dir_all(&dir);
     dir
