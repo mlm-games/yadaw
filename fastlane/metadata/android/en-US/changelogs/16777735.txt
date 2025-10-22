@@ -1,0 +1,1 @@
+- add cargo conf for aarch linux
