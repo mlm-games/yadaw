@@ -139,10 +139,13 @@ jobs:
         include:
           - os: ubuntu-latest
             toolchain: stable
+            target: ""
+          - os: ubuntu-latest
+            toolchain: stable
+            target: "aarch64-unknown-linux-gnu"  # Linux ARM64
           - os: macos-latest
             toolchain: stable
-          # - os: windows-latest
-          #   toolchain: stable-x86_64-pc-windows-gnu
+            target: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -154,13 +157,42 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
 
-      - name: Install Linux dependencies (for audio & UI)
-        if: runner.os == 'Linux'
+      - name: Add Rust target (when cross-compiling)
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+
+      # Host Linux deps (x86_64)
+      - name: Install Linux dependencies (host)
+        if: runner.os == 'Linux' && matrix.target == ''
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libasound2-dev libudev-dev pkg-config \
-            liblilv-dev libsuil-dev libsratom-dev
+            liblilv-dev libsuil-dev libsratom-dev \
+            libx11-dev libxi-dev libxinerama-dev libxrandr-dev libxcursor-dev
+
+      # Cross Linux deps (aarch64)
+      - name: Install Linux cross dependencies (aarch64)
+        if: runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          set -eux
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu pkg-config \
+            libasound2-dev:arm64 libudev-dev:arm64 \
+            liblilv-dev:arm64 libsuil-dev:arm64 libsratom-dev:arm64 libserd-dev:arm64 libsord-dev:arm64 \
+            libx11-dev:arm64 libxi-dev:arm64 libxinerama-dev:arm64 libxrandr-dev:arm64 libxcursor-dev:arm64
+          # Tell build scripts to use cross toolchain + aarch64 .pc files
+          {
+            echo 'CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc'
+            echo 'AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar'
+            echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc'
+            echo 'PKG_CONFIG_ALLOW_CROSS=1'
+            echo 'PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig'
+            echo 'PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig'
+            echo 'PKG_CONFIG_SYSROOT_DIR=/'
+          } >> "$GITHUB_ENV"
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
@@ -196,14 +228,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build (release)
-        run: cargo build --release --locked
-
       - name: Determine target triple
         id: triple
         shell: bash
         run: |
-          echo "target=$(rustc -vV | sed -n 's/^host: //p')" >> "$GITHUB_OUTPUT"
+          T="${{ matrix.target }}"
+          if [[ -z "$T" ]]; then
+            T="$(rustc -vV | sed -n 's/^host: //p')"
+          fi
+          echo "target=$T" >> "$GITHUB_OUTPUT"
+
+      - name: Build (release)
+        run: cargo build --release --locked --target ${{ steps.triple.outputs.target }}
 
       - name: Package (tar.gz) [Linux/macOS]
         if: runner.os != 'Windows'
@@ -216,7 +252,7 @@ jobs:
           VER="${TAG#v}"
           OUTDIR="dist/${BIN_NAME}-${VER}-${TARGET}"
           mkdir -p "$OUTDIR"
-          cp "target/release/${BIN_NAME}" "$OUTDIR/"
+          cp "target/${TARGET}/release/${BIN_NAME}" "$OUTDIR/"
           for f in README* LICENSE* CHANGELOG*; do [ -e "$f" ] && cp "$f" "$OUTDIR/" || true; done
           tar -C "dist" -czf "${OUTDIR}.tar.gz" "$(basename "$OUTDIR")"
 
@@ -240,7 +276,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.os }}
+          name: dist-${{ matrix.os }}${{ matrix.target && format('-{0}', matrix.target) || '' }}
           path: |
             dist/**/*.tar.gz
             dist/**/*.zip
