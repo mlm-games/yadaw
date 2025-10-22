@@ -106,7 +106,11 @@ impl PianoRollView {
                     egui::vec2(total_w, self.velocity_lane_height),
                     egui::Sense::click_and_drag(),
                 );
-                let lane_rect = lane_resp.rect;
+                let lane_top = roll_rect.bottom();
+                let lane_rect = egui::Rect::from_min_size(
+                    egui::pos2(roll_rect.left(), lane_top),
+                    egui::vec2(total_w, self.velocity_lane_height),
+                );
 
                 ui.scope_builder(
                     egui::UiBuilder::new()
