@@ -1,10 +1,10 @@
-To run the android build, use the below commands (first copy the libs (termux files) to the location)
+To run the android build, use the below commands
 
 ```sh
 export LILV_TERMUX_LIB=$(pwd)/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib
 ```
 
-### Add the lib target (if removed)
+### Add the lib target (if removed, should not be needed)
 
 ```toml
 [lib]
