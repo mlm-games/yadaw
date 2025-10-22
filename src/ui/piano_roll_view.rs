@@ -110,7 +110,7 @@ impl PianoRollView {
                 let lane_rect = egui::Rect::from_min_size(
                     egui::pos2(roll_rect.left(), lane_top),
                     egui::vec2(total_w, self.velocity_lane_height),
-                );
+                ); // Position velocity lane properly below piano roll
 
                 ui.scope_builder(
                     egui::UiBuilder::new()
