@@ -17,6 +17,7 @@ pub mod level_meter;
 pub mod lv2_plugin_host;
 pub mod messages;
 pub mod metering;
+pub mod midi_import;
 pub mod midi_input;
 pub mod midi_utils;
 pub mod mixer;

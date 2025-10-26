@@ -1715,15 +1715,15 @@ impl ImportAudioDialog {
         let fd = FileDialog::new()
             .title("Import Audio")
             .add_file_filter_extensions(
-                "Audio Files",
-                ["wav", "mp3", "flac", "ogg", "m4a", "aac"].to_vec(),
+                "Audio/MIDI Files",
+                ["wav", "mp3", "flac", "ogg", "m4a", "aac", "mid", "midi"].to_vec(),
             )
             .add_file_filter_extensions("All Files", ["*"].to_vec());
         Self { fd, opened: false }
     }
 
     pub fn open(&mut self) {
-        self.fd.pick_multiple(); // precise 0.11 API for multi-select
+        self.fd.pick_multiple(); // 0.11 API for multi-select
         self.opened = true;
     }
 
@@ -1735,23 +1735,63 @@ impl ImportAudioDialog {
         if let Some(paths) = self.fd.take_picked_multiple() {
             app.push_undo();
             let bpm = app.audio_state.bpm.load();
+
             for path in paths {
-                crate::audio_import::import_audio_file(&path, bpm)
-                    .map_err(|e| common::audio_import_failed(&path, e))
-                    .map(|clip| {
-                        let mut state = app.state.lock().unwrap();
-                        if let Some(track) = state.tracks.get_mut(&app.selected_track) {
-                            if !track.is_midi {
-                                track.audio_clips.push(clip);
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                if ext == "mid" || ext == "midi" {
+                    // MIDI import -> requires MIDI track
+                    let is_midi_track = {
+                        let state = app.state.lock().unwrap();
+                        state.tracks.get(&app.selected_track).map(|t| t.is_midi).unwrap_or(false)
+                    };
+
+                    if !is_midi_track {
+                        app.dialogs.show_warning("Cannot import MIDI into an audio track. Select a MIDI track first.");
+                        continue;
+                    }
+
+                    match crate::midi_import::import_midi_file(&path, bpm) {
+                        Ok(mut clip) => {
+                            let mut state = app.state.lock().unwrap();
+                            if let Some(track) = state.tracks.get_mut(&app.selected_track) {
+                                track.midi_clips.push(clip);
                                 state.ensure_ids();
-                            } else {
-                                app.dialogs
-                                    .show_warning("Cannot import audio to MIDI track");
                             }
                         }
-                    })
-                    .notify_user(&mut app.dialogs);
+                        Err(e) => {
+                            app.dialogs.show_error(&format!("Failed to import MIDI {}: {}", path.display(), e));
+                        }
+                    }
+                } else {
+                    // Audio import -> requires Audio track
+                    let is_audio_track = {
+                        let state = app.state.lock().unwrap();
+                        state.tracks.get(&app.selected_track).map(|t| !t.is_midi).unwrap_or(false)
+                    };
+
+                    if !is_audio_track {
+                        app.dialogs.show_warning("Cannot import audio into a MIDI track. Select an audio track first.");
+                        continue;
+                    }
+
+                    crate::audio_import::import_audio_file(&path, bpm)
+                        .map_err(|e| crate::error::common::audio_import_failed(&path, e))
+                        .map(|clip| {
+                            let mut state = app.state.lock().unwrap();
+                            if let Some(track) = state.tracks.get_mut(&app.selected_track) {
+                                track.audio_clips.push(clip);
+                                state.ensure_ids();
+                            }
+                        })
+                        .notify_user(&mut app.dialogs);
+                }
             }
+
             self.opened = false;
         }
     }
