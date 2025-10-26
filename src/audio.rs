@@ -76,6 +76,7 @@ struct TrackProcessor {
     last_block_end_samples: f64,
     plugin_active_notes: Vec<(u8, u8)>,
     automation_sample_buffers: HashMap<String, Vec<f32>>,
+    pending_note_offs: Vec<(u8 /*ch*/, u8 /*key*/, f64 /*abs_beat*/)>,
 }
 
 impl TrackProcessor {
@@ -96,6 +97,7 @@ impl TrackProcessor {
             last_block_end_samples: 0.0,
             plugin_active_notes: Vec::new(),
             automation_sample_buffers: HashMap::new(),
+            pending_note_offs: Vec::new(),
         };
         s.ensure_channels(2);
         s
@@ -1411,6 +1413,7 @@ fn build_block_midi_events(
     _loop_end: f64,
     transport_jump: bool,
     plugin_active_notes: &mut Vec<(u8, u8)>,
+    pending_note_offs: &mut Vec<(u8, u8, f64)>,
 ) -> Vec<(u8, u8, u8, i64)> {
     let conv = TimeConverter::new(sample_rate as f32, bpm);
 
@@ -1420,7 +1423,8 @@ fn build_block_midi_events(
     let clip_start = clip.start_beat;
     let clip_end = clip.start_beat + clip.length_beats.max(0.0);
 
-    if block_end_beat <= clip_start || block_start_beat >= clip_end {
+    let intersects_clip_window = !(block_end_beat <= clip_start || block_start_beat >= clip_end);
+    if !intersects_clip_window && !transport_jump {
         return Vec::new();
     }
 
@@ -1457,9 +1461,11 @@ fn build_block_midi_events(
 
             for (s_local, e_local) in segs {
                 let s_raw = rep_off + s_local;
-                let e_raw = (rep_off + e_local).min(rep_end);
 
-                if e_raw <= block_start_beat || s_raw >= block_end_beat {
+                let e_raw_full = rep_off + e_local;
+                let e_raw_clamped = e_raw_full.min(rep_end);
+
+                if e_raw_full <= block_start_beat || s_raw >= block_end_beat {
                     continue;
                 }
 
@@ -1467,20 +1473,27 @@ fn build_block_midi_events(
                 let vel = (n.velocity as i16 + clip.velocity_offset as i16).clamp(1, 127) as u8;
 
                 let s_q = quantize_beat(s_raw, clip);
-                let e_q = quantize_beat(e_raw, clip).max(s_q + 1e-6);
+                let e_q_full = quantize_beat(e_raw_full, clip).max(s_q + 1e-6);
+                let e_q_clamped = quantize_beat(e_raw_clamped, clip).max(s_q + 1e-6);
 
                 let start_frame = conv.beats_to_samples(s_q - block_start_beat).round() as i64;
-                let end_frame = conv.beats_to_samples(e_q - block_start_beat).round() as i64;
-
-                if transport_jump && s_q < block_start_beat && e_q > block_start_beat {
-                    events.push((0x90, pitch, vel, 0));
-                }
-
                 if (0..frames as i64).contains(&start_frame) {
                     events.push((0x90, pitch, vel, start_frame));
+                    if e_q_full > block_end_beat {
+                        pending_note_offs.push((0 /*ch*/, pitch, e_q_full));
+                    }
                 }
-                if (0..frames as i64).contains(&end_frame) {
-                    events.push((0x80, pitch, 0, end_frame));
+                let end_frame_full =
+                    conv.beats_to_samples(e_q_full - block_start_beat).round() as i64;
+                if (0..frames as i64).contains(&end_frame_full) {
+                    events.push((0x80, pitch, 0, end_frame_full));
+                }
+                if transport_jump && s_q < block_start_beat && e_q_full > block_start_beat {
+                    events.push((0x90, pitch, vel, 0));
+                    // beyond this block
+                    if e_q_full > block_end_beat {
+                        pending_note_offs.push((0 /*ch*/, pitch, e_q_full));
+                    }
                 }
             }
         }
@@ -1558,6 +1571,27 @@ fn process_track_plugins(
     }
 
     if track.is_midi {
+        let conv = TimeConverter::new(sample_rate as f32, bpm);
+        let block_start_beat = conv.samples_to_beats(block_start_samples);
+        let block_end_beat = conv.samples_to_beats(block_start_samples + num_frames as f64);
+
+        // Emit pending note-offs that fall inside this block
+        let mut to_keep = Vec::with_capacity(processor.pending_note_offs.len());
+        for &(ch, key, abs_beat) in &processor.pending_note_offs {
+            if abs_beat >= block_start_beat && abs_beat < block_end_beat {
+                let tf = conv.beats_to_samples(abs_beat - block_start_beat).round() as i64;
+                all_midi_events.push(MidiEvent {
+                    status: 0x80 | (ch as u8),
+                    data1: key,
+                    data2: 0,
+                    time_frames: tf,
+                });
+            } else {
+                to_keep.push((ch, key, abs_beat));
+            }
+        }
+        processor.pending_note_offs = to_keep;
+
         let contiguous =
             (processor.last_block_end_samples - block_start_samples).abs() <= f64::EPSILON;
         let transport_jump = !contiguous;
@@ -1573,6 +1607,7 @@ fn process_track_plugins(
                 loop_end_beats,
                 transport_jump,
                 &mut processor.plugin_active_notes,
+                &mut processor.pending_note_offs,
             );
             all_midi_events.extend(clip_events.into_iter().map(|(st, d1, d2, t)| MidiEvent {
                 status: st,

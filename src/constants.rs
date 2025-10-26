@@ -68,10 +68,11 @@ pub const PROJECT_EXTENSION: &str = "yadaw";
 pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg"];
 
 // Others
-pub const MIDI_TIMING_SAMPLE_RATE: f32 = 44100.0; // Might need to change later
+pub const MIDI_TIMING_SAMPLE_RATE: f32 = 44100.0; // Might need to be changable later
 pub const DEBUG_PLUGIN_AUDIO: bool = cfg!(debug_assertions);
 
-pub const DEFAULT_MIN_PROJECT_BEATS: f64 = 64.0;
-pub const DEFAULT_MIDI_CLIP_LEN: f64 = 64.0;
+pub const DEFAULT_MIN_PROJECT_BEATS: f64 = 64.0 * 10.0;
+pub const DEFAULT_MIDI_CLIP_LEN: f64 = 64.0 * 10.0;
 pub const DEFAULT_LOOP_LEN: f64 = 4.0;
 pub const MAGNETIC_SNAP_THRESHOLD: f64 = 0.5; // 0.5 beats
+pub const DEFAULT_NOTE_LENGTH_BEATS: f64 = 0.25;

@@ -1,7 +1,7 @@
 use std::vec;
 
 use crate::{
-    constants::PIANO_KEY_WIDTH,
+    constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_NOTE_LENGTH_BEATS, PIANO_KEY_WIDTH},
     model::{MidiClip, MidiNote},
 };
 use eframe::egui;
@@ -472,7 +472,7 @@ impl PianoRoll {
                 let grid_len = if self.grid_snap > 0.0 {
                     self.grid_snap as f64
                 } else {
-                    0.25f64
+                    DEFAULT_NOTE_LENGTH_BEATS
                 };
                 let use_dur = if preferred_duration > 0.0 {
                     preferred_duration
