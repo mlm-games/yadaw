@@ -188,7 +188,6 @@ impl PianoRoll {
                     is_duplicating: alt_held, // The flag is set here
                 };
             } else {
-                // ... (empty space click logic unchanged)
                 if ui.input(|i| i.modifiers.shift) {
                     self.interaction_state = InteractionState::SelectionBox { start_pos: pos };
                 } else if !ui.input(|i| i.modifiers.ctrl) {

@@ -102,6 +102,7 @@ impl TimelineView {
 
         egui::ScrollArea::both()
             .auto_shrink([false, false])
+            .scroll_source(ScrollSource::ALL)
             .show(ui, |ui| {
                 self.draw_timeline(ui, app);
             });

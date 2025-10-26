@@ -98,7 +98,9 @@ impl PianoRollView {
                 },
             );
 
-            self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
+            if !self.drag_in_progress {
+                self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
+            }
 
             // Velocity lane
             if self.show_velocity_lane {
@@ -142,7 +144,9 @@ impl PianoRollView {
                     }
                 }
 
-                self.handle_touch_pan_zoom(ui.ctx(), lane_rect, "vel");
+                if !self.drag_in_progress {
+                    self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
+                }
             }
         });
     }
@@ -704,6 +708,14 @@ impl PianoRollView {
                 })
                 .collect()
         });
+
+        if points.len() < 2 {
+            ctx.memory_mut(|m| {
+                m.data.remove::<egui::Pos2>(id_centroid);
+                m.data.remove::<f32>(id_dist);
+            });
+            return;
+        }
 
         if points.len() >= 2 {
             let centroid = egui::pos2(
