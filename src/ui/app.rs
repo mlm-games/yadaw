@@ -1508,12 +1508,6 @@ impl YadawApp {
         let state = self.state.lock().unwrap();
         state.tracks.get(&track_id).cloned()
     }
-
-    fn ctx(&self) -> &egui::Context {
-        // This would need to be passed in or stored
-        // For now, return a placeholder
-        todo!("Context should be passed to methods that need it")
-    }
 }
 
 impl eframe::App for YadawApp {

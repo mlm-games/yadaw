@@ -17,7 +17,6 @@ pub struct PianoRoll {
     interaction_state: InteractionState,
     hover_note: Option<usize>,
     hover_edge: Option<ResizeEdge>,
-    note_clipboard: Option<Vec<MidiNote>>,
 }
 
 impl Default for PianoRoll {
@@ -33,7 +32,6 @@ impl Default for PianoRoll {
             hover_note: None,
             interaction_state: InteractionState::Idle,
             hover_edge: None,
-            note_clipboard: None,
         }
     }
 }

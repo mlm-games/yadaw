@@ -16,8 +16,6 @@ pub struct TracksPanel {
     cached_plugin_chains: HashMap<u64, (u64, Vec<PluginDescriptor>)>,
 }
 
-static EMPTY_PLUGIN_CHAIN: Vec<PluginDescriptor> = Vec::new();
-
 impl TracksPanel {
     pub fn new() -> Self {
         Self {
@@ -34,27 +32,6 @@ impl TracksPanel {
             let samples = [left.max(right)];
             meter.update(&samples, 1.0 / 60.0);
         }
-    }
-
-    fn get_plugin_chain(&mut self, track_id: u64, state: &AppState) -> &Vec<PluginDescriptor> {
-        let track = match state.tracks.get(&track_id) {
-            Some(t) => t,
-            None => return &EMPTY_PLUGIN_CHAIN,
-        };
-
-        let generation = track.plugin_chain.len() as u64;
-
-        let entry = self
-            .cached_plugin_chains
-            .entry(track_id)
-            .or_insert_with(|| (generation, track.plugin_chain.clone()));
-
-        if entry.0 != generation {
-            entry.0 = generation;
-            entry.1 = track.plugin_chain.clone();
-        }
-
-        &entry.1
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
