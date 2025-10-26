@@ -26,6 +26,7 @@ pub mod performance;
 pub mod plugin;
 pub mod plugin_facade;
 pub mod plugin_host;
+pub mod presets;
 pub mod project;
 pub mod project_manager;
 pub mod time_utils;

@@ -68,3 +68,24 @@ pub fn plugins_dir() -> PathBuf {
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
+
+#[cfg(target_os = "android")]
+pub fn presets_dir() -> std::path::PathBuf {
+    let base = std::path::Path::new("/data/data/com.yadaw.app/files");
+    let dir = base.join("presets");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn presets_dir() -> std::path::PathBuf {
+    if let Some(dirs) = directories::ProjectDirs::from("com", "yadaw", "yadaw") {
+        let dir = dirs.config_dir().join("presets");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    } else {
+        let dir = std::path::PathBuf::from("./presets");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+}

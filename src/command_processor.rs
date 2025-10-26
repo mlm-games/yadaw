@@ -418,7 +418,117 @@ fn process_command(
             send_graph_snapshot_locked(&app_state.lock().unwrap(), snapshot_tx);
         }
 
-        AudioCommand::LoadPluginPreset(_, _, _) | AudioCommand::SavePluginPreset(_, _, _) => {}
+        AudioCommand::SavePluginPreset(track_id, plugin_idx, name) => {
+            use crate::presets::{PluginPreset, save_preset};
+            let state = app_state.lock().unwrap();
+
+            let (uri, backend, params_map) = if let Some(track) = state.tracks.get(track_id) {
+                if *plugin_idx < track.plugin_chain.len() {
+                    let desc = &track.plugin_chain[*plugin_idx];
+                    (desc.uri.clone(), desc.backend, desc.params.clone())
+                } else {
+                    drop(state);
+                    let _ = ui_tx.send(UIUpdate::Warning(format!(
+                        "Invalid plugin index {} on track {}",
+                        plugin_idx, track_id
+                    )));
+                    return;
+                }
+            } else {
+                drop(state);
+                let _ = ui_tx.send(UIUpdate::Warning(format!("Track {} not found", track_id)));
+                return;
+            };
+
+            let preset = PluginPreset {
+                uri: uri.clone(),
+                backend,
+                name: name.clone(),
+                params: params_map,
+            };
+
+            match save_preset(&preset) {
+                Ok(_) => {
+                    let _ = ui_tx.send(UIUpdate::Info(format!(
+                        "Saved preset '{}' for {}",
+                        name, uri
+                    )));
+                }
+                Err(e) => {
+                    let _ = ui_tx.send(UIUpdate::Error(format!(
+                        "Failed to save preset '{}': {}",
+                        name, e
+                    )));
+                }
+            }
+        }
+
+        AudioCommand::LoadPluginPreset(track_id, plugin_idx, name) => {
+            use crate::presets::load_preset;
+
+            // Push undo before modifications
+            {
+                let snapshot = app_state.lock().unwrap().snapshot();
+                let _ = ui_tx.send(UIUpdate::PushUndo(snapshot));
+            }
+
+            let (uri, plugin_id, params_to_update) = {
+                let mut state = app_state.lock().unwrap();
+                let (uri, plugin_id) = if let Some(track) = state.tracks.get_mut(track_id) {
+                    if *plugin_idx < track.plugin_chain.len() {
+                        let desc = &track.plugin_chain[*plugin_idx];
+                        (desc.uri.clone(), desc.id)
+                    } else {
+                        let _ = ui_tx.send(UIUpdate::Warning(format!(
+                            "Invalid plugin index {} on track {}",
+                            plugin_idx, track_id
+                        )));
+                        return;
+                    }
+                } else {
+                    let _ = ui_tx.send(UIUpdate::Warning(format!("Track {} not found", track_id)));
+                    return;
+                };
+
+                // Load preset file
+                let preset = match load_preset(&uri, name) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = ui_tx.send(UIUpdate::Error(format!(
+                            "Failed to load preset '{}': {}",
+                            name, e
+                        )));
+                        return;
+                    }
+                };
+
+                // Apply to AppState’s descriptor params (only known params are updated)
+                if let Some(track) = state.tracks.get_mut(track_id) {
+                    if let Some(desc) = track.plugin_chain.get_mut(*plugin_idx) {
+                        for (k, v) in &preset.params {
+                            desc.params.insert(k.clone(), *v);
+                        }
+                        // Store preset name (optional)
+                        desc.preset_name = Some(name.clone());
+                    }
+                }
+
+                // Collect params to send to RT thread
+                let params_to_update = preset.params.clone();
+                (uri, plugin_id, params_to_update)
+            };
+
+            // Send RT param updates
+            for (param_name, value) in params_to_update {
+                let _ = realtime_tx.send(RealtimeCommand::UpdatePluginParam(
+                    *track_id, plugin_id, param_name, value,
+                ));
+            }
+
+            // Refresh audio graph snapshot so UI picks up values
+            let st = app_state.lock().unwrap();
+            send_graph_snapshot_locked(&st, snapshot_tx);
+        }
 
         AudioCommand::SetLoopEnabled(enabled) => {
             audio_state.loop_enabled.store(*enabled, Ordering::Relaxed);

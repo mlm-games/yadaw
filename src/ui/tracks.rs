@@ -455,15 +455,52 @@ impl TracksPanel {
                                 bypass_local,
                             ));
                         }
-                        if ui.small_button("✕").clicked() {
+                        if ui.small_button("✕ (Remove)").clicked() {
                             plugin_to_remove = Some(plugin_id);
                         }
-                        if plugin_idx > 0 && ui.small_button("▲").clicked() {
+                        if plugin_idx > 0 && ui.small_button("▲ (Up)").clicked() {
                             move_action = Some((plugin_idx, plugin_idx - 1));
                         }
-                        if plugin_idx < chain_len - 1 && ui.small_button("▼").clicked() {
+                        if plugin_idx < chain_len - 1 && ui.small_button("▼ (Down)").clicked() {
                             move_action = Some((plugin_idx, plugin_idx + 1));
                         }
+                    });
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.menu_button("Presets ▾", |ui| {
+                            // Save snapshot (timestamped name)
+                            if ui.button("Save Snapshot").clicked() {
+                                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+                                let preset_name = format!("Snapshot_{}", ts);
+                                let _ = app.command_tx.send(
+                                    crate::messages::AudioCommand::SavePluginPreset(
+                                        track_id,
+                                        plugin_idx,
+                                        preset_name,
+                                    ),
+                                );
+                                ui.close();
+                            }
+
+                            // List existing presets for this plugin URI
+                            let presets = crate::presets::list_presets_for(&plugin_uri);
+                            if presets.is_empty() {
+                                ui.label(egui::RichText::new("(no presets)").weak());
+                            } else {
+                                ui.separator();
+                                for pname in presets {
+                                    if ui.button(&pname).clicked() {
+                                        let _ = app.command_tx.send(
+                                            crate::messages::AudioCommand::LoadPluginPreset(
+                                                track_id, plugin_idx, pname,
+                                            ),
+                                        );
+                                        ui.close();
+                                    }
+                                }
+                            }
+                        });
                     });
 
                     // Draw parameters
