@@ -14,6 +14,12 @@ pub struct TracksPanel {
     show_mixer_strip: bool,
     show_automation_buttons: bool,
     cached_plugin_chains: HashMap<u64, (u64, Vec<PluginDescriptor>)>,
+
+    dnd_dragging_track: Option<u64>,
+    dnd_dragging_from_idx: Option<usize>,
+    dnd_drop_target_idx: Option<usize>,
+    dnd_row_rects: Vec<(u64, egui::Rect, usize)>, // (track_id, header_rect, index)
+    dnd_pointer_offset: egui::Vec2,
 }
 
 impl TracksPanel {
@@ -23,6 +29,12 @@ impl TracksPanel {
             show_mixer_strip: true,
             show_automation_buttons: true,
             cached_plugin_chains: HashMap::new(),
+
+            dnd_dragging_track: None,
+            dnd_dragging_from_idx: None,
+            dnd_drop_target_idx: None,
+            dnd_row_rects: Vec::new(),
+            dnd_pointer_offset: egui::Vec2::ZERO,
         }
     }
 
@@ -131,7 +143,31 @@ impl TracksPanel {
             if header_resp.clicked() {
                 app.selected_track = track_id;
             }
+
+            // record the header rect and logical index for DnD
+            let idx_in_order = {
+                let st = app.state.lock().unwrap();
+                st.track_order
+                    .iter()
+                    .position(|&id| id == track_id)
+                    .unwrap_or(0)
+            };
+            self.dnd_row_rects
+                .push((track_id, header_resp.rect, idx_in_order));
+
+            // start dragging from header
+            if header_resp.drag_started() && self.dnd_dragging_track.is_none() {
+                self.dnd_dragging_track = Some(track_id);
+                self.dnd_dragging_from_idx = Some(idx_in_order);
+                if let Some(pointer) = header_resp.interact_pointer_pos() {
+                    self.dnd_pointer_offset = pointer - header_resp.rect.left_top();
+                } else {
+                    self.dnd_pointer_offset = egui::Vec2::ZERO;
+                }
+            }
         }
+
+        self.handle_track_dnd(ui, app);
 
         // Apply actions after the main loop to avoid borrow issues
         for (action, track_id) in track_actions {
@@ -227,12 +263,20 @@ impl TracksPanel {
             });
         });
 
-        // Make the entire header clickable by adding an overlay response on the frame rect
         let rect = inner.response.rect;
         let id = ui.id().with(("track_header", track_id));
-        let clickable = ui.interact(rect, id, egui::Sense::click());
 
-        // Optional: selection background highlight (painted after content; acceptable in egui)
+        // Reserve a right edge area so it stays clickable
+        let reserved_w = 48.0;
+        let drag_rect = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2((rect.right() - reserved_w).max(rect.left()), rect.bottom()),
+        );
+
+        // Drag only on the left area
+        let drag_resp = ui.interact(drag_rect, id, egui::Sense::click_and_drag());
+
+        // highlight around header
         if is_selected {
             ui.painter().rect_stroke(
                 rect.shrink(1.0),
@@ -242,8 +286,8 @@ impl TracksPanel {
             );
         }
 
-        // Combine the clickable overlay with the inner response so hover/tooltip still work
-        clickable.union(inner.response)
+        // combined response
+        drag_resp.union(inner.response)
     }
 
     fn draw_mixer_strip(&mut self, ui: &mut egui::Ui, track_id: u64, app: &super::app::YadawApp) {
@@ -614,6 +658,109 @@ impl TracksPanel {
                     ui.label("Default Input");
                 });
             }
+        }
+    }
+
+    fn handle_track_dnd(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
+        let Some(drag_id) = self.dnd_dragging_track else {
+            return;
+        };
+
+        // Compute drop target index using pointer Y against row centers
+        let pointer = match ui.ctx().input(|i| i.pointer.interact_pos()) {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Sort rows by index to get visual order
+        let mut rows = self.dnd_row_rects.clone();
+        rows.sort_by_key(|(_, _, idx)| *idx);
+
+        let mut target_idx = rows.len();
+        for (i, (_tid, rect, _idx)) in rows.iter().enumerate() {
+            let center_y = rect.center().y;
+            if pointer.y < center_y {
+                target_idx = i;
+                break;
+            }
+        }
+        self.dnd_drop_target_idx = Some(target_idx);
+
+        // Paint insertion line and ghost
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tracks_dnd_layer"));
+        let painter = ui.ctx().layer_painter(layer);
+
+        // draw insertion line spanning header width
+        if let Some((_tid, any_rect, _)) = rows.first() {
+            let x0 = any_rect.left();
+            let x1 = any_rect.right();
+            let y = if target_idx == rows.len() {
+                // after last -> line below last row
+                rows.last().unwrap().1.bottom()
+            } else {
+                rows[target_idx].1.top()
+            };
+            painter.line_segment(
+                [egui::pos2(x0, y), egui::pos2(x1, y)],
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)),
+            );
+        }
+
+        // ghost: show semi-transparent preview following pointer, using dragged row size
+        if let Some((_, src_rect, _)) = rows.iter().find(|(tid, _, _)| *tid == drag_id) {
+            let pos = pointer - self.dnd_pointer_offset;
+            let ghost_rect = egui::Rect::from_min_size(pos, src_rect.size());
+            painter.rect_filled(
+                ghost_rect,
+                4.0,
+                egui::Color32::from_rgba_unmultiplied(90, 140, 255, 60),
+            );
+            painter.rect_stroke(
+                ghost_rect,
+                4.0,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
+                egui::StrokeKind::Inside,
+            );
+        }
+
+        // Drop
+        let released = ui.ctx().input(|i| i.pointer.any_released());
+        if released {
+            let from = self.dnd_dragging_from_idx.unwrap_or(0);
+            let to = self.dnd_drop_target_idx.unwrap_or(from);
+
+            // Resolve track ids by order
+            let (ids, len) = {
+                let st = app.state.lock().unwrap();
+                (st.track_order.clone(), st.track_order.len())
+            };
+
+            if len >= 2 && from < len {
+                let mut new_to = to.min(len);
+                // When dragging downward, removing first shifts indices
+                if new_to > from {
+                    new_to = new_to.saturating_sub(1);
+                }
+                if new_to != from && new_to < len {
+                    // Apply reorder in AppState
+                    use crate::track_manager::move_track;
+                    {
+                        let mut st = app.state.lock().unwrap();
+                        move_track(&mut st.track_order, from, new_to);
+                    }
+                }
+
+                app.selected_track = drag_id;
+                let _ = app
+                    .command_tx
+                    .send(crate::messages::AudioCommand::UpdateTracks);
+            }
+
+            // Clear DnD state
+            self.dnd_dragging_track = None;
+            self.dnd_dragging_from_idx = None;
+            self.dnd_drop_target_idx = None;
+            self.dnd_pointer_offset = egui::Vec2::ZERO;
         }
     }
 

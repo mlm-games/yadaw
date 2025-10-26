@@ -7,7 +7,7 @@ use crate::error::{ResultExt, UserNotification, common};
 use crate::input::actions::{ActionContext, AppAction};
 use crate::input::InputManager;
 use crate::messages::{AudioCommand, ExportState};
-use crate::model::plugin_api::BackendKind;
+use crate::model::plugin_api::{BackendKind, HostConfig};
 use crate::plugin::categorize_plugin;
 use crate::ui::theme;
 use crate::input::shortcuts::{Keybind, KeyCode};
@@ -1157,6 +1157,11 @@ pub struct ShortcutsEditorDialog {
     capture_buffer: Option<Keybind>,
     filter_context: Option<ActionContext>,
     search_query: String,
+
+    import_fd: egui_file_dialog::FileDialog,
+    export_fd: egui_file_dialog::FileDialog,
+    import_opened: bool,
+    export_opened: bool,
 }
 
 impl ShortcutsEditorDialog {
@@ -1167,6 +1172,16 @@ impl ShortcutsEditorDialog {
             capture_buffer: None,
             filter_context: None,
             search_query: String::new(),
+            import_fd: egui_file_dialog::FileDialog::new()
+                .title("Import Shortcuts")
+                .add_file_filter_extensions("JSON", ["json"].to_vec())
+                .add_file_filter_extensions("All Files", ["*"].to_vec()),
+            export_fd: egui_file_dialog::FileDialog::new()
+                .title("Export Shortcuts")
+                .add_file_filter_extensions("JSON", ["json"].to_vec())
+                .allow_file_overwrite(true),
+            import_opened: false,
+            export_opened: false,
         }
     }
     
@@ -1189,6 +1204,27 @@ impl ShortcutsEditorDialog {
             });
         
         self.open = open;
+
+        if self.import_opened {
+            self.import_fd.update(ctx);
+            if let Some(path) = self.import_fd.take_picked() {
+                if let Err(e) = input_mgr.load_shortcuts(&path) {
+                    //TODO: app.dialogs.show_warning(&format!("Failed to import: {}", e));
+                    eprintln!("Shortcuts import failed: {}", e);
+                }
+                self.import_opened = false;
+            }
+        }
+        if self.export_opened {
+            self.export_fd.update(ctx);
+            if let Some(path) = self.export_fd.take_picked() {
+                if let Err(e) = input_mgr.save_shortcuts(&path) {
+                    eprintln!("Shortcuts export failed: {}", e);
+                }
+                self.export_opened = false;
+            }
+        }
+
     }
     
     fn draw_content(&mut self, ui: &mut egui::Ui, input_mgr: &mut InputManager) {
@@ -1266,11 +1302,12 @@ impl ShortcutsEditorDialog {
             }
             
             if ui.button("Import...").clicked() {
-                // TODO: File dialog
+                self.import_fd.pick_file();
+                self.import_opened = true;
             }
-            
             if ui.button("Export...").clicked() {
-                // TODO: File dialog
+                self.export_fd.save_file();
+                self.export_opened = true;
             }
             
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1677,7 +1714,19 @@ impl PluginManagerDialog {
                 ui.separator();
 
                 if ui.button("Scan for Plugins").clicked() {
-                    // Trigger plugin scan
+                    let host_cfg = HostConfig {
+                        sample_rate: app.audio_state.sample_rate.load() as f64,
+                        max_block: crate::constants::MAX_BUFFER_SIZE,
+                    };
+                    match crate::plugin_facade::HostFacade::new(host_cfg).and_then(|f| f.scan()) {
+                        Ok(list) => {
+                            app.available_plugins = list.into_iter().map(|p| (p.uri.clone(), p)).collect();
+                            app.dialogs.show_message("Plugin scan complete.");
+                        }
+                        Err(e) => {
+                            app.dialogs.show_warning(&format!("Plugin scan failed: {}", e));
+                        }
+                    }
                 }
 
                 ui.separator();

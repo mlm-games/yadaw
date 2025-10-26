@@ -1155,7 +1155,7 @@ fn process_command(
     }
 }
 
-fn send_graph_snapshot_locked(state: &AppState, snapshot_tx: &Sender<AudioGraphSnapshot>) {
+pub fn send_graph_snapshot_locked(state: &AppState, snapshot_tx: &Sender<AudioGraphSnapshot>) {
     if snapshot_tx.is_full() {
         log::trace!("Skipping snapshot send, audio thread is busy.");
         return;
