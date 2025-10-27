@@ -1,0 +1,7 @@
+- try drag logic condns
+- track drag n drop, make tracks settings button clickable
+- add midi importing functionality
+- Add presets support
+- rm redundant stuff
+- extend midi clip length, add new test file, test icon
+- fix icon link
