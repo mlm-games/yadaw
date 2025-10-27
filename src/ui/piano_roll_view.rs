@@ -98,9 +98,7 @@ impl PianoRollView {
                 },
             );
 
-            if !self.drag_in_progress {
-                self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
-            }
+            self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
 
             // Velocity lane
             if self.show_velocity_lane {
@@ -144,9 +142,7 @@ impl PianoRollView {
                     }
                 }
 
-                if !self.drag_in_progress {
-                    self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
-                }
+                self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
             }
         });
     }

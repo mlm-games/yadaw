@@ -156,7 +156,6 @@ impl PianoRoll {
                     } else {
                         vec![hover_idx]
                     };
-
                     self.interaction_state = InteractionState::ResizingNotes {
                         note_indices: indices_to_resize,
                         edge,
@@ -675,17 +674,18 @@ impl PianoRoll {
 
         // Scroll/zoom
         if response.hovered() {
-            let scroll_delta = ui.input(|i| i.raw_scroll_delta);
-            if ui.input(|i| i.modifiers.ctrl) {
-                self.zoom_x *= 1.0 + scroll_delta.y * 0.01;
-                self.zoom_x = self.zoom_x.clamp(10.0, 500.0);
-            } else {
-                self.scroll_x -= scroll_delta.x;
-                self.scroll_y -= scroll_delta.y;
-                self.scroll_x = self.scroll_x.max(0.0);
-                self.scroll_y = self
-                    .scroll_y
-                    .clamp(0.0, 127.0 * self.zoom_y - available_rect.height());
+            // Disable scroll while interacting to prevent the canvas drifting under your finger
+            let interacting = !matches!(self.interaction_state, InteractionState::Idle);
+            if !interacting {
+                let scroll_delta = ui.input(|i| i.raw_scroll_delta);
+                if ui.input(|i| i.modifiers.ctrl) {
+                    self.zoom_x *= 1.0 + scroll_delta.y * 0.01;
+                    self.zoom_x = self.zoom_x.clamp(10.0, 500.0);
+                } else {
+                    self.scroll_x = (self.scroll_x - scroll_delta.x).max(0.0);
+                    self.scroll_y = (self.scroll_y - scroll_delta.y)
+                        .clamp(0.0, 127.0 * self.zoom_y - available_rect.height());
+                }
             }
         }
 
