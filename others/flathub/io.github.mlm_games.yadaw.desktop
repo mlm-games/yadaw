@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Yadaw
+GenericName=Yadaw
+Comment=Mini daw for recording, edit and mix audio
+Exec=yadaw %F
+Icon=io.github.mlm_games.yadaw
+Terminal=false
+Categories=Audio;AudioVideo;Music;
+MimeType=audio/midi;audio/x-wav;audio/x-flac;audio/mpeg;
+StartupWMClass=Yadaw
+StartupNotify=true
