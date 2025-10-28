@@ -1309,6 +1309,7 @@ impl ShortcutsEditorDialog {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Close").clicked() {
                     self.open = false;
+                    ui.close();
                 }
             });
         });

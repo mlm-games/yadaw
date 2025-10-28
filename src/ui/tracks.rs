@@ -13,6 +13,7 @@ pub struct TracksPanel {
     track_meters: HashMap<u64, LevelMeter>,
     show_mixer_strip: bool,
     show_automation_buttons: bool,
+    show_inputs: bool,
     cached_plugin_chains: HashMap<u64, (u64, Vec<PluginDescriptor>)>,
 
     dnd_dragging_track: Option<u64>,
@@ -28,6 +29,7 @@ impl TracksPanel {
             track_meters: HashMap::new(),
             show_mixer_strip: true,
             show_automation_buttons: true,
+            show_inputs: true,
             cached_plugin_chains: HashMap::new(),
 
             dnd_dragging_track: None,
@@ -50,32 +52,12 @@ impl TracksPanel {
         ui.horizontal(|ui| {
             ui.heading("Tracks");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("⚙", |ui| {
-                    ui.label("Track Options");
-                    ui.separator();
-                    if ui.button("Rename...").clicked() {
-                        ui.close();
-                    }
-                    if ui.button("Change Color...").clicked() {
-                        ui.close();
-                    }
-                    if ui.button("Freeze Track").clicked() {
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Duplicate").clicked() {
-                        app.duplicate_selected_track();
-                        ui.close();
-                    }
-                    if ui.button("Delete").clicked() {
-                        app.delete_selected_track();
-                        ui.close();
-                    }
-                });
                 ui.toggle_value(&mut self.show_mixer_strip, "🎚")
                     .on_hover_text("Show/Hide Mixer Strip");
                 ui.toggle_value(&mut self.show_automation_buttons, "🎛")
                     .on_hover_text("Show/Hide Automation");
+                ui.toggle_value(&mut self.show_inputs, "🔣")
+                    .on_hover_text("Show/Hide Input Options");
             });
         });
 
@@ -133,7 +115,10 @@ impl TracksPanel {
                     }
 
                     self.draw_plugin_chain(ui, track_id, app);
-                    self.draw_io_section(ui, track_id, app);
+
+                    if self.show_inputs {
+                        self.draw_io_section(ui, track_id, app);
+                    }
 
                     header_resp
                 })
