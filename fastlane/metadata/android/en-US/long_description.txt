@@ -1,0 +1,1 @@
+A minimal DAW for sound design and prototyping. CLAP/LV2 hosting, runs on desktop and Android. Rust + egui. Open source (AGPL).

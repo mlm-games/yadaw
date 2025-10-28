@@ -1,0 +1,39 @@
+name: yadaw
+base: core22
+version: '9.9.9'
+summary: A minimal DAW for sound design and prototyping.
+description: |
+  A minimal DAW for sound design and prototyping. CLAP/LV2 hosting, runs on desktop and Android. Made using Rust + egui. is fully OSS (AGPL).
+
+grade: stable
+confinement: strict
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  yadaw:
+    command: yadaw
+    extensions: [gnome]
+    plugs: [home, network, removable-media, unity7]
+
+parts:
+  yadaw:
+    plugin: dump
+    source: ./builds/
+    source-type: local
+    stage-packages:
+      - libglu1-mesa
+      - libxcursor1
+      - libxinerama1
+      - libxrandr2
+      - libxi6
+      - libpulse0
+    override-build: |
+      snapcraftctl build
+      chmod +x $SNAPCRAFT_PART_INSTALL/yadaw
+
+layout:
+  /usr/share/yadaw:
+    bind: $SNAP/usr/share/yadaw
