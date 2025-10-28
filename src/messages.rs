@@ -175,6 +175,26 @@ pub enum AudioCommand {
     SetTrackMidiInput(u64, Option<String>),
     MidiInput(RawMidiMessage),
     RebuildAllRtChains,
+    DuplicateAndMoveMidiClip {
+        clip_id: u64,
+        dest_track_id: u64,
+        new_start: f64,
+    },
+    DuplicateAndMoveAudioClip {
+        clip_id: u64,
+        dest_track_id: u64,
+        new_start: f64,
+    },
+    MoveMidiClipToTrack {
+        clip_id: u64,
+        dest_track_id: u64,
+        new_start: f64,
+    },
+    MoveAudioClipToTrack {
+        clip_id: u64,
+        dest_track_id: u64,
+        new_start: f64,
+    },
 }
 
 #[derive(Debug, Clone)]

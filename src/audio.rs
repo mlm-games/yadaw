@@ -30,7 +30,6 @@ use std::time::Instant;
 use crate::model::plugin_api::PluginInstance as UnifiedInstance;
 
 type PluginInstanceHandle = (usize, u64);
-type PluginMap = DashMap<PluginInstanceHandle, Box<dyn UnifiedInstance>>;
 
 static PLUGIN_STORE: Lazy<DashMap<PluginInstanceHandle, Box<dyn UnifiedInstance>>> =
     Lazy::new(DashMap::new);
@@ -714,31 +713,6 @@ impl AudioEngine {
             }
             _ => {}
         }
-    }
-
-    fn update_track_processors_without_plugins(&mut self, tracks: &[TrackSnapshot]) {
-        // Ensure we have processors and strips for all tracks
-        for track in tracks {
-            self.track_processors
-                .entry(track.track_id)
-                .or_insert_with(|| TrackProcessor::new(track.track_id));
-
-            let strip = self
-                .channel_strips
-                .entry(track.track_id)
-                .or_insert_with(ChannelStrip::default);
-
-            strip.gain = track.volume;
-            strip.pan = track.pan;
-            strip.mute = track.muted;
-            strip.solo = track.solo;
-        }
-
-        // Update recording track
-        self.recording_state.recording_track = tracks
-            .iter()
-            .find(|t| t.armed && !t.is_midi)
-            .map(|t| t.track_id);
     }
 
     pub fn process_audio(

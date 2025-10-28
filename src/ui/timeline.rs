@@ -17,9 +17,24 @@ pub struct TimelineView {
     pub show_automation: bool,
     pub auto_scroll: bool,
 
+    snap_enabled: bool,
+    snap_to_grid: bool,
+    snap_to_clips: bool,
+    snap_to_loop: bool,
+    snap_px_threshold: f32, // in pixels, default ~10
+
+    // marquee
+    selection_box: Option<(egui::Pos2, egui::Pos2)>,
+
+    auto_crossfade_on_overlap: bool,
+
+    snap_preview_beat: Option<f64>,
+
+    // for drag commit and zoom
+    last_pointer_pos: Option<egui::Pos2>,
+
     timeline_interaction: Option<TimelineInteraction>,
     automation_widgets: Vec<AutomationLaneWidget>,
-
     show_clip_menu: bool,
     clip_menu_pos: egui::Pos2,
 
@@ -32,6 +47,8 @@ pub struct TimelineView {
 
     automation_hit_regions: Vec<egui::Rect>,
     last_track_blocks: Vec<(u64, egui::Rect)>,
+
+    drag_target_track: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -39,6 +56,7 @@ enum TimelineInteraction {
     DragClip {
         clip_ids_and_starts: Vec<(u64, f64)>,
         start_drag_beat: f64,
+        duplicate_on_drop: bool,
     },
     ResizeClipLeft {
         clip_id: u64,
@@ -79,12 +97,21 @@ impl TimelineView {
             show_automation: false,
             auto_scroll: true,
 
+            snap_enabled: true,
+            snap_to_grid: true,
+            snap_to_clips: true,
+            snap_to_loop: true,
+            snap_px_threshold: 10.0,
+
+            selection_box: None,
+            auto_crossfade_on_overlap: false,
+            snap_preview_beat: None,
+            last_pointer_pos: None,
+
             timeline_interaction: None,
             automation_widgets: Vec::new(),
-
             show_clip_menu: false,
             clip_menu_pos: egui::Pos2::ZERO,
-
             track_height: 80.0,
             min_track_height: 40.0,
             max_track_height: 200.0,
@@ -92,6 +119,7 @@ impl TimelineView {
             pending_clip_undo: false,
             automation_hit_regions: Vec::new(),
             last_track_blocks: Vec::new(),
+            drag_target_track: None,
         }
     }
 
@@ -143,6 +171,21 @@ impl TimelineView {
                     ui.separator();
 
                     ui.label("Snap:");
+
+                    ui.toggle_value(&mut self.snap_enabled, "On");
+                    ui.toggle_value(&mut self.snap_to_grid, "Grid");
+                    ui.toggle_value(&mut self.snap_to_clips, "Clips");
+                    ui.toggle_value(&mut self.snap_to_loop, "Loop");
+                    ui.add(
+                        egui::Slider::new(&mut self.snap_px_threshold, 4.0..=24.0)
+                            .text("Thresh px"),
+                    );
+
+                    ui.separator();
+                    ui.checkbox(
+                        &mut self.auto_crossfade_on_overlap,
+                        "Auto crossfade on overlap",
+                    );
                     egui::ComboBox::from_label("")
                         .selected_text(format!("1/{}", (1.0 / self.grid_snap) as i32))
                         .show_ui(ui, |ui| {
@@ -221,6 +264,36 @@ impl TimelineView {
             app.active_edit_target = super::app::ActiveEditTarget::Clips;
         }
 
+        // wheel zoom (Ctrl/Cmd + wheel zooms around cursor)
+        if response.hovered() {
+            let modifiers = ui.input(|i| i.modifiers);
+            let scroll = ui.input(|i| i.raw_scroll_delta);
+            if (modifiers.ctrl || modifiers.command) && scroll.y.abs() > 0.0 {
+                let anchor_x = response
+                    .hover_pos()
+                    .map(|p| p.x)
+                    .unwrap_or(response.rect.center().x);
+                let factor = if scroll.y > 0.0 { 1.1 } else { 1.0 / 1.1 };
+                self.zoom_horiz_around(response.rect, anchor_x, factor);
+            }
+        }
+
+        // Hand-pan with spacebar
+        if response.dragged() && ui.input(|i| i.key_down(egui::Key::Space)) {
+            if let Some(pos) = response.hover_pos() {
+                if let Some(last) = self.last_pointer_pos {
+                    let dx = pos.x - last.x;
+                    self.scroll_x = (self.scroll_x - dx).max(0.0);
+                }
+            }
+            // While space is down, cancel other interactions
+            self.timeline_interaction = None;
+        }
+        self.last_pointer_pos = response.hover_pos().or(self.last_pointer_pos);
+        if ui.ctx().input(|i| i.pointer.any_released()) {
+            self.last_pointer_pos = None;
+        }
+
         // Draw the grid and horizontal ruler
         let rect = response.rect;
         self.draw_grid(&painter, rect, app.state.lock().unwrap().bpm);
@@ -283,6 +356,8 @@ impl TimelineView {
 
             y_cursor += *block_h;
         }
+        self.draw_drag_ghosts(ui, app, rect);
+        self.handle_keyboard_nudge(ui, app);
 
         // Draw loop region overlay
         self.draw_loop_region(&painter, rect, app);
@@ -300,6 +375,14 @@ impl TimelineView {
                     egui::Stroke::new(2.0, crate::constants::COLOR_PLAYHEAD),
                 );
             }
+        }
+
+        if let Some(b) = self.snap_preview_beat {
+            let x = self.beat_to_x(rect, b);
+            ui.ctx().debug_painter().line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
+            );
         }
 
         if self.pending_clip_undo {
@@ -437,6 +520,51 @@ impl TimelineView {
         );
 
         self.handle_clip_interaction(response, clip.id, ui, clip_rect, app);
+
+        // Fade handles (visual + drag)
+        let handle_w = 10.0;
+        let left_handle = egui::Rect::from_min_size(
+            egui::pos2(clip_rect.left(), clip_rect.bottom() - 14.0),
+            egui::vec2(handle_w, 12.0),
+        );
+        let right_handle = egui::Rect::from_min_size(
+            egui::pos2(clip_rect.right() - handle_w, clip_rect.bottom() - 14.0),
+            egui::vec2(handle_w, 12.0),
+        );
+        ui.painter()
+            .rect_filled(left_handle, 2.0, egui::Color32::from_gray(70));
+        ui.painter()
+            .rect_filled(right_handle, 2.0, egui::Color32::from_gray(70));
+
+        let left_id = ui.id().with(("fade_in", clip.id));
+        let right_id = ui.id().with(("fade_out", clip.id));
+        let left_resp = ui.interact(left_handle, left_id, egui::Sense::click_and_drag());
+        let right_resp = ui.interact(right_handle, right_id, egui::Sense::click_and_drag());
+
+        if left_resp.dragged() {
+            if let Some(pos) = left_resp.interact_pointer_pos() {
+                let beat_at_cursor = self.x_to_beat(track_rect, pos.x);
+                let mut new_len = (beat_at_cursor - clip.start_beat).clamp(0.0, clip.length_beats);
+                let (snapped, _) =
+                    self.snap_beat(ui, track_rect, clip.start_beat + new_len, app, None);
+                new_len = (snapped - clip.start_beat).clamp(0.0, clip.length_beats);
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetAudioClipFadeIn(clip.id, Some(new_len)));
+            }
+        }
+        if right_resp.dragged() {
+            if let Some(pos) = right_resp.interact_pointer_pos() {
+                let beat_at_cursor = self.x_to_beat(track_rect, pos.x);
+                let end_beat = clip.start_beat + clip.length_beats;
+                let mut new_len = (end_beat - beat_at_cursor).clamp(0.0, clip.length_beats);
+                let (snapped, _) = self.snap_beat(ui, track_rect, end_beat - new_len, app, None);
+                new_len = (end_beat - snapped).clamp(0.0, clip.length_beats);
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::SetAudioClipFadeOut(clip.id, Some(new_len)));
+            }
+        }
     }
 
     fn draw_loop_region(
@@ -629,8 +757,12 @@ impl TimelineView {
         clip_rect: egui::Rect,
         app: &mut super::app::YadawApp,
     ) {
+        if ui.input(|i| i.key_down(egui::Key::Space)) {
+            return;
+        }
         // Select on click
-        if response.clicked() && !app.selected_clips.contains(&clip_id) {
+        if (response.clicked() || response.drag_started()) && !app.selected_clips.contains(&clip_id)
+        {
             if !response.ctx.input(|i| i.modifiers.ctrl) {
                 app.selected_clips.clear();
             }
@@ -660,6 +792,10 @@ impl TimelineView {
             response
                 .ctx
                 .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+
+        if response.dragged() && !hover_left && !hover_right {
+            response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
 
         // Begin drag/resize
@@ -769,16 +905,13 @@ impl TimelineView {
                 }
                 drop(state);
 
+                let duplicate_on_drop = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                 self.timeline_interaction = Some(TimelineInteraction::DragClip {
                     clip_ids_and_starts: clips_and_starts,
                     start_drag_beat: start_beat_under_mouse,
+                    duplicate_on_drop,
                 });
             }
-        }
-
-        // End interaction
-        if response.drag_stopped() {
-            self.timeline_interaction = None;
         }
     }
 
@@ -789,9 +922,11 @@ impl TimelineView {
         ui: &mut egui::Ui,
         app: &mut super::app::YadawApp,
     ) {
-        if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
-            if self.automation_hit_regions.iter().any(|r| r.contains(pos)) {
-                return;
+        if self.timeline_interaction.is_none() {
+            if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+                if self.automation_hit_regions.iter().any(|r| r.contains(pos)) {
+                    return;
+                }
             }
         }
 
@@ -813,6 +948,20 @@ impl TimelineView {
         };
 
         let min_len = (self.grid_snap.max(0.03125)) as f64;
+
+        // Start marquee selection when dragging over clip area (not ruler/automation)
+        if response.drag_started() && self.timeline_interaction.is_none() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if pos.y > rect.top() + ruler_h
+                    && !self.automation_hit_regions.iter().any(|r| r.contains(pos))
+                {
+                    self.timeline_interaction = Some(TimelineInteraction::SelectionBox {
+                        start_pos: pos,
+                        current_pos: pos,
+                    });
+                }
+            }
+        }
 
         // Start drag
         if ruler_resp.drag_started() && self.timeline_interaction.is_none() {
@@ -850,11 +999,87 @@ impl TimelineView {
         if response.dragged()
             && let Some(pos) = response.hover_pos()
         {
-            if self.automation_hit_regions.iter().any(|r| r.contains(pos)) {
-                return; // for the automation widget handle it
+            // let automation lanes handle themselves unless we’re already in a clip interaction
+            if self.timeline_interaction.is_none()
+                && self.automation_hit_regions.iter().any(|r| r.contains(pos))
+            {
+                return;
             }
+
             // Commands cause stuttering
             let _current_beat = beat_at(pos.x);
+
+            // Update marquee selection box visuals
+            if let Some(TimelineInteraction::SelectionBox {
+                start_pos,
+                current_pos,
+            }) = &mut self.timeline_interaction
+            {
+                *current_pos = pos;
+                let r = egui::Rect::from_two_pos(*start_pos, *current_pos);
+                let layer =
+                    egui::LayerId::new(egui::Order::Foreground, ui.id().with("tl_select_box"));
+                let painter = ui.ctx().layer_painter(layer);
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    egui::Color32::from_rgba_unmultiplied(100, 150, 255, 24),
+                );
+                painter.rect_stroke(
+                    r,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+
+            match self.timeline_interaction {
+                Some(TimelineInteraction::DragClip { .. })
+                | Some(TimelineInteraction::ResizeClipLeft { .. })
+                | Some(TimelineInteraction::ResizeClipRight { .. })
+                | Some(TimelineInteraction::SlipContent { .. }) => {
+                    self.auto_pan_during_drag(response.rect, pos.x);
+                }
+                _ => {}
+            }
+
+            // For cross-track moves
+            if matches!(
+                self.timeline_interaction,
+                Some(TimelineInteraction::DragClip { .. })
+            ) {
+                self.drag_target_track = self
+                    .last_track_blocks
+                    .iter()
+                    .find(|(_, r)| r.contains(pos))
+                    .map(|(id, _)| *id);
+                // Visual highlight
+                if let Some(tid) = self.drag_target_track {
+                    if let Some((_, block)) =
+                        self.last_track_blocks.iter().find(|(id, _)| *id == tid)
+                    {
+                        let clip_area = egui::Rect::from_min_size(
+                            block.min,
+                            egui::vec2(block.width(), self.track_height),
+                        );
+                        let layer = egui::LayerId::new(
+                            egui::Order::Foreground,
+                            ui.id().with("drag_track_hi"),
+                        );
+                        let p = ui.ctx().layer_painter(layer);
+                        p.rect_filled(
+                            clip_area,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(100, 150, 255, 24),
+                        );
+                    }
+                }
+            }
+
+            // Update snap guide preview for the current cursor
+            let candidate = self.x_to_beat(response.rect, pos.x).max(0.0);
+            let (snapped, snap_src) = self.snap_beat(ui, response.rect, candidate, app, None);
+            self.snap_preview_beat = snap_src.or(Some(snapped));
         }
 
         // END DRAG
@@ -867,10 +1092,34 @@ impl TimelineView {
                     TimelineInteraction::DragClip {
                         clip_ids_and_starts,
                         start_drag_beat,
+                        duplicate_on_drop,
                     } => {
-                        let current = beat_at(pos.x);
+                        let current = self.x_to_beat(response.rect, pos.x);
                         let mut delta = current - *start_drag_beat;
-                        delta = snap(delta, self.grid_snap);
+
+                        // Use earliest selected clip start as reference for snapping
+                        let ref_original_start = clip_ids_and_starts
+                            .iter()
+                            .map(|(_, s)| *s)
+                            .fold(f64::INFINITY, f64::min);
+                        let ref_original_start = if ref_original_start.is_finite() {
+                            ref_original_start
+                        } else {
+                            0.0
+                        };
+
+                        // Snap reference
+                        let (snapped, _snap_src) = self.snap_beat(
+                            ui,
+                            response.rect,
+                            ref_original_start + delta,
+                            app,
+                            None,
+                        );
+                        delta = snapped - ref_original_start;
+
+                        // Determine target track (if pointer over some track during drag)
+                        let target_track_id = self.drag_target_track;
 
                         let mut allow_move = true;
                         app.push_undo();
@@ -879,38 +1128,73 @@ impl TimelineView {
                         'outer: for (clip_id, original_start) in clip_ids_and_starts.iter().copied()
                         {
                             let new_start = (original_start + delta).max(0.0);
-
-                            if let Some((track, loc)) = state.find_clip(clip_id) {
-                                let new_length = match loc {
-                                    ClipLocation::Midi(idx) => track.midi_clips[idx].length_beats,
-                                    ClipLocation::Audio(idx) => track.audio_clips[idx].length_beats,
-                                };
-                                let new_end = new_start + new_length;
-
-                                for other in &track.midi_clips {
-                                    if other.id == clip_id
-                                        || clip_ids_and_starts.iter().any(|(id, _)| *id == other.id)
-                                    {
-                                        continue; // Don't check against self or other moving clips
-                                    }
-                                    let other_end = other.start_beat + other.length_beats;
-                                    if new_start < other_end && new_end > other.start_beat {
-                                        allow_move = false;
-                                        break 'outer;
-                                    }
+                            // Resolve target track: either same as source, or hovered one if compatible
+                            let (source_track, loc) = match state.find_clip(clip_id) {
+                                Some(v) => v,
+                                None => continue,
+                            };
+                            let (track_for_check, is_midi) = match loc {
+                                ClipLocation::Midi(idx) => {
+                                    let src_is_midi = true;
+                                    let tgt = if let Some(tid) = target_track_id {
+                                        if let Some(t) = state.tracks.get(&tid) {
+                                            if t.is_midi { t } else { source_track }
+                                        } else {
+                                            source_track
+                                        }
+                                    } else {
+                                        source_track
+                                    };
+                                    (tgt, src_is_midi)
                                 }
-                                // Check against other Audio clips on the same track
-                                for other in &track.audio_clips {
-                                    if other.id == clip_id
-                                        || clip_ids_and_starts.iter().any(|(id, _)| *id == other.id)
-                                    {
-                                        continue;
-                                    }
-                                    let other_end = other.start_beat + other.length_beats;
-                                    if new_start < other_end && new_end > other.start_beat {
-                                        allow_move = false;
-                                        break 'outer;
-                                    }
+                                ClipLocation::Audio(idx) => {
+                                    let src_is_midi = false;
+                                    let tgt = if let Some(tid) = target_track_id {
+                                        if let Some(t) = state.tracks.get(&tid) {
+                                            if !t.is_midi { t } else { source_track }
+                                        } else {
+                                            source_track
+                                        }
+                                    } else {
+                                        source_track
+                                    };
+                                    (tgt, src_is_midi)
+                                }
+                            };
+
+                            let new_length = match loc {
+                                ClipLocation::Midi(idx) => {
+                                    source_track.midi_clips[idx].length_beats
+                                }
+                                ClipLocation::Audio(idx) => {
+                                    source_track.audio_clips[idx].length_beats
+                                }
+                            };
+                            let new_end = new_start + new_length;
+
+                            // Overlap check on the destination track
+                            for other in &track_for_check.midi_clips {
+                                if other.id == clip_id
+                                    || clip_ids_and_starts.iter().any(|(id, _)| *id == other.id)
+                                {
+                                    continue; // ignore moving set
+                                }
+                                let other_end = other.start_beat + other.length_beats;
+                                if new_start < other_end && new_end > other.start_beat {
+                                    allow_move = false;
+                                    break 'outer;
+                                }
+                            }
+                            for other in &track_for_check.audio_clips {
+                                if other.id == clip_id
+                                    || clip_ids_and_starts.iter().any(|(id, _)| *id == other.id)
+                                {
+                                    continue;
+                                }
+                                let other_end = other.start_beat + other.length_beats;
+                                if new_start < other_end && new_end > other.start_beat {
+                                    allow_move = false;
+                                    break 'outer;
                                 }
                             }
                         }
@@ -924,12 +1208,60 @@ impl TimelineView {
                                     .get(&clip_id)
                                     .map(|r| r.is_midi)
                                     .unwrap_or(false);
-
-                                if is_midi {
-                                    to_send.push(AudioCommand::MoveMidiClip { clip_id, new_start });
+                                // Decide whether we’re moving within track, across tracks, or duplicating+moving
+                                let current_track_id = state
+                                    .clips_by_id
+                                    .get(&clip_id)
+                                    .map(|r| r.track_id)
+                                    .unwrap_or_default();
+                                let dest_track_id = if let Some(tid) = target_track_id {
+                                    tid
                                 } else {
-                                    to_send
-                                        .push(AudioCommand::MoveAudioClip { clip_id, new_start });
+                                    current_track_id
+                                };
+                                let cross_track = dest_track_id != current_track_id;
+
+                                if *duplicate_on_drop {
+                                    if is_midi {
+                                        to_send.push(AudioCommand::DuplicateAndMoveMidiClip {
+                                            clip_id,
+                                            dest_track_id,
+                                            new_start,
+                                        });
+                                    } else {
+                                        to_send.push(AudioCommand::DuplicateAndMoveAudioClip {
+                                            clip_id,
+                                            dest_track_id,
+                                            new_start,
+                                        });
+                                    }
+                                } else if cross_track {
+                                    if is_midi {
+                                        to_send.push(AudioCommand::MoveMidiClipToTrack {
+                                            clip_id,
+                                            dest_track_id,
+                                            new_start,
+                                        });
+                                    } else {
+                                        to_send.push(AudioCommand::MoveAudioClipToTrack {
+                                            clip_id,
+                                            dest_track_id,
+                                            new_start,
+                                        });
+                                    }
+                                } else {
+                                    // same-track move as before
+                                    if is_midi {
+                                        to_send.push(AudioCommand::MoveMidiClip {
+                                            clip_id,
+                                            new_start,
+                                        });
+                                    } else {
+                                        to_send.push(AudioCommand::MoveAudioClip {
+                                            clip_id,
+                                            new_start,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -949,8 +1281,9 @@ impl TimelineView {
                         clip_id,
                         original_end_beat,
                     } => {
-                        let drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
-                        let new_start = drag_at.min(*original_end_beat - min_len);
+                        let candidate = self.x_to_beat(response.rect, pos.x).max(0.0);
+                        let (snapped, _) = self.snap_beat(ui, response.rect, candidate, app, None);
+                        let new_start = snapped.min(*original_end_beat - min_len);
                         let new_len = (*original_end_beat - new_start).max(min_len);
 
                         let state = app.state.lock().unwrap();
@@ -981,8 +1314,9 @@ impl TimelineView {
                         clip_id,
                         original_start_beat,
                     } => {
-                        let drag_at = snap(beat_at(pos.x).max(0.0), self.grid_snap);
-                        let new_end = drag_at.max(*original_start_beat + min_len);
+                        let candidate = self.x_to_beat(response.rect, pos.x).max(0.0);
+                        let (snapped, _) = self.snap_beat(ui, response.rect, candidate, app, None);
+                        let new_end = snapped.max(*original_start_beat + min_len);
                         let new_len = (new_end - *original_start_beat).max(min_len);
 
                         let state = app.state.lock().unwrap();
@@ -1024,12 +1358,83 @@ impl TimelineView {
                         });
                         app.push_undo();
                     }
+                    TimelineInteraction::LoopCreate { anchor_beat } => {
+                        let cur = self.x_to_beat(response.rect, pos.x).max(0.0);
+                        let (s0, _) = self.snap_beat(ui, response.rect, *anchor_beat, app, None);
+                        let (s1, _) = self.snap_beat(ui, response.rect, cur, app, None);
+                        let (start, end) = if s0 <= s1 { (s0, s1) } else { (s1, s0) };
+                        app.audio_state.loop_start.store(start);
+                        app.audio_state.loop_end.store(end);
+                        app.audio_state.loop_enabled.store(true, Ordering::Relaxed);
+                    }
+
+                    TimelineInteraction::LoopDragStart { offset_beats } => {
+                        let cur = self.x_to_beat(response.rect, pos.x).max(0.0) - *offset_beats;
+                        let (snapped, _) = self.snap_beat(ui, response.rect, cur, app, None);
+                        let end = app.audio_state.loop_end.load();
+                        let start = snapped.min(end - min_len);
+                        app.audio_state.loop_start.store(start);
+                    }
+
+                    TimelineInteraction::LoopDragEnd { offset_beats } => {
+                        let cur = self.x_to_beat(response.rect, pos.x).max(0.0) - *offset_beats;
+                        let (snapped, _) = self.snap_beat(ui, response.rect, cur, app, None);
+                        let start = app.audio_state.loop_start.load();
+                        let end = snapped.max(start + min_len);
+                        app.audio_state.loop_end.store(end);
+                    }
 
                     _ => {}
                 }
             }
 
+            if let Some(TimelineInteraction::SelectionBox {
+                start_pos,
+                current_pos,
+            }) = self.timeline_interaction.clone()
+            {
+                let sel_rect = egui::Rect::from_two_pos(start_pos, current_pos);
+                let mut selected_ids: Vec<u64> = Vec::new();
+
+                let st = app.state.lock().unwrap();
+                for (track_id, track_block) in self.last_track_blocks.iter().copied() {
+                    // Only the clip area height
+                    let clip_area = egui::Rect::from_min_size(
+                        track_block.min,
+                        egui::vec2(track_block.width(), self.track_height),
+                    );
+                    if !sel_rect.intersects(clip_area) {
+                        continue;
+                    }
+                    if let Some(t) = st.tracks.get(&track_id) {
+                        for c in &t.audio_clips {
+                            if self.clip_rect_for_audio(clip_area, c).intersects(sel_rect) {
+                                selected_ids.push(c.id);
+                            }
+                        }
+                        for c in &t.midi_clips {
+                            if self.clip_rect_for_midi(clip_area, c).intersects(sel_rect) {
+                                selected_ids.push(c.id);
+                            }
+                        }
+                    }
+                }
+                drop(st);
+
+                if ui.input(|i| i.modifiers.ctrl) {
+                    // Union with existing selection
+                    for id in selected_ids {
+                        if !app.selected_clips.contains(&id) {
+                            app.selected_clips.push(id);
+                        }
+                    }
+                } else {
+                    app.selected_clips = selected_ids;
+                }
+            }
+
             self.timeline_interaction = None;
+            self.drag_target_track = None;
         }
 
         // Click on ruler to set playhead
@@ -1441,6 +1846,501 @@ impl TimelineView {
             }
         }
         max_beat
+    }
+
+    fn x_to_beat(&self, rect: egui::Rect, x: f32) -> f64 {
+        let rel = (x - rect.left()) + self.scroll_x;
+        (rel / self.zoom_x) as f64
+    }
+    fn beat_to_x(&self, rect: egui::Rect, beat: f64) -> f32 {
+        rect.left() + (beat as f32 * self.zoom_x - self.scroll_x)
+    }
+    fn zoom_horiz_around(&mut self, rect: egui::Rect, anchor_x: f32, factor: f32) {
+        // keep the beat at anchor_x stable while changing zoom_x
+        let anchor_beat = self.x_to_beat(rect, anchor_x);
+        let prev_zoom = self.zoom_x;
+        self.zoom_x = (self.zoom_x * factor).clamp(10.0, 500.0);
+        if (self.zoom_x - prev_zoom).abs() > f32::EPSILON {
+            let new_x = (anchor_beat as f32) * self.zoom_x;
+            // scroll_x so that beat maps back to anchor_x
+            let desired_scroll_x = (new_x - (anchor_x - rect.left())).max(0.0);
+            self.scroll_x = desired_scroll_x;
+        }
+    }
+    fn snap_beat(
+        &self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        beat: f64,
+        app: &super::app::YadawApp,
+        // Limit checks to the current track to avoid accidental snaps across far content
+        track_filter: Option<u64>,
+    ) -> (f64, Option<f64>) {
+        // Shift disables snapping
+        if !self.snap_enabled || ui.input(|i| i.modifiers.shift) {
+            return (beat, None);
+        }
+
+        let mut candidates: Vec<f64> = Vec::with_capacity(64);
+
+        // Grid
+        if self.snap_to_grid && self.grid_snap > 0.0 {
+            // nearest grid tick around beat: floor and ceil
+            let g = self.grid_snap as f64;
+            let base = (beat / g).round() * g;
+            candidates.push(base);
+            // add neighbors for threshold check
+            candidates.push(base + g);
+            candidates.push(base - g);
+        }
+
+        // Clip edges (starts/ends)
+        if self.snap_to_clips {
+            let state = app.state.lock().unwrap();
+            let ids: Vec<u64> = state.track_order.clone();
+            for &tid in &ids {
+                if track_filter.map_or(false, |tf| tf != tid) {
+                    continue;
+                }
+                if let Some(t) = state.tracks.get(&tid) {
+                    for c in &t.audio_clips {
+                        candidates.push(c.start_beat);
+                        candidates.push(c.start_beat + c.length_beats);
+                    }
+                    for c in &t.midi_clips {
+                        candidates.push(c.start_beat);
+                        candidates.push(c.start_beat + c.length_beats);
+                    }
+                }
+            }
+        }
+
+        // Loop boundaries
+        if self.snap_to_loop {
+            candidates.push(app.audio_state.loop_start.load());
+            candidates.push(app.audio_state.loop_end.load());
+        }
+
+        // Find nearest candidate within pixel threshold
+        let thresh_beats = (self.snap_px_threshold / self.zoom_x) as f64;
+        let mut best: Option<(f64, f64)> = None; // (candidate, abs_diff)
+        for &cand in &candidates {
+            let d = (cand - beat).abs();
+            if d <= thresh_beats {
+                match best {
+                    None => best = Some((cand, d)),
+                    Some((_, best_d)) if d < best_d => best = Some((cand, d)),
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some((cand, _)) = best {
+            (cand, Some(cand))
+        } else {
+            (beat, None)
+        }
+    }
+    fn clip_rect_for_audio(&self, track_rect: egui::Rect, clip: &AudioClip) -> egui::Rect {
+        let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
+        let clip_w = clip.length_beats as f32 * self.zoom_x;
+        egui::Rect::from_min_size(
+            track_rect.min + egui::vec2(clip_x, 20.0),
+            egui::vec2(clip_w, self.track_height - 25.0),
+        )
+    }
+    fn clip_rect_for_midi(&self, track_rect: egui::Rect, clip: &MidiClip) -> egui::Rect {
+        let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
+        let clip_w = clip.length_beats as f32 * self.zoom_x;
+        egui::Rect::from_min_size(
+            track_rect.min + egui::vec2(clip_x, 5.0),
+            egui::vec2(clip_w, self.track_height - 10.0),
+        )
+    }
+    fn auto_pan_during_drag(&mut self, rect: egui::Rect, pointer_x: f32) {
+        // pixels from edge where we start panning
+        let margin = 48.0;
+        // scroll step in px per frame (scaled with zoom so higher zoom pans faster)
+        let step_base = (self.zoom_x * 0.25).clamp(4.0, 40.0);
+
+        if pointer_x > rect.right() - margin {
+            // pan right
+            let t = ((pointer_x - (rect.right() - margin)) / margin).clamp(0.0, 1.0);
+            self.scroll_x += step_base * (0.25 + 0.75 * t);
+        } else if pointer_x < rect.left() + margin {
+            // pan left
+            let t = (((rect.left() + margin) - pointer_x) / margin).clamp(0.0, 1.0);
+            self.scroll_x = (self.scroll_x - step_base * (0.25 + 0.75 * t)).max(0.0);
+        }
+    }
+
+    fn draw_drag_ghosts(&self, ui: &mut egui::Ui, app: &super::app::YadawApp, rect: egui::Rect) {
+        if let Some(TimelineInteraction::DragClip {
+            clip_ids_and_starts,
+            start_drag_beat,
+            ..
+        }) = &self.timeline_interaction
+        {
+            if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+                let current = self.x_to_beat(rect, pos.x);
+                let mut delta = current - *start_drag_beat;
+                let ref_original_start = clip_ids_and_starts
+                    .iter()
+                    .map(|(_, s)| *s)
+                    .fold(f64::INFINITY, f64::min);
+                let (snapped, _) = self.snap_beat(ui, rect, ref_original_start + delta, app, None);
+                delta = snapped - ref_original_start;
+
+                // pick track rect
+                let tid = self.drag_target_track.or_else(|| {
+                    self.last_track_blocks
+                        .iter()
+                        .find(|(_, r)| r.contains(pos))
+                        .map(|(id, _)| *id)
+                });
+                let (target_clip_area, target_track_id) = if let Some(tid) = tid {
+                    if let Some((_, block)) =
+                        self.last_track_blocks.iter().find(|(id, _)| *id == tid)
+                    {
+                        (
+                            egui::Rect::from_min_size(
+                                block.min,
+                                egui::vec2(block.width(), self.track_height),
+                            ),
+                            tid,
+                        )
+                    } else {
+                        (egui::Rect::NOTHING, 0)
+                    }
+                } else {
+                    (egui::Rect::NOTHING, 0)
+                };
+
+                if !target_clip_area.is_negative() {
+                    let p = ui.painter();
+                    let st = app.state.lock().unwrap();
+                    for (clip_id, orig_start) in clip_ids_and_starts {
+                        if let Some((track, loc)) = st.find_clip(*clip_id) {
+                            let (length, is_midi, name) = match loc {
+                                ClipLocation::Midi(idx) => {
+                                    let c = &track.midi_clips[idx];
+                                    (c.length_beats, true, c.name.as_str())
+                                }
+                                ClipLocation::Audio(idx) => {
+                                    let c = &track.audio_clips[idx];
+                                    (c.length_beats, false, c.name.as_str())
+                                }
+                            };
+                            let new_start = (*orig_start + delta).max(0.0);
+                            let x = target_clip_area.left()
+                                + (new_start as f32 * self.zoom_x - self.scroll_x);
+                            let w = (length as f32 * self.zoom_x).max(2.0);
+                            let ghost = egui::Rect::from_min_size(
+                                egui::pos2(
+                                    x,
+                                    target_clip_area.top() + if is_midi { 5.0 } else { 20.0 },
+                                ),
+                                egui::vec2(
+                                    w,
+                                    self.track_height - if is_midi { 10.0 } else { 25.0 },
+                                ),
+                            );
+                            p.rect_filled(
+                                ghost,
+                                4.0,
+                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 28),
+                            );
+                            p.rect_stroke(
+                                ghost,
+                                4.0,
+                                egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
+                                egui::StrokeKind::Outside,
+                            );
+                            p.text(
+                                ghost.min + egui::vec2(6.0, 6.0),
+                                egui::Align2::LEFT_TOP,
+                                name,
+                                egui::FontId::default(),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fn handle_keyboard_nudge(&mut self, ui: &egui::Ui, app: &mut super::app::YadawApp) {
+        let pressed = |k: egui::Key| ui.input(|i| i.key_pressed(k));
+        if app.selected_clips.is_empty() {
+            return;
+        }
+
+        let mods = ui.input(|i| i.modifiers);
+        let grid = self.grid_snap.max(0.0001) as f64;
+        let small = grid;
+        let big = 1.0; // 1 beat when Shift for big steps
+
+        // Helper to move with overlap check on each affected track
+        let mut move_clips = |delta: f64| {
+            if delta.abs() < f64::EPSILON {
+                return;
+            }
+            let st = app.state.lock().unwrap();
+            // group by track and by type
+            let mut plan: Vec<(
+                bool, /*is_midi*/
+                u64,  /*clip_id*/
+                u64,  /*track_id*/
+                f64,  /*new_start*/
+                f64,  /*len*/
+            )> = vec![];
+            for cid in &app.selected_clips {
+                if let Some((track, loc)) = st.find_clip(*cid) {
+                    let tid = st
+                        .clips_by_id
+                        .get(cid)
+                        .map(|r| r.track_id)
+                        .unwrap_or_default();
+                    match loc {
+                        ClipLocation::Midi(idx) => {
+                            let c = &track.midi_clips[idx];
+                            plan.push((
+                                true,
+                                *cid,
+                                tid,
+                                (c.start_beat + delta).max(0.0),
+                                c.length_beats,
+                            ));
+                        }
+                        ClipLocation::Audio(idx) => {
+                            let c = &track.audio_clips[idx];
+                            plan.push((
+                                false,
+                                *cid,
+                                tid,
+                                (c.start_beat + delta).max(0.0),
+                                c.length_beats,
+                            ));
+                        }
+                    }
+                }
+            }
+            // overlap check per track
+            'outer: for (is_midi, cid, tid, ns, len) in plan.iter().copied() {
+                if let Some(t) = st.tracks.get(&tid) {
+                    let ne = ns + len;
+                    for o in &t.midi_clips {
+                        if o.id == cid {
+                            continue;
+                        }
+                        let oe = o.start_beat + o.length_beats;
+                        if ns < oe && ne > o.start_beat {
+                            return;
+                        }
+                    }
+                    for o in &t.audio_clips {
+                        if o.id == cid {
+                            continue;
+                        }
+                        let oe = o.start_beat + o.length_beats;
+                        if ns < oe && ne > o.start_beat {
+                            return;
+                        }
+                    }
+                }
+            }
+            drop(st);
+            app.push_undo();
+            for (is_midi, cid, _tid, ns, _len) in plan {
+                let _ = if is_midi {
+                    app.command_tx.send(AudioCommand::MoveMidiClip {
+                        clip_id: cid,
+                        new_start: ns,
+                    })
+                } else {
+                    app.command_tx.send(AudioCommand::MoveAudioClip {
+                        clip_id: cid,
+                        new_start: ns,
+                    })
+                };
+            }
+        };
+
+        // Nudge left/right
+        if pressed(egui::Key::ArrowLeft) {
+            move_clips(if mods.shift { -big } else { -small });
+        }
+        if pressed(egui::Key::ArrowRight) {
+            move_clips(if mods.shift { big } else { small });
+        }
+
+        // Resize with Cmd/Ctrl (+Shift for left edge)
+        let resize_step = if mods.shift { big } else { small };
+        if (mods.command || mods.ctrl) && pressed(egui::Key::ArrowRight) {
+            app.push_undo();
+            for &cid in &app.selected_clips {
+                let st = app.state.lock().unwrap();
+                let is_midi = st.clips_by_id.get(&cid).map(|r| r.is_midi).unwrap_or(false);
+                drop(st);
+                let _ = if is_midi {
+                    app.command_tx.send(AudioCommand::ResizeMidiClip {
+                    clip_id: cid, new_start: /* unchanged */ {
+                        let st = app.state.lock().unwrap();
+                        let (t, loc) = st.find_clip(cid).unwrap();
+                        match loc { ClipLocation::Midi(i) => t.midi_clips[i].start_beat, _ => 0.0 }
+                    },
+                    new_length: {
+                        let st = app.state.lock().unwrap();
+                        let (t, loc) = st.find_clip(cid).unwrap();
+                        match loc { ClipLocation::Midi(i) => t.midi_clips[i].length_beats + resize_step, _ => 0.0 }
+                    },
+                })
+                } else {
+                    app.command_tx.send(AudioCommand::ResizeAudioClip {
+                        clip_id: cid,
+                        new_start: {
+                            let st = app.state.lock().unwrap();
+                            let (t, loc) = st.find_clip(cid).unwrap();
+                            match loc {
+                                ClipLocation::Audio(i) => t.audio_clips[i].start_beat,
+                                _ => 0.0,
+                            }
+                        },
+                        new_length: {
+                            let st = app.state.lock().unwrap();
+                            let (t, loc) = st.find_clip(cid).unwrap();
+                            match loc {
+                                ClipLocation::Audio(i) => {
+                                    t.audio_clips[i].length_beats + resize_step
+                                }
+                                _ => 0.0,
+                            }
+                        },
+                    })
+                };
+            }
+        }
+        if (mods.command || mods.ctrl) && pressed(egui::Key::ArrowLeft) {
+            // shrink right edge
+            app.push_undo();
+            for &cid in &app.selected_clips {
+                let st = app.state.lock().unwrap();
+                let is_midi = st.clips_by_id.get(&cid).map(|r| r.is_midi).unwrap_or(false);
+                let (start, len) = {
+                    let (t, loc) = st.find_clip(cid).unwrap();
+                    match loc {
+                        ClipLocation::Midi(i) => {
+                            (t.midi_clips[i].start_beat, t.midi_clips[i].length_beats)
+                        }
+                        ClipLocation::Audio(i) => {
+                            (t.audio_clips[i].start_beat, t.audio_clips[i].length_beats)
+                        }
+                    }
+                };
+                drop(st);
+                let new_len = (len - resize_step).max(self.grid_snap.max(0.03125) as f64);
+                let _ = if is_midi {
+                    app.command_tx.send(AudioCommand::ResizeMidiClip {
+                        clip_id: cid,
+                        new_start: start,
+                        new_length: new_len,
+                    })
+                } else {
+                    app.command_tx.send(AudioCommand::ResizeAudioClip {
+                        clip_id: cid,
+                        new_start: start,
+                        new_length: new_len,
+                    })
+                };
+            }
+        }
+
+        // Alt+Arrows: slip MIDI content
+        if mods.alt && (pressed(egui::Key::ArrowLeft) || pressed(egui::Key::ArrowRight)) {
+            let dir = if pressed(egui::Key::ArrowLeft) {
+                -1.0
+            } else {
+                1.0
+            };
+            let step = dir * if mods.shift { big } else { small };
+            app.push_undo();
+            for &cid in &app.selected_clips {
+                let _ = app.command_tx.send(AudioCommand::SetClipContentOffset {
+                    clip_id: cid,
+                    new_offset: {
+                        let st = app.state.lock().unwrap();
+                        if let Some((t, loc)) = st.find_clip(cid) {
+                            if let ClipLocation::Midi(i) = loc {
+                                t.midi_clips[i].content_offset_beats + step
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        }
+                    },
+                });
+            }
+        }
+
+        // Up/Down: move to prev/next compatible track
+        if pressed(egui::Key::ArrowUp) || pressed(egui::Key::ArrowDown) {
+            let dir = if pressed(egui::Key::ArrowUp) {
+                -1isize
+            } else {
+                1isize
+            };
+            let st = app.state.lock().unwrap();
+            let order = &st.track_order;
+            // pick anchor track (of first selected)
+            if let Some(&first) = app.selected_clips.first() {
+                if let Some((track, _loc)) = st.find_clip(first) {
+                    let cur_tid = st
+                        .clips_by_id
+                        .get(&first)
+                        .map(|r| r.track_id)
+                        .unwrap_or_default();
+                    let cur_ix = order.iter().position(|t| *t == cur_tid).unwrap_or(0) as isize;
+                    let target_ix = (cur_ix + dir).clamp(0, order.len() as isize - 1) as usize;
+                    let target_tid = order[target_ix];
+                    let target_is_midi = st
+                        .tracks
+                        .get(&target_tid)
+                        .map(|t| t.is_midi)
+                        .unwrap_or(false);
+                    drop(st);
+                    app.push_undo();
+                    for &cid in &app.selected_clips {
+                        // keep same start, move to neighbor if compatible
+                        let st2 = app.state.lock().unwrap();
+                        let (src_t, loc) = match st2.find_clip(cid) {
+                            Some(v) => v,
+                            None => continue,
+                        };
+                        let (start, is_midi) = match loc {
+                            ClipLocation::Midi(i) => (src_t.midi_clips[i].start_beat, true),
+                            ClipLocation::Audio(i) => (src_t.audio_clips[i].start_beat, false),
+                        };
+                        drop(st2);
+                        if is_midi == target_is_midi {
+                            let _ = if is_midi {
+                                app.command_tx.send(AudioCommand::MoveMidiClipToTrack {
+                                    clip_id: cid,
+                                    dest_track_id: target_tid,
+                                    new_start: start,
+                                })
+                            } else {
+                                app.command_tx.send(AudioCommand::MoveAudioClipToTrack {
+                                    clip_id: cid,
+                                    dest_track_id: target_tid,
+                                    new_start: start,
+                                })
+                            };
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

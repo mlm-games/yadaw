@@ -25,7 +25,7 @@ pub fn import_midi_file(path: &Path, bpm: f32) -> Result<MidiClip> {
         }
     };
 
-    let mut abs_ticks: u64 = 0;
+    let mut abs_ticks: u64;
     let mut max_end_beats: f64 = 0.0;
 
     // Active note starts can overlap; store stacks per (channel, key)

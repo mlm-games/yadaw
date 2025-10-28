@@ -1185,10 +1185,6 @@ impl ShortcutsEditorDialog {
         }
     }
     
-    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        self.open = true;
-    }
-    
     pub fn ui(&mut self, ctx: &egui::Context, input_mgr: &mut InputManager) {
         if !self.open {
             return;
@@ -1805,7 +1801,7 @@ impl ImportAudioDialog {
                     }
 
                     match crate::midi_import::import_midi_file(&path, bpm) {
-                        Ok(mut clip) => {
+                        Ok(clip) => {
                             let mut state = app.state.lock().unwrap();
                             if let Some(track) = state.tracks.get_mut(&app.selected_track) {
                                 track.midi_clips.push(clip);
