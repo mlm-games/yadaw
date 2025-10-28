@@ -169,19 +169,6 @@ impl TimelineView {
                     );
 
                     ui.separator();
-
-                    ui.label("Snap:");
-
-                    ui.toggle_value(&mut self.snap_enabled, "On");
-                    ui.toggle_value(&mut self.snap_to_grid, "Grid");
-                    ui.toggle_value(&mut self.snap_to_clips, "Clips");
-                    ui.toggle_value(&mut self.snap_to_loop, "Loop");
-                    ui.add(
-                        egui::Slider::new(&mut self.snap_px_threshold, 4.0..=24.0)
-                            .text("Thresh px"),
-                    );
-
-                    ui.separator();
                     ui.checkbox(
                         &mut self.auto_crossfade_on_overlap,
                         "Auto crossfade on overlap",
@@ -200,6 +187,19 @@ impl TimelineView {
                     ui.separator();
                     ui.checkbox(&mut self.show_automation, "Show Automation");
                     ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
+
+                    ui.separator();
+
+                    ui.label("Snap:");
+
+                    ui.toggle_value(&mut self.snap_enabled, "On");
+                    ui.toggle_value(&mut self.snap_to_grid, "Grid");
+                    ui.toggle_value(&mut self.snap_to_clips, "Clips");
+                    ui.toggle_value(&mut self.snap_to_loop, "Loop");
+                    ui.add(
+                        egui::Slider::new(&mut self.snap_px_threshold, 4.0..=24.0)
+                            .text("Thresh px"),
+                    );
                 });
             });
     }
@@ -906,9 +906,16 @@ impl TimelineView {
                 drop(state);
 
                 let duplicate_on_drop = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+
+                let clicked_clip_start = clips_and_starts
+                    .iter()
+                    .find(|(cid, _)| *cid == clip_id)
+                    .map(|(_, start)| *start)
+                    .unwrap_or(start_beat_under_mouse);
+
                 self.timeline_interaction = Some(TimelineInteraction::DragClip {
                     clip_ids_and_starts: clips_and_starts,
-                    start_drag_beat: start_beat_under_mouse,
+                    start_drag_beat: clicked_clip_start,
                     duplicate_on_drop,
                 });
             }

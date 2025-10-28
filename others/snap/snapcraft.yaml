@@ -1,9 +1,9 @@
 name: yadaw
 base: core22
 version: '9.9.9'
-summary: A minimal DAW for sound design and prototyping.
+summary: “Rust‑powered, plugin‑first multiplatform DAW.”
 description: |
-  A minimal DAW for sound design and prototyping. CLAP/LV2 hosting, runs on desktop and Android. Made using Rust + egui. is fully OSS (AGPL).
+  A small and lightweight DAW for sound design and prototyping. CLAP/LV2 hosting, runs on desktop and Android. Made using Rust + egui. is fully OSS (AGPL).
 
 grade: stable
 confinement: strict

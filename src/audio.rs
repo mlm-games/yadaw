@@ -740,6 +740,9 @@ impl AudioEngine {
         // Guard against degenerate/too-short loops (< 1 sample)
         let loop_active = loop_enabled && (loop_end_samp - loop_start_samp) >= 1.0;
 
+        let mut aux_l = vec![0.0f32; MAX_BUFFER_SIZE];
+        let mut aux_r = vec![0.0f32; MAX_BUFFER_SIZE];
+
         // Meters (max across sub-blocks)
         let mut track_peaks: HashMap<u64, (f32, f32)> = HashMap::new();
         let mut master_peak_l = 0.0f32;

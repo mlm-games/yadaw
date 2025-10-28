@@ -1443,7 +1443,7 @@ enum ExportFormat {
     Flac,
     Ogg,
 }
-
+// later for prs
 #[derive(Clone, Copy, PartialEq)]
 enum ExportQuality {
     Low,
@@ -1839,6 +1839,43 @@ impl ImportAudioDialog {
             }
 
             self.opened = false;
+
+            #[cfg(target_os = "android")]
+            {
+                // Minimal UI: allow pasting a content:// URI until you wire Intent-based picker
+                egui::Window::new("Import from content URI")
+                    .default_open(false)
+                    .show(ctx, |ui| {
+                        static mut LAST_URI: Option<String> = None;
+                        let mut uri = unsafe { LAST_URI.clone().unwrap_or_default() };
+                        ui.horizontal(|ui| {
+                            ui.label("content:// URI");
+                            ui.text_edit_singleline(&mut uri);
+                            if ui.button("Import").clicked() && !uri.is_empty() {
+                                unsafe { LAST_URI = Some(uri.clone()); }
+                                let dest_name = format!("import_{}.wav", chrono::Local::now().format("%H%M%S"));
+                                if let Ok(dest) = crate::android_saf::copy_from_content_uri_to_internal(&uri, &dest_name) {
+                                    app.push_undo();
+                                    let bpm = app.audio_state.bpm.load();
+                                    crate::audio_import::import_audio_file(&dest, bpm)
+                                        .map_err(|e| crate::error::common::audio_import_failed(&dest, e))
+                                        .map(|clip| {
+                                            let mut state = app.state.lock().unwrap();
+                                            if let Some(track) = state.tracks.get_mut(&app.selected_track) {
+                                                if !track.is_midi {
+                                                    track.audio_clips.push(clip);
+                                                    state.ensure_ids();
+                                                } else {
+                                                    app.dialogs.show_warning("Cannot import audio to MIDI track");
+                                                }
+                                            }
+                                        })
+                                        .notify_user(&mut app.dialogs);
+                                }
+                            }
+                        });
+                    });
+            }
         }
     }
 

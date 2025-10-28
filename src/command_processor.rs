@@ -10,7 +10,7 @@ use crate::messages::{AudioCommand, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::{AutomationPoint, MidiClip, PluginDescriptor};
 use crate::plugin::{create_plugin_instance, get_control_port_info};
-use crate::project::AppState;
+use crate::project::{AppState, ClipLocation};
 
 pub fn run_command_processor(
     app_state: Arc<std::sync::Mutex<AppState>>,
@@ -887,11 +887,119 @@ fn process_command(
             send_graph_snapshot_locked(&state, snapshot_tx);
         }
 
-        AudioCommand::AddSend(_, _, _)
-        | AudioCommand::RemoveSend(_, _)
-        | AudioCommand::SetSendAmount(_, _, _)
-        | AudioCommand::SetSendPreFader(_, _, _)
-        | AudioCommand::CreateGroup(_, _)
+        AudioCommand::AddSend(track_id, dest_track_id, amount) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(track_id) {
+                t.sends.push(crate::model::track::Send {
+                    destination_track: *dest_track_id,
+                    amount: *amount,
+                    pre_fader: false,
+                    muted: false,
+                });
+                let _ = ui_tx.send(UIUpdate::PushUndo(st.snapshot()));
+            }
+            send_graph_snapshot_locked(&st, snapshot_tx);
+        }
+        AudioCommand::RemoveSend(track_id, index) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(track_id) {
+                if *index < t.sends.len() {
+                    t.sends.remove(*index);
+                    let _ = ui_tx.send(UIUpdate::PushUndo(st.snapshot()));
+                }
+            }
+            send_graph_snapshot_locked(&st, snapshot_tx);
+        }
+        AudioCommand::SetSendAmount(track_id, index, value) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(track_id) {
+                if *index < t.sends.len() {
+                    t.sends[*index].amount = *value;
+                }
+            }
+            send_graph_snapshot_locked(&st, snapshot_tx);
+        }
+        AudioCommand::SetSendPreFader(track_id, index, pref) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(track_id) {
+                if *index < t.sends.len() {
+                    t.sends[*index].pre_fader = *pref;
+                }
+            }
+            send_graph_snapshot_locked(&st, snapshot_tx);
+        }
+
+        AudioCommand::DuplicateAndMoveMidiClip {
+            clip_id,
+            dest_track_id,
+            new_start,
+        } => {
+            let mut st = app_state.lock().unwrap();
+
+            // Find the source clip
+            if let Some((src_track, loc)) = st.find_clip(*clip_id) {
+                if let ClipLocation::Midi(idx) = loc {
+                    let original = src_track.midi_clips[idx].clone();
+
+                    // Create new clip with updated position
+                    let mut new_clip = original.clone();
+                    new_clip.id = st.fresh_id();
+                    new_clip.start_beat = *new_start;
+
+                    // Add to destination track
+                    if let Some(dest_track) = st.tracks.get_mut(dest_track_id) {
+                        dest_track.midi_clips.push(new_clip.clone());
+                        st.clips_by_id.insert(
+                            new_clip.id,
+                            crate::project::ClipRef {
+                                track_id: *dest_track_id,
+                                is_midi: true,
+                            },
+                        );
+                    }
+
+                    let _ = ui_tx.send(UIUpdate::PushUndo(st.snapshot()));
+                }
+            }
+            send_graph_snapshot_locked(&st, snapshot_tx);
+        }
+
+        AudioCommand::DuplicateAndMoveAudioClip {
+            clip_id,
+            dest_track_id,
+            new_start,
+        } => {
+            let mut st = app_state.lock().unwrap();
+
+            // Find the source clip
+            if let Some((src_track, loc)) = st.find_clip(*clip_id) {
+                if let ClipLocation::Audio(idx) = loc {
+                    let original = src_track.audio_clips[idx].clone();
+
+                    // Create new clip with updated position
+                    let mut new_clip = original.clone();
+                    new_clip.id = st.fresh_id();
+                    new_clip.start_beat = *new_start;
+
+                    // Add to destination track
+                    if let Some(dest_track) = st.tracks.get_mut(dest_track_id) {
+                        dest_track.audio_clips.push(new_clip.clone());
+                        st.clips_by_id.insert(
+                            new_clip.id,
+                            crate::project::ClipRef {
+                                track_id: *dest_track_id,
+                                is_midi: false,
+                            },
+                        );
+                    }
+
+                    let _ = ui_tx.send(UIUpdate::PushUndo(st.snapshot()));
+                }
+            }
+            send_graph_snapshot_locked(&st, snapshot_tx);
+        }
+
+        AudioCommand::CreateGroup(_, _)
         | AudioCommand::RemoveGroup(_)
         | AudioCommand::AddTrackToGroup(_, _)
         | AudioCommand::RemoveTrackFromGroup(_) => {}
