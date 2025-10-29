@@ -1,0 +1,10 @@
+- hide the unimplemented loop line (only useful for snapping rn)
+- fix drag pos incrementing, add android_saf test
+- remove tracks options dup, fix shortcuts dialog close button
+- add the descs
+- improve the timeline for audio clips
+- fix android drag
+- Update README.md
+- Update io.github.mlm_games.yadaw.desktop
+- Create io.github.mlm_games.yadaw.desktop
+- Update Cargo.toml
