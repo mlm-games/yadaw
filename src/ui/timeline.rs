@@ -377,13 +377,13 @@ impl TimelineView {
             }
         }
 
-        if let Some(b) = self.snap_preview_beat {
-            let x = self.beat_to_x(rect, b);
-            ui.ctx().debug_painter().line_segment(
-                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
-            );
-        }
+        // if let Some(b) = self.snap_preview_beat {
+        //     let x = self.beat_to_x(rect, b);
+        //     ui.ctx().debug_painter().line_segment(
+        //         [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+        //         egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
+        //     );
+        // }
 
         if self.pending_clip_undo {
             app.push_undo();
