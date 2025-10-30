@@ -133,12 +133,13 @@ impl TransportUI {
 
                         let mut metronome =
                             app.audio_state.metronome_enabled.load(Ordering::Relaxed);
-                        if ui.checkbox(&mut metronome, "Click").clicked() {
+                        if ui.checkbox(&mut metronome, "Metronome").clicked() {
                             app.audio_state
                                 .metronome_enabled
                                 .store(metronome, Ordering::Relaxed);
                             let _ = app.command_tx.send(AudioCommand::SetMetronome(metronome));
                         }
+                        ui.separator();
 
                         // BPM control
                         ui.label("BPM:");
