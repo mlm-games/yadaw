@@ -6,6 +6,7 @@ use crate::level_meter::LevelMeter;
 use crate::messages::AudioCommand;
 use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
+use crate::model::track::TrackType;
 use crate::plugin::get_control_port_info;
 use crate::project::AppState;
 
@@ -177,7 +178,7 @@ impl TracksPanel {
             state
                 .tracks
                 .get(&track_id)
-                .map(|t| (t.name.clone(), t.is_midi))
+                .map(|t| (t.name.clone(), matches!(t.track_type, TrackType::Midi)))
                 .unwrap_or_else(|| ("Unknown".to_string(), false))
         };
 
@@ -290,7 +291,7 @@ impl TracksPanel {
                         t.solo,
                         t.armed,
                         t.monitor_enabled,
-                        t.is_midi,
+                        matches!(t.track_type, TrackType::Midi),
                     )
                 })
                 .unwrap_or((0.7, 0.0, false, false, false, false, false))
@@ -596,7 +597,7 @@ impl TracksPanel {
         };
 
         if let Some(track) = track {
-            if track.is_midi {
+            if matches!(track.track_type, TrackType::Midi) {
                 ui.horizontal(|ui| {
                     ui.label("MIDI In:");
 

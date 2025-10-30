@@ -8,6 +8,7 @@ use crate::input::actions::{ActionContext, AppAction};
 use crate::input::InputManager;
 use crate::messages::{AudioCommand, ExportState};
 use crate::model::plugin_api::{BackendKind, HostConfig};
+use crate::model::track::TrackType;
 use crate::plugin::categorize_plugin;
 use crate::ui::theme;
 use crate::input::shortcuts::{Keybind, KeyCode};
@@ -710,7 +711,7 @@ impl PluginBrowserDialog {
                             let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
                             let is_midi = {
                                 let state = app.state.lock().unwrap();
-                                state.tracks.get(&track_id).map(|t| t.is_midi).unwrap_or(false)
+                                state.tracks.get(&track_id).map(|t| matches!(t.track_type, TrackType::Midi)).unwrap_or(false)
                             };
 
                             let backend = if plugin.uri.starts_with("file://") {
@@ -1793,7 +1794,7 @@ impl ImportAudioDialog {
                     // MIDI import -> requires MIDI track
                     let is_midi_track = {
                         let state = app.state.lock().unwrap();
-                        state.tracks.get(&app.selected_track).map(|t| t.is_midi).unwrap_or(false)
+                        state.tracks.get(&app.selected_track).map(|t| matches!(t.track_type, TrackType::Midi)).unwrap_or(false)
                     };
 
                     if !is_midi_track {
@@ -1817,7 +1818,7 @@ impl ImportAudioDialog {
                     // Audio import -> requires Audio track
                     let is_audio_track = {
                         let state = app.state.lock().unwrap();
-                        state.tracks.get(&app.selected_track).map(|t| !t.is_midi).unwrap_or(false)
+                        state.tracks.get(&app.selected_track).map(|t| !matches!(t.track_type, TrackType::Audio)).unwrap_or(false)
                     };
 
                     if !is_audio_track {
@@ -1862,7 +1863,7 @@ impl ImportAudioDialog {
                                         .map(|clip| {
                                             let mut state = app.state.lock().unwrap();
                                             if let Some(track) = state.tracks.get_mut(&app.selected_track) {
-                                                if !track.is_midi {
+                                                if !matches!(track.track_type, TrackType::Audio) {
                                                     track.audio_clips.push(clip);
                                                     state.ensure_ids();
                                                 } else {

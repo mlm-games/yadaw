@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize};
 use super::{automation::AutomationLane, plugin::PluginDescriptor};
 use crate::model::clip::{AudioClip, MidiClip};
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum TrackType {
+    Audio,
+    Midi,
+    Bus,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Send {
     pub destination_track: u64,
@@ -23,7 +30,7 @@ pub struct Track {
     pub muted: bool,
     pub solo: bool,
     pub armed: bool,
-    pub is_midi: bool,
+    pub track_type: TrackType,
     pub midi_input_port: Option<String>,
     pub input_device: Option<String>,
     pub output_device: Option<String>,
@@ -57,7 +64,7 @@ impl Default for Track {
             muted: false,
             solo: false,
             armed: false,
-            is_midi: false,
+            track_type: TrackType::Audio,
             midi_input_port: None,
             input_device: None,
             output_device: None,

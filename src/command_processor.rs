@@ -8,6 +8,7 @@ use crate::audio_export::AudioExporter;
 use crate::audio_state::{AudioGraphSnapshot, AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, UIUpdate};
 use crate::midi_input::MidiInputHandler;
+use crate::model::track::TrackType;
 use crate::model::{AutomationPoint, MidiClip, PluginDescriptor};
 use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::{AppState, ClipLocation};
@@ -123,13 +124,16 @@ fn process_command(
         AudioCommand::ArmForRecording(track_id, armed) => {
             let mut state = app_state.lock().unwrap();
 
-            let target_is_midi = state.tracks.get(track_id).map_or(false, |t| t.is_midi);
+            let target_is_midi = state
+                .tracks
+                .get(track_id)
+                .map_or(false, |t| matches!(t.track_type, TrackType::Midi));
 
             if *armed {
                 for (id, track) in state.tracks.iter_mut() {
                     if *id == *track_id {
                         track.armed = true;
-                    } else if track.is_midi == target_is_midi {
+                    } else if matches!(track.track_type, TrackType::Midi) == target_is_midi {
                         // Disarm other tracks of the same type
                         track.armed = false;
                     }
@@ -155,13 +159,36 @@ fn process_command(
             audio_state.recording.store(true, Ordering::Relaxed);
             audio_state.playing.store(true, Ordering::Relaxed);
 
+            audio_state.playing.store(true, Ordering::Relaxed);
+
+            // 1 bar (4 beats) if transport count-in
+            let bpm = {
+                let st = app_state.lock().unwrap();
+                st.bpm
+            };
+            // UI toggle todo
+            let count_in_enabled = true;
+            let count_in_bars = 1u32;
+
+            if count_in_enabled {
+                let audio_state_clone = audio_state.clone();
+                std::thread::spawn(move || {
+                    let beats = (count_in_bars as f64) * 4.0;
+                    let secs = beats * (60.0 / bpm as f64);
+                    std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+                    audio_state_clone.recording.store(true, Ordering::Relaxed);
+                });
+            } else {
+                audio_state.recording.store(true, Ordering::Relaxed);
+            }
+
             let (armed_midi_track_id, bpm, sr) = {
                 let state = app_state.lock().unwrap();
                 (
                     state
                         .tracks
                         .values()
-                        .find(|t| t.is_midi && t.armed)
+                        .find(|t| matches!(t.track_type, TrackType::Midi) && t.armed)
                         .map(|t| t.id),
                     state.bpm,
                     state.sample_rate,
@@ -227,6 +254,20 @@ fn process_command(
                 *midi_recording_state = None;
                 send_graph_snapshot_locked(&app_state.lock().unwrap(), snapshot_tx);
             }
+        }
+
+        AudioCommand::SetMetronome(on) => {
+            audio_state.metronome_enabled.store(*on, Ordering::Relaxed);
+        }
+        AudioCommand::SetSendDestination(track_id, index, dest_track_id) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(track_id) {
+                if *index < t.sends.len() {
+                    t.sends[*index].destination_track = *dest_track_id;
+                    let _ = ui_tx.send(UIUpdate::PushUndo(st.snapshot()));
+                }
+            }
+            send_graph_snapshot_locked(&st, snapshot_tx);
         }
 
         AudioCommand::MidiInput(raw_message) => {

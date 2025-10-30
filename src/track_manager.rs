@@ -6,12 +6,13 @@ use crate::constants::{
 };
 use crate::messages::AudioCommand;
 use crate::model::clip::{MidiClip, MidiNote};
-use crate::model::track::Track;
+use crate::model::track::{Track, TrackType};
 use crossbeam_channel::Sender;
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TrackType {
+pub enum UITrackType {
     Audio,
     Midi,
     Bus,
@@ -30,14 +31,14 @@ pub struct TrackGroup {
 pub struct TrackBuilder {
     id_hint: usize,
     name: Option<String>,
-    track_type: TrackType,
+    track_type: UITrackType,
     volume: Option<f32>,
     pan: Option<f32>,
     midi_clips: Vec<MidiClip>,
 }
 
 impl TrackBuilder {
-    pub fn new(id_hint: usize, track_type: TrackType) -> Self {
+    pub fn new(id_hint: usize, track_type: UITrackType) -> Self {
         Self {
             id_hint,
             name: None,
@@ -64,7 +65,7 @@ impl TrackBuilder {
     }
 
     pub fn with_default_pattern(mut self) -> Self {
-        if self.track_type == TrackType::Midi {
+        if self.track_type == UITrackType::Midi {
             self.midi_clips.push(Self::create_default_pattern());
         }
         self
@@ -76,17 +77,17 @@ impl TrackBuilder {
     }
 
     pub fn build(self) -> Track {
-        let (default_name, is_midi) = match self.track_type {
-            TrackType::Audio => (
+        let (default_name, track_type) = match self.track_type {
+            UITrackType::Audio => (
                 format!("{} {}", DEFAULT_AUDIO_TRACK_PREFIX, self.id_hint + 1),
-                false,
+                TrackType::Audio,
             ),
-            TrackType::Midi => (
+            UITrackType::Midi => (
                 format!("{} {}", DEFAULT_MIDI_TRACK_PREFIX, self.id_hint + 1),
-                true,
+                TrackType::Midi,
             ),
-            TrackType::Bus => (format!("Bus {}", self.id_hint + 1), false),
-            TrackType::Master => ("Master".to_string(), false),
+            UITrackType::Bus => (format!("Bus {}", self.id_hint + 1), TrackType::Audio),
+            UITrackType::Master => ("Master".to_string(), TrackType::Audio),
         };
 
         Track {
@@ -97,7 +98,7 @@ impl TrackBuilder {
             muted: false,
             solo: false,
             armed: false,
-            is_midi,
+            track_type,
             input_device: None,
             output_device: None,
             midi_clips: self.midi_clips,
@@ -212,7 +213,7 @@ impl TrackManager {
         }
     }
 
-    pub fn create_track(&mut self, track_type: TrackType, name: Option<String>) -> Track {
+    pub fn create_track(&mut self, track_type: UITrackType, name: Option<String>) -> Track {
         let id = self.next_track_id;
         self.next_track_id += 1;
 
@@ -222,7 +223,7 @@ impl TrackManager {
             builder = builder.with_name(name);
         }
 
-        if track_type == TrackType::Midi {
+        if track_type == UITrackType::Midi {
             builder = builder.with_default_pattern();
         }
 
@@ -369,20 +370,20 @@ pub fn move_track(track_order: &mut Vec<u64>, from_idx: usize, to_idx: usize) {
 }
 
 pub fn create_default_audio_track(id: usize) -> Track {
-    TrackBuilder::new(id, TrackType::Audio)
+    TrackBuilder::new(id, UITrackType::Audio)
         .with_name(format!("Audio {}", id + 1))
         .build()
 }
 
 pub fn create_default_midi_track(id: usize) -> Track {
-    TrackBuilder::new(id, TrackType::Midi)
+    TrackBuilder::new(id, UITrackType::Midi)
         .with_name(format!("MIDI {}", id + 1))
         .with_default_pattern()
         .build()
 }
 
 pub fn create_master_track() -> Track {
-    TrackBuilder::new(0, TrackType::Master)
+    TrackBuilder::new(0, UITrackType::Master)
         .with_volume(0.8)
         .build()
 }

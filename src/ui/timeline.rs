@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use super::*;
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
+use crate::model::track::TrackType;
 use crate::model::{AudioClip, AutomationTarget, MidiClip, Track};
 use crate::project::ClipLocation;
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
@@ -169,6 +170,10 @@ impl TimelineView {
                     );
 
                     ui.separator();
+                    ui.checkbox(&mut self.show_automation, "Show Automation");
+                    ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
+
+                    ui.separator();
                     ui.checkbox(
                         &mut self.auto_crossfade_on_overlap,
                         "Auto crossfade on overlap",
@@ -183,10 +188,6 @@ impl TimelineView {
                             ui.selectable_value(&mut self.grid_snap, 0.0625, "1/16");
                             ui.selectable_value(&mut self.grid_snap, 0.03125, "1/32");
                         });
-
-                    ui.separator();
-                    ui.checkbox(&mut self.show_automation, "Show Automation");
-                    ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
 
                     ui.separator();
 
@@ -470,7 +471,7 @@ impl TimelineView {
             egui::Color32::WHITE,
         );
 
-        if track.is_midi {
+        if matches!(track.track_type, TrackType::Midi) {
             for clip in &track.midi_clips {
                 self.draw_midi_clip(painter, ui, rect, clip, track_id, app);
             }
@@ -518,6 +519,25 @@ impl TimelineView {
             ui.id().with(("audio_clip", clip.id)),
             egui::Sense::click_and_drag(),
         );
+
+        let is_selected = app.selected_clips.contains(&clip.id);
+        let is_being_dragged = response.is_pointer_button_down_on();
+
+        if is_selected || is_being_dragged {
+            let stroke_color = if is_being_dragged {
+                egui::Color32::from_rgb(100, 150, 255)
+            } else {
+                // Standard selection color
+                egui::Color32::WHITE
+            };
+
+            painter.rect_stroke(
+                clip_rect,
+                2.0,
+                egui::Stroke::new(2.0, stroke_color),
+                egui::StrokeKind::Inside,
+            );
+        }
 
         self.handle_clip_interaction(response, clip.id, ui, clip_rect, app);
 
@@ -740,6 +760,23 @@ impl TimelineView {
             ui.id().with(("midi_clip", clip.id)),
             egui::Sense::click_and_drag(),
         );
+
+        let is_selected = app.selected_clips.contains(&clip.id);
+        let is_being_dragged = response.is_pointer_button_down_on();
+
+        if is_selected || is_being_dragged {
+            let stroke_color = if is_being_dragged {
+                egui::Color32::from_rgb(100, 150, 255)
+            } else {
+                egui::Color32::WHITE
+            };
+            painter.rect_stroke(
+                clip_rect,
+                4.0,
+                egui::Stroke::new(2.0, stroke_color),
+                egui::StrokeKind::Inside,
+            );
+        }
 
         if response.double_clicked() {
             app.selected_track = track_id;
@@ -1145,7 +1182,11 @@ impl TimelineView {
                                     let src_is_midi = true;
                                     let tgt = if let Some(tid) = target_track_id {
                                         if let Some(t) = state.tracks.get(&tid) {
-                                            if t.is_midi { t } else { source_track }
+                                            if matches!(t.track_type, TrackType::Midi) {
+                                                t
+                                            } else {
+                                                source_track
+                                            }
                                         } else {
                                             source_track
                                         }
@@ -1158,7 +1199,11 @@ impl TimelineView {
                                     let src_is_midi = false;
                                     let tgt = if let Some(tid) = target_track_id {
                                         if let Some(t) = state.tracks.get(&tid) {
-                                            if !t.is_midi { t } else { source_track }
+                                            if !matches!(t.track_type, TrackType::Midi) {
+                                                t
+                                            } else {
+                                                source_track
+                                            }
                                         } else {
                                             source_track
                                         }
@@ -1486,7 +1531,7 @@ impl TimelineView {
                     state
                         .tracks
                         .get(&track_id)
-                        .map(|t| t.is_midi)
+                        .map(|t| matches!(t.track_type, TrackType::Midi))
                         .unwrap_or(false)
                 };
                 if is_midi {
@@ -2313,7 +2358,7 @@ impl TimelineView {
                     let target_is_midi = st
                         .tracks
                         .get(&target_tid)
-                        .map(|t| t.is_midi)
+                        .map(|t| matches!(t.track_type, TrackType::Midi))
                         .unwrap_or(false);
                     drop(st);
                     app.push_undo();

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::plugin_api::BackendKind;
+use crate::model::track::TrackType;
 
 pub struct AtomicF64 {
     storage: AtomicU64,
@@ -53,6 +54,8 @@ pub struct AudioState {
     pub loop_enabled: Arc<AtomicBool>,
     pub loop_start: Arc<AtomicF64>,
     pub loop_end: Arc<AtomicF64>,
+
+    pub metronome_enabled: Arc<AtomicBool>,
 }
 
 impl Default for AudioState {
@@ -73,6 +76,8 @@ impl AudioState {
             loop_enabled: Arc::new(AtomicBool::new(true)),
             loop_start: Arc::new(AtomicF64::new(0.0)),
             loop_end: Arc::new(AtomicF64::new(DEFAULT_LOOP_LEN)),
+
+            metronome_enabled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -94,12 +99,13 @@ pub struct TrackSnapshot {
     pub muted: bool,
     pub solo: bool,
     pub armed: bool,
-    pub is_midi: bool,
     pub monitor_enabled: bool,
     pub audio_clips: Vec<AudioClipSnapshot>,
     pub midi_clips: Vec<MidiClipSnapshot>,
     pub plugin_chain: Vec<PluginDescriptorSnapshot>,
     pub automation_lanes: Vec<RtAutomationLaneSnapshot>,
+    pub sends: Vec<crate::model::track::Send>,
+    pub track_type: TrackType,
 }
 
 #[derive(Debug, Clone)]

@@ -131,6 +131,15 @@ impl TransportUI {
 
                         ui.separator();
 
+                        let mut metronome =
+                            app.audio_state.metronome_enabled.load(Ordering::Relaxed);
+                        if ui.checkbox(&mut metronome, "Click").clicked() {
+                            app.audio_state
+                                .metronome_enabled
+                                .store(metronome, Ordering::Relaxed);
+                            let _ = app.command_tx.send(AudioCommand::SetMetronome(metronome));
+                        }
+
                         // BPM control
                         ui.label("BPM:");
 
@@ -259,21 +268,6 @@ impl TransportUI {
                                 self.loop_end_input =
                                     format!("{:.1}", app.audio_state.loop_end.load());
                             }
-                        }
-
-                        ui.separator();
-
-                        // Metronome
-                        let mut metronome = self
-                            .transport
-                            .as_ref()
-                            .map(|t| t.metronome_enabled)
-                            .unwrap_or(false);
-
-                        if ui.checkbox(&mut metronome, "Click").clicked()
-                            && let Some(transport) = &mut self.transport
-                        {
-                            transport.metronome_enabled = metronome;
                         }
                     });
                 });

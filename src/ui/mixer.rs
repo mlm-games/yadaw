@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use crate::level_meter::LevelMeter;
+use crate::{level_meter::LevelMeter, model::track::TrackType};
 
 pub struct MixerWindow {
     pub visible: bool,
@@ -286,26 +286,67 @@ impl MixerWindow {
                         ui.set_min_height(60.0);
                         ui.label("Sends");
 
-                        if strip.sends.is_empty() {
-                            strip.sends.push(SendControl {
-                                destination: "Reverb".to_string(),
-                                level: 0.0,
-                                pre_fader: false,
-                            });
-                            strip.sends.push(SendControl {
-                                destination: "Delay".to_string(),
-                                level: 0.0,
-                                pre_fader: false,
+                        // Fetch live sends
+                        let (mut sends, is_midi) = {
+                            let st = app.state.lock().unwrap();
+                            let t = st.tracks.get(&track_id);
+                            let sends = t.map(|tt| tt.sends.clone()).unwrap_or_default();
+                            (
+                                sends,
+                                t.map(|tt| matches!(tt.track_type, TrackType::Audio))
+                                    .unwrap_or(false),
+                            )
+                        };
+
+                        // List
+                        for (idx, s) in sends.iter_mut().enumerate() {
+                            // Fetch bus list
+                            let bus_list: Vec<(u64, String)> = {
+                                let st = app.state.lock().unwrap();
+                                st.track_order.iter()
+                                    .filter_map(|&tid| {
+                                        st.tracks.get(&tid).and_then(|t| if matches!(t.track_type, TrackType::Bus) { Some((tid, t.name.clone())) } else { None })
+                                    })
+                                    .collect()
+                            };
+
+                            // Row
+                            ui.horizontal(|ui| {
+                                // Destination dropdown
+                                let mut chosen = s.destination_track;
+                                let current_name = bus_list.iter().find(|(id,_)| *id == chosen).map(|(_,n)| n.as_str()).unwrap_or("(Select bus)");
+                                egui::ComboBox::from_id_salt((track_id, idx, "send_dest"))
+                                    .selected_text(current_name)
+                                    .show_ui(ui, |ui| {
+                                        for (bid, name) in &bus_list {
+                                            if ui.selectable_value(&mut chosen, *bid, name).clicked() {
+                                                let _ = app.command_tx.send(crate::messages::AudioCommand::SetSendDestination(track_id, idx, *bid));
+                                            }
+                                        }
+                                    });
+
+                                // Amount
+                                let mut lvl = s.amount;
+                                if ui.add(egui::Slider::new(&mut lvl, 0.0..=1.0).show_value(false)).changed() {
+                                    let _ = app.command_tx.send(crate::messages::AudioCommand::SetSendAmount(track_id, idx, lvl));
+                                }
+                                // Pre
+                                let mut pre = s.pre_fader;
+                                if ui.checkbox(&mut pre, "pre").clicked() {
+                                    let _ = app.command_tx.send(crate::messages::AudioCommand::SetSendPreFader(track_id, idx, pre));
+                                }
+                                // Remove
+                                if ui.small_button("✕").clicked() {
+                                    let _ = app.command_tx.send(crate::messages::AudioCommand::RemoveSend(track_id, idx));
+                                }
                             });
                         }
 
-                        for send in &mut strip.sends {
-                            ui.horizontal(|ui| {
-                                ui.label(&send.destination);
-                                ui.add(
-                                    egui::Slider::new(&mut send.level, 0.0..=1.0).show_value(false),
-                                );
-                            });
+                        if ui.small_button("+ Add").clicked() {
+                            // destination is not yet used (aux mix). track_id is placeholder for now.
+                            let _ = app.command_tx.send(crate::messages::AudioCommand::AddSend(
+                                track_id, track_id, 0.0,
+                            ));
                         }
                     });
                 }

@@ -195,6 +195,12 @@ pub enum AudioCommand {
         dest_track_id: u64,
         new_start: f64,
     },
+    SetMetronome(bool),
+    SetSendDestination(
+        u64,   /*track_id*/
+        usize, /*send index*/
+        u64,   /*dest track id*/
+    ),
 }
 
 #[derive(Debug, Clone)]

@@ -36,7 +36,7 @@ fn track_to_snapshot(t: &Track) -> TrackSnapshot {
         muted: t.muted,
         solo: t.solo,
         armed: t.armed,
-        is_midi: t.is_midi,
+        track_type: t.track_type,
         monitor_enabled: t.monitor_enabled,
         audio_clips: t.audio_clips.iter().map(audio_clip_to_snapshot).collect(),
         midi_clips: t.midi_clips.iter().map(midi_clip_to_snapshot).collect(),
@@ -46,6 +46,7 @@ fn track_to_snapshot(t: &Track) -> TrackSnapshot {
             .iter()
             .map(automation_lane_to_snapshot)
             .collect(),
+        sends: t.sends.clone(),
     }
 }
 

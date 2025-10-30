@@ -9,13 +9,14 @@ use crate::input::actions::{ActionContext, AppAction};
 use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::UnifiedPluginInfo;
+use crate::model::track::TrackType;
 use crate::model::{AudioClip, MidiNote, Track};
 use crate::paths::config_path;
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project::{AppState, AppStateSnapshot};
 use crate::project_manager::ProjectManager;
 
-use crate::track_manager::{TrackManager, TrackType};
+use crate::track_manager::{TrackManager, UITrackType};
 use crate::transport::Transport;
 use crossbeam_channel::{Receiver, Sender};
 use dirs::config_dir;
@@ -267,7 +268,7 @@ impl YadawApp {
         self.push_undo();
         let mut state = self.state.lock().unwrap();
         let track_id = state.fresh_id();
-        let mut track = self.track_manager.create_track(TrackType::Audio, None);
+        let mut track = self.track_manager.create_track(UITrackType::Audio, None);
         track.id = track_id;
         state.track_order.push(track_id);
         state.tracks.insert(track_id, track);
@@ -283,7 +284,7 @@ impl YadawApp {
         self.push_undo();
         let mut state = self.state.lock().unwrap();
         let track_id = state.fresh_id();
-        let mut track = self.track_manager.create_track(TrackType::Midi, None);
+        let mut track = self.track_manager.create_track(UITrackType::Midi, None);
         track.id = track_id;
         state.track_order.push(track_id);
         state.tracks.insert(track_id, track);
@@ -299,7 +300,7 @@ impl YadawApp {
         self.push_undo();
         let mut state = self.state.lock().unwrap();
         let track_id = state.fresh_id();
-        let mut track = self.track_manager.create_track(TrackType::Bus, None);
+        let mut track = self.track_manager.create_track(UITrackType::Bus, None);
         track.id = track_id;
         state.track_order.push(track_id);
         state.tracks.insert(track_id, track);
@@ -446,7 +447,7 @@ impl YadawApp {
             .unwrap()
             .tracks
             .get(&track_id)
-            .map_or(false, |t| t.is_midi);
+            .map_or(false, |t| matches!(t.track_type, TrackType::Midi));
 
         if is_midi_track {
             if let Some(clips_src) = midi_clipboard {
@@ -973,7 +974,7 @@ impl YadawApp {
         state
             .tracks
             .get(&self.selected_track)
-            .map(|t| t.is_midi)
+            .map(|t| matches!(t.track_type, TrackType::Midi))
             .unwrap_or(false)
     }
 
@@ -1043,7 +1044,7 @@ impl YadawApp {
                 let mut state = self.state.lock().unwrap();
                 clip.id = state.fresh_id();
                 if let Some(track) = state.tracks.get_mut(&track_id) {
-                    if !track.is_midi {
+                    if !matches!(track.track_type, TrackType::Midi) {
                         // Extra safety check
                         track.audio_clips.push(clip);
                     }
@@ -1434,7 +1435,7 @@ impl YadawApp {
             state
                 .tracks
                 .iter()
-                .find(|(_id, t)| t.is_midi)
+                .find(|(_id, t)| matches!(t.track_type, TrackType::Midi))
                 .map(|(id, _track)| *id)
         };
         if let Some(id) = midi_id {
@@ -1451,7 +1452,12 @@ impl YadawApp {
             state
                 .track_order
                 .iter()
-                .find(|&&id| state.tracks.get(&id).map_or(false, |t| !t.is_midi))
+                .find(|&&id| {
+                    state
+                        .tracks
+                        .get(&id)
+                        .map_or(false, |t| !matches!(t.track_type, TrackType::Midi))
+                })
                 .copied()
         };
         if let Some(id) = audio_id {
