@@ -105,3 +105,16 @@ fn files_dir_pathbuf() -> std::path::PathBuf {
     })
     .expect("getFilesDir failed")
 }
+
+#[cfg(not(target_os = "android"))]
+pub fn config_root_dir() -> std::path::PathBuf {
+    directories::ProjectDirs::from("com", "yadaw", "yadaw")
+        .unwrap()
+        .config_dir()
+        .to_path_buf()
+}
+
+#[cfg(target_os = "android")]
+pub fn config_root_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("/data/data/com.yadaw.app/files/config")
+}

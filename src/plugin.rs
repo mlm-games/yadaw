@@ -59,32 +59,6 @@ impl PluginCategorizationInfo for UnifiedPluginInfo {
     }
 }
 
-pub struct PluginScanner {
-    pub plugins: Vec<PluginInfo>,
-}
-
-impl Default for PluginScanner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PluginScanner {
-    pub fn new() -> Self {
-        Self {
-            plugins: Vec::new(),
-        }
-    }
-
-    pub fn discover_plugins(&mut self) {
-        self.plugins = get_available_plugins().unwrap_or_default();
-    }
-
-    pub fn get_plugins(&self) -> Vec<PluginScanResult> {
-        self.plugins.clone()
-    }
-}
-
 /// Create a plugin descriptor from URI
 pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDescriptor> {
     let list = get_available_plugins()?;

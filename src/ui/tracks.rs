@@ -763,8 +763,69 @@ impl TracksPanel {
                 };
                 app.dialogs.show_rename_track(track_id, current_name);
             }
-            "duplicate" => app.duplicate_selected_track(),
-            "delete" => app.delete_selected_track(),
+            "duplicate" => {
+                let new_id_opt = {
+                    let mut state = app.state.lock().unwrap();
+                    if let Some(src) = state.tracks.get(&track_id).cloned() {
+                        let mut new_track = app.track_manager.duplicate_track(&src);
+                        let new_id = state.fresh_id();
+                        new_track.id = new_id;
+
+                        let insert_pos = state
+                            .track_order
+                            .iter()
+                            .position(|&id| id == track_id)
+                            .map(|i| i + 1)
+                            .unwrap_or(state.track_order.len());
+
+                        state.track_order.insert(insert_pos, new_id);
+                        state.tracks.insert(new_id, new_track);
+                        state.ensure_ids();
+                        Some(new_id)
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(new_id) = new_id_opt {
+                    app.selected_track = new_id;
+                    let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                    let _ = app.command_tx.send(AudioCommand::RebuildAllRtChains);
+                }
+            }
+
+            "delete" => {
+                let can_delete = {
+                    let st = app.state.lock().unwrap();
+                    st.track_order.len() > 1
+                };
+                if !can_delete {
+                    app.dialogs.show_message("Cannot delete the last track");
+                    return;
+                }
+
+                let new_selected = {
+                    let mut st = app.state.lock().unwrap();
+                    if let Some(pos) = st.track_order.iter().position(|&id| id == track_id) {
+                        st.track_order.remove(pos);
+                        st.tracks.remove(&track_id);
+                        st.clips_by_id.retain(|_, r| r.track_id != track_id);
+
+                        if pos > 0 {
+                            st.track_order.get(pos - 1).copied()
+                        } else {
+                            st.track_order.first().copied()
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(ns) = new_selected {
+                    app.selected_track = ns;
+                }
+                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+            }
             _ => {}
         }
     }

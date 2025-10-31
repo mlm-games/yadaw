@@ -11,7 +11,7 @@ use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::track::TrackType;
 use crate::model::{AudioClip, MidiNote, Track};
-use crate::paths::config_path;
+use crate::paths::{config_path, config_root_dir};
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project::{AppState, AppStateSnapshot};
 use crate::project_manager::ProjectManager;
@@ -19,7 +19,7 @@ use crate::project_manager::ProjectManager;
 use crate::track_manager::{TrackManager, UITrackType};
 use crate::transport::Transport;
 use crossbeam_channel::{Receiver, Sender};
-use dirs::config_dir;
+
 use eframe::egui;
 use egui::ahash::HashMap;
 use std::collections::VecDeque;
@@ -134,14 +134,11 @@ impl YadawApp {
         let mut theme_manager = super::theme::ThemeManager::new(theme);
 
         // Load custom themes
-        if let Some(themes_path) = config_dir().map(|d| d.join("custom_themes.json")) {
-            let _ = theme_manager.load_custom_themes(&themes_path);
-        }
+        let themes_path = config_root_dir().join("custom_themes.json");
+        let _ = theme_manager.load_custom_themes(&themes_path);
 
-        // Load current theme selection
-        if let Some(theme_path) = config_dir().map(|d| d.join("current_theme.json")) {
-            let _ = theme_manager.load_current_theme(&theme_path);
-        }
+        let theme_path = config_root_dir().join("current_theme.json");
+        let _ = theme_manager.load_current_theme(&theme_path);
 
         let initial_track_id = {
             let state_guard = state.lock().unwrap();
@@ -160,9 +157,8 @@ impl YadawApp {
         let mut input_manager = InputManager::new();
 
         // Load custom shortcuts if they exist
-        if let Some(shortcuts_path) = config_dir().map(|d| d.join("shortcuts.json")) {
-            let _ = input_manager.load_shortcuts(&shortcuts_path);
-        }
+        let shortcuts_path = config_root_dir().join("shortcuts.json");
+        let _ = input_manager.load_shortcuts(&shortcuts_path);
 
         let mut project_manager = ProjectManager::new();
 
@@ -1595,12 +1591,10 @@ impl Drop for YadawApp {
             let _ = self.input_manager.save_shortcuts(&shortcuts_path);
         }
 
-        if let Some(themes_path) = config_dir().map(|d| d.join("custom_themes.json")) {
-            let _ = self.theme_manager.save_custom_themes(&themes_path);
-        }
+        let themes_path = config_root_dir().join("custom_themes.json");
+        let _ = self.theme_manager.save_custom_themes(&themes_path);
 
-        if let Some(theme_path) = config_dir().map(|d| d.join("current_theme.json")) {
-            let _ = self.theme_manager.save_current_theme(&theme_path);
-        }
+        let theme_path = config_root_dir().join("current_theme.json");
+        let _ = self.theme_manager.save_current_theme(&theme_path);
     }
 }
