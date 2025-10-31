@@ -256,6 +256,11 @@ impl TrackManager {
                 n.id = 0;
             }
         }
+
+        // Similar as above
+        for p in &mut t.plugin_chain {
+            p.id = 0;
+        }
         t
     }
 

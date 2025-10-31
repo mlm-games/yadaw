@@ -346,7 +346,7 @@ impl ShortcutRegistry {
 
         // Transport (no modifiers - global hotkeys)
         reg.bind(PlayPause, Keybind::none(Space));
-        reg.bind(Stop, Keybind::none(KeyCode::Escape));
+        reg.bind(Stop, Keybind::none(KeyCode::S));
         reg.bind(GoToStart, Keybind::none(Home));
 
         // Edit (Cmd/Ctrl)
@@ -398,6 +398,8 @@ impl ShortcutRegistry {
 
         reg.bind(VelocityUp, Keybind::cmd(ArrowUp));
         reg.bind(VelocityDown, Keybind::cmd(ArrowDown));
+
+        reg.bind(AppAction::Escape, Keybind::none(KeyCode::Escape));
 
         reg
     }

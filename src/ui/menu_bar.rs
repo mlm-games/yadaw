@@ -309,7 +309,12 @@ impl MenuBar {
             }
 
             if ui.button("Record").clicked() {
-                // Toggle recording
+                let active = app.audio_state.recording.load(Ordering::Relaxed);
+                let _ = app.command_tx.send(if active {
+                    AudioCommand::StopRecording
+                } else {
+                    AudioCommand::StartRecording
+                });
                 ui.close();
             }
 

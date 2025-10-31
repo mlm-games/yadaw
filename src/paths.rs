@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "android")]
 pub fn projects_dir() -> PathBuf {
-    let base = Path::new("/data/data/com.yadaw.app/files");
+    let base = files_dir_pathbuf();
     let p = base.join("projects");
     let _ = std::fs::create_dir_all(&p);
     p
@@ -88,4 +88,20 @@ pub fn presets_dir() -> std::path::PathBuf {
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
+}
+
+#[cfg(target_os = "android")]
+fn files_dir_pathbuf() -> std::path::PathBuf {
+    use anyhow::Context;
+    crate::android_saf::with_env(|&mut env, context| {
+        let file_obj = env
+            .call_method(&context, "getFilesDir", "()Ljava/io/File;", &[])?
+            .l()?;
+        let jpath = env
+            .call_method(&file_obj, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+            .l()?;
+        let s: String = env.get_string(&jni::objects::JString::from(jpath))?.into();
+        Ok(std::path::PathBuf::from(s))
+    })
+    .expect("getFilesDir failed")
 }

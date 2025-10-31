@@ -260,7 +260,7 @@ impl AppState {
                 }
                 for c in &track.plugin_chain {
                     if c.id == 0 {
-                        ids_to_generate.1 += 1;
+                        ids_to_generate.3 += 1;
                     }
                 }
             }

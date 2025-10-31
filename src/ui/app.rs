@@ -381,6 +381,7 @@ impl YadawApp {
 
         drop(state);
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+        let _ = self.command_tx.send(AudioCommand::RebuildAllRtChains);
     }
 
     pub fn delete_selected_track(&mut self) {
