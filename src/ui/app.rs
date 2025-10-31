@@ -11,7 +11,9 @@ use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::track::TrackType;
 use crate::model::{AudioClip, MidiNote, Track};
-use crate::paths::{config_path, config_root_dir};
+use crate::paths::{
+    config_path, config_root_dir, current_theme_path, custom_themes_path, shortcuts_path,
+};
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
 use crate::project::{AppState, AppStateSnapshot};
 use crate::project_manager::ProjectManager;
@@ -133,13 +135,6 @@ impl YadawApp {
         };
         let mut theme_manager = super::theme::ThemeManager::new(theme);
 
-        // Load custom themes
-        let themes_path = config_root_dir().join("custom_themes.json");
-        let _ = theme_manager.load_custom_themes(&themes_path);
-
-        let theme_path = config_root_dir().join("current_theme.json");
-        let _ = theme_manager.load_current_theme(&theme_path);
-
         let initial_track_id = {
             let state_guard = state.lock().unwrap();
             state_guard.track_order.first().copied().unwrap_or(0)
@@ -156,11 +151,19 @@ impl YadawApp {
 
         let mut input_manager = InputManager::new();
 
-        // Load custom shortcuts if they exist
-        let shortcuts_path = config_root_dir().join("shortcuts.json");
-        let _ = input_manager.load_shortcuts(&shortcuts_path);
-
         let mut project_manager = ProjectManager::new();
+
+        // Load custom themes
+        let themes_path = custom_themes_path();
+        let _ = theme_manager.load_custom_themes(&themes_path);
+
+        let theme_path = current_theme_path();
+        let _ = theme_manager.load_current_theme(&theme_path);
+
+        // Load custom shortcuts if they exist
+
+        let shortcuts_path = shortcuts_path();
+        let _ = input_manager.load_shortcuts(&shortcuts_path);
 
         project_manager.set_auto_save(config.behavior.auto_save);
 
@@ -1577,24 +1580,13 @@ impl eframe::App for YadawApp {
             }
             self.last_autosave = Instant::now();
         }
-
-        // Request repaint if playing
-        if self.audio_state.playing.load(Ordering::Relaxed) {
-            ctx.request_repaint();
-        }
     }
 }
 
 impl Drop for YadawApp {
     fn drop(&mut self) {
-        if let Some(shortcuts_path) = config_path().parent().map(|p| p.join("shortcuts.json")) {
-            let _ = self.input_manager.save_shortcuts(&shortcuts_path);
-        }
-
-        let themes_path = config_root_dir().join("custom_themes.json");
-        let _ = self.theme_manager.save_custom_themes(&themes_path);
-
-        let theme_path = config_root_dir().join("current_theme.json");
-        let _ = self.theme_manager.save_current_theme(&theme_path);
+        let _ = self.input_manager.save_shortcuts(&shortcuts_path());
+        let _ = self.theme_manager.save_custom_themes(&custom_themes_path());
+        let _ = self.theme_manager.save_current_theme(&current_theme_path());
     }
 }

@@ -173,13 +173,19 @@ impl TracksPanel {
         mut on_action: impl FnMut(&'a str),
     ) -> egui::Response {
         // Query current name and type
-        let (name, is_midi) = {
+        let (name, is_midi, is_frozen) = {
             let state = app.state.lock().unwrap();
             state
                 .tracks
                 .get(&track_id)
-                .map(|t| (t.name.clone(), matches!(t.track_type, TrackType::Midi)))
-                .unwrap_or_else(|| ("Unknown".to_string(), false))
+                .map(|t| {
+                    (
+                        t.name.clone(),
+                        matches!(t.track_type, TrackType::Midi),
+                        t.frozen,
+                    )
+                })
+                .unwrap_or_else(|| ("Unknown".to_string(), false, false))
         };
 
         // Draw a framed header
@@ -242,6 +248,13 @@ impl TracksPanel {
                         }
                         if ui.button("Delete").clicked() {
                             on_action("delete");
+                            ui.close();
+                        }
+                        if ui
+                            .button(if is_frozen { "Unfreeze" } else { "Freeze" })
+                            .clicked()
+                        {
+                            on_action("freeze_toggle");
                             ui.close();
                         }
                     });
@@ -606,7 +619,7 @@ impl TracksPanel {
                         .clone()
                         .unwrap_or_else(|| "None".to_string());
 
-                    let response = egui::ComboBox::from_id_salt(("midi_in", track_id))
+                    let changed = egui::ComboBox::from_id_salt(("midi_in", track_id))
                         .selected_text(&selected_port)
                         .show_ui(ui, |ui| {
                             let mut changed = ui
@@ -622,26 +635,78 @@ impl TracksPanel {
                                     .changed();
                             }
                             changed
-                        });
+                        })
+                        .inner
+                        .unwrap_or(false);
 
-                    if response.inner.unwrap_or(false) {
-                        // Check if the value changed
-                        let new_selection = if selected_port == "None" {
+                    if changed {
+                        let new_sel = if selected_port == "None" {
                             None
                         } else {
                             Some(selected_port)
                         };
-
                         let _ = app
                             .command_tx
-                            .send(AudioCommand::SetTrackMidiInput(track_id, new_selection));
+                            .send(AudioCommand::SetTrackMidiInput(track_id, new_sel));
                     }
                 });
             } else {
-                // Placeholder for audio input selection
-                ui.horizontal(|ui| {
+                ui.horizontal(|ui: &mut egui::Ui| {
                     ui.label("Audio In:");
-                    ui.label("Default Input");
+                    let mut in_sel = track
+                        .input_device
+                        .clone()
+                        .unwrap_or_else(|| "Default".to_string());
+                    let changed = egui::ComboBox::from_id_salt(("audio_in", track_id))
+                        .selected_text(&in_sel)
+                        .show_ui(ui, |ui| {
+                            let mut ch = ui
+                                .selectable_value(&mut in_sel, "Default".to_string(), "Default")
+                                .changed();
+                            ch |= ui
+                                .selectable_value(&mut in_sel, "None".to_string(), "None")
+                                .changed();
+                            ch
+                        })
+                        .inner
+                        .unwrap_or(false);
+                    if changed {
+                        let new_sel = if in_sel == "None" { None } else { Some(in_sel) };
+                        let _ = app
+                            .command_tx
+                            .send(AudioCommand::SetTrackInput(track_id, new_sel));
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Audio Out:");
+                    let mut out_sel = track
+                        .output_device
+                        .clone()
+                        .unwrap_or_else(|| "Default".to_string());
+                    let changed = egui::ComboBox::from_id_salt(("audio_out", track_id))
+                        .selected_text(&out_sel)
+                        .show_ui(ui, |ui| {
+                            let mut ch = ui
+                                .selectable_value(&mut out_sel, "Default".to_string(), "Default")
+                                .changed();
+                            ch |= ui
+                                .selectable_value(&mut out_sel, "None".to_string(), "None")
+                                .changed();
+                            ch
+                        })
+                        .inner
+                        .unwrap_or(false);
+                    if changed {
+                        let new_sel = if out_sel == "None" {
+                            None
+                        } else {
+                            Some(out_sel)
+                        };
+                        let _ = app
+                            .command_tx
+                            .send(AudioCommand::SetTrackOutput(track_id, new_sel));
+                    }
                 });
             }
         }
@@ -826,6 +891,23 @@ impl TracksPanel {
                 }
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
             }
+            "freeze_toggle" => {
+                let is_frozen = {
+                    let state = app.state.lock().unwrap();
+                    state
+                        .tracks
+                        .get(&track_id)
+                        .map(|t| t.frozen)
+                        .unwrap_or(false)
+                };
+                let cmd = if is_frozen {
+                    AudioCommand::UnfreezeTrack(track_id)
+                } else {
+                    AudioCommand::FreezeTrack(track_id)
+                };
+                let _ = app.command_tx.send(cmd);
+            }
+
             _ => {}
         }
     }

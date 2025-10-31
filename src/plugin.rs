@@ -6,8 +6,6 @@ use crate::model::plugin::PluginDescriptor;
 use crate::model::plugin_api::{BackendKind, UnifiedPluginInfo};
 use crate::plugin_host::{get_available_plugins, with_host};
 
-pub use crate::lv2_plugin_host::PluginInfo as PluginScanResult;
-
 pub trait PluginCategorizationInfo {
     fn name(&self) -> &str;
     fn uri(&self) -> &str;

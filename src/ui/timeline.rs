@@ -540,47 +540,119 @@ impl TimelineView {
 
         self.handle_clip_interaction(response, clip.id, ui, clip_rect, app);
 
-        let handle_w = 10.0f32.min(clip_rect.width() / 2.0);
-        let left_handle = egui::Rect::from_min_size(
-            egui::pos2(clip_rect.left(), clip_rect.bottom() - 14.0),
-            egui::vec2(handle_w, 12.0),
-        );
-        let right_handle = egui::Rect::from_min_size(
-            egui::pos2(clip_rect.right() - handle_w, clip_rect.bottom() - 14.0),
-            egui::vec2(handle_w, 12.0),
-        );
-        ui.painter()
-            .rect_filled(left_handle, 2.0, egui::Color32::from_gray(70));
-        ui.painter()
-            .rect_filled(right_handle, 2.0, egui::Color32::from_gray(70));
+        let in_beats = clip.fade_in.unwrap_or(0.0);
+        let out_beats = clip.fade_out.unwrap_or(0.0);
+        let in_px = (in_beats as f32 * self.zoom_x).clamp(0.0, clip_rect.width());
+        let out_px = (out_beats as f32 * self.zoom_x).clamp(0.0, clip_rect.width());
 
-        let left_id = ui.id().with(("fade_in", clip.id));
-        let right_id = ui.id().with(("fade_out", clip.id));
-        let left_resp = ui.interact(left_handle, left_id, egui::Sense::click_and_drag());
-        let right_resp = ui.interact(right_handle, right_id, egui::Sense::click_and_drag());
+        // Fade-in overlay + guide
+        if in_px > 0.5 {
+            let overlay = egui::Rect::from_min_size(
+                clip_rect.left_top(),
+                egui::vec2(in_px, clip_rect.height()),
+            );
+            ui.painter().rect_filled(
+                overlay,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+            );
+            // thin guide curve (straight line; engine uses equal-power)
+            ui.painter().line_segment(
+                [
+                    egui::pos2(clip_rect.left(), clip_rect.bottom()),
+                    egui::pos2(clip_rect.left() + in_px, clip_rect.top()),
+                ],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+            );
+        }
 
-        if left_resp.dragged() {
-            if let Some(pos) = left_resp.interact_pointer_pos() {
-                let beat_at_cursor = self.x_to_beat(track_rect, pos.x);
-                let mut new_len = (beat_at_cursor - clip.start_beat).clamp(0.0, clip.length_beats);
-                let (snapped, _) =
-                    self.snap_beat(ui, track_rect, clip.start_beat + new_len, app, None);
-                new_len = (snapped - clip.start_beat).clamp(0.0, clip.length_beats);
-                let _ = app
-                    .command_tx
-                    .send(AudioCommand::SetAudioClipFadeIn(clip.id, Some(new_len)));
+        // Fade-out overlay + guide
+        if out_px > 0.5 {
+            let overlay = egui::Rect::from_min_size(
+                egui::pos2(clip_rect.right() - out_px, clip_rect.top()),
+                egui::vec2(out_px, clip_rect.height()),
+            );
+            ui.painter().rect_filled(
+                overlay,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(clip_rect.right() - out_px, clip_rect.top()),
+                    egui::pos2(clip_rect.right(), clip_rect.bottom()),
+                ],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+            );
+        }
+
+        // Fade handles (dots at top corners)
+        let dot_r = 5.0;
+        let left_dot_center = egui::pos2(clip_rect.left() + in_px, clip_rect.top() + 6.0);
+        let right_dot_center = egui::pos2(clip_rect.right() - out_px, clip_rect.top() + 6.0);
+
+        // Left (fade in) dot
+        {
+            let dot_id = ui.id().with(("fade_in_dot", clip.id));
+            let dot_rect = egui::Rect::from_center_size(left_dot_center, egui::vec2(14.0, 14.0));
+            let resp = ui.interact(dot_rect, dot_id, egui::Sense::click_and_drag());
+            ui.painter()
+                .circle_filled(left_dot_center, dot_r, egui::Color32::from_gray(220));
+            if resp.hovered() || resp.dragged() {
+                ui.painter().circle_stroke(
+                    left_dot_center,
+                    dot_r + 2.0,
+                    egui::Stroke::new(1.0, egui::Color32::WHITE),
+                );
+            }
+            if resp.dragged() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let beat_at_cursor = self.x_to_beat(track_rect, pos.x);
+                    // duration in beats relative to clip start
+                    let mut new_len =
+                        (beat_at_cursor - clip.start_beat).clamp(0.0, clip.length_beats);
+                    let (snapped, _) =
+                        self.snap_beat(ui, track_rect, clip.start_beat + new_len, app, None);
+                    new_len = (snapped - clip.start_beat).clamp(0.0, clip.length_beats);
+                    let _ = app
+                        .command_tx
+                        .send(crate::messages::AudioCommand::SetAudioClipFadeIn(
+                            clip.id,
+                            Some(new_len),
+                        ));
+                }
             }
         }
-        if right_resp.dragged() {
-            if let Some(pos) = right_resp.interact_pointer_pos() {
-                let beat_at_cursor = self.x_to_beat(track_rect, pos.x);
-                let end_beat = clip.start_beat + clip.length_beats;
-                let mut new_len = (end_beat - beat_at_cursor).clamp(0.0, clip.length_beats);
-                let (snapped, _) = self.snap_beat(ui, track_rect, end_beat - new_len, app, None);
-                new_len = (end_beat - snapped).clamp(0.0, clip.length_beats);
-                let _ = app
-                    .command_tx
-                    .send(AudioCommand::SetAudioClipFadeOut(clip.id, Some(new_len)));
+
+        // Right (fade out) dot
+        {
+            let dot_id = ui.id().with(("fade_out_dot", clip.id));
+            let dot_rect = egui::Rect::from_center_size(right_dot_center, egui::vec2(14.0, 14.0));
+            let resp = ui.interact(dot_rect, dot_id, egui::Sense::click_and_drag());
+            ui.painter()
+                .circle_filled(right_dot_center, dot_r, egui::Color32::from_gray(220));
+            if resp.hovered() || resp.dragged() {
+                ui.painter().circle_stroke(
+                    right_dot_center,
+                    dot_r + 2.0,
+                    egui::Stroke::new(1.0, egui::Color32::WHITE),
+                );
+            }
+            if resp.dragged() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let beat_at_cursor = self.x_to_beat(track_rect, pos.x);
+                    let end_beat = clip.start_beat + clip.length_beats;
+                    let mut new_len = (end_beat - beat_at_cursor).clamp(0.0, clip.length_beats);
+                    let (snapped, _) =
+                        self.snap_beat(ui, track_rect, end_beat - new_len, app, None);
+                    new_len = (end_beat - snapped).clamp(0.0, clip.length_beats);
+                    let _ =
+                        app.command_tx
+                            .send(crate::messages::AudioCommand::SetAudioClipFadeOut(
+                                clip.id,
+                                Some(new_len),
+                            ));
+                }
             }
         }
     }
@@ -1633,22 +1705,74 @@ impl TimelineView {
 
             let label_w = 80.0_f32.min(track_rect.width() * 0.25);
             let label_rect = egui::Rect::from_min_size(lane_rect.min, egui::vec2(label_w, h));
-            let lane_name = match &track.automation_lanes[lane_idx].parameter {
-                AutomationTarget::TrackVolume => "Volume",
-                AutomationTarget::TrackPan => "Pan",
-                AutomationTarget::TrackSend(_) => "Send",
-                AutomationTarget::PluginParam { param_name, .. } => param_name.as_str(),
-            };
+
+            // Draw label background
             ui.painter()
                 .rect_filled(label_rect, 0.0, egui::Color32::from_gray(28));
-            ui.painter().text(
-                label_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                lane_name,
-                egui::FontId::default(),
-                egui::Color32::from_gray(200),
-            );
 
+            // Build a tiny UI inside the label_rect
+            ui.allocate_ui_at_rect(label_rect, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_clip_rect(label_rect);
+
+                    // Lane name
+                    let lane_name = match &track.automation_lanes[lane_idx].parameter {
+                        AutomationTarget::TrackVolume => "Volume",
+                        AutomationTarget::TrackPan => "Pan",
+                        AutomationTarget::TrackSend(_) => "Send",
+                        AutomationTarget::PluginParam { param_name, .. } => param_name.as_str(),
+                    };
+                    ui.label(lane_name);
+
+                    // Mode combo (Read/Write/Touch/Latch)
+                    use crate::model::automation::AutomationMode;
+                    let current_mode = {
+                        let st = app.state.lock().unwrap();
+                        st.tracks
+                            .get(&track_id)
+                            .and_then(|t| t.automation_lanes.get(lane_idx))
+                            .map(|l| l.write_mode)
+                            .unwrap_or(AutomationMode::Read)
+                    };
+
+                    let mut mode = current_mode;
+                    egui::ComboBox::from_id_salt(("auto_mode", track_id, lane_idx as u64))
+                        .width(90.0)
+                        .selected_text(match mode {
+                            AutomationMode::Off => "Off",
+                            AutomationMode::Read => "Read",
+                            AutomationMode::Write => "Write",
+                            AutomationMode::Touch => "Touch",
+                            AutomationMode::Latch => "Latch",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut mode, AutomationMode::Read, "Read");
+                            ui.selectable_value(&mut mode, AutomationMode::Write, "Write");
+                            ui.selectable_value(&mut mode, AutomationMode::Touch, "Touch");
+                            ui.selectable_value(&mut mode, AutomationMode::Latch, "Latch");
+                            ui.selectable_value(&mut mode, AutomationMode::Off, "Off");
+                        });
+
+                    if mode != current_mode {
+                        let _ =
+                            app.command_tx
+                                .send(crate::messages::AudioCommand::SetAutomationMode(
+                                    track_id, lane_idx, mode,
+                                ));
+                    }
+
+                    // Clear lane button
+                    if ui
+                        .small_button("Clear")
+                        .on_hover_text("Clear all points")
+                        .clicked()
+                    {
+                        let _ = app.command_tx.send(
+                            crate::messages::AudioCommand::ClearAutomationLane(track_id, lane_idx),
+                        );
+                    }
+                });
+            });
             let curve_rect = egui::Rect::from_min_max(
                 egui::pos2(lane_rect.left() + label_w + 2.0, lane_rect.top()),
                 lane_rect.max,
@@ -1730,209 +1854,204 @@ impl TimelineView {
     }
 
     fn draw_context_menus(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        if self.show_clip_menu {
-            let mut close_menu = false;
-            let mut popup_rect: Option<egui::Rect> = None;
-            egui::Area::new(ui.id().with("clip_context_menu"))
-                .fixed_pos(self.clip_menu_pos)
-                .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        popup_rect = Some(ui.min_rect());
-                        ui.set_min_width(150.0);
+        if !self.show_clip_menu {
+            return;
+        }
 
-                        if ui.button("Cut").clicked() {
-                            app.cut_selected();
-                            close_menu = true;
-                        }
+        let ctx = ui.ctx();
+        let mut close_menu = false;
+        let mut popup_rect: Option<egui::Rect> = None;
 
-                        if ui.button("Copy").clicked() {
-                            app.copy_selected();
-                            close_menu = true;
-                        }
+        egui::Area::new(egui::Id::new("clip_context_menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(self.clip_menu_pos)
+            .interactable(true)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    popup_rect = Some(ui.min_rect());
+                    ui.set_min_width(180.0);
 
-                        // if ui.button("Paste").clicked() { // FIXME for all commented
-                        //     app.paste_at_playhead();
-                        //     close_menu = true;
-                        // }
-
-                        // ui.separator();
-
-                        // if ui.button("Split at Playhead").clicked() {
-                        //     app.split_selected_at_playhead(); // FIXME
-                        //     close_menu = true;
-                        // }
-
-                        if ui.button("Delete").clicked() {
-                            app.delete_selected();
-                            close_menu = true;
-                        }
-
-                        ui.separator();
-
-                        // if ui.button("Normalize").clicked() {
-                        //     app.normalize_selected();
-                        //     close_menu = true;
-                        // }
-
-                        // if ui.button("Reverse").clicked() {
-                        //     app.reverse_selected();
-                        //     close_menu = true;
-                        // }
-
-                        // if ui.button("Fade In").clicked() {
-                        //     app.apply_fade_in();
-                        //     close_menu = true;
-                        // }
-
-                        // if ui.button("Fade Out").clicked() {
-                        //     app.apply_fade_out();
-                        //     close_menu = true;
-                        // }
-
-                        let primary = app.selected_clips.first().copied();
-
-                        if let Some(clip_id) = primary {
-                            let is_midi = app
+                    if ui.button("Cut").clicked() {
+                        app.cut_selected();
+                        close_menu = true;
+                    }
+                    if ui.button("Copy").clicked() {
+                        app.copy_selected();
+                        close_menu = true;
+                    }
+                    if ui.button("Paste").clicked() {
+                        if let Some(primary_clip_id) = app.selected_clips.first().copied() {
+                            if let Some(tid) = app
                                 .state
                                 .lock()
                                 .unwrap()
                                 .clips_by_id
-                                .get(&clip_id)
-                                .map_or(false, |r| r.is_midi);
-                            if is_midi {
-                                ui.separator();
-                                // if ui.button("Toggle Loop").clicked() {
-                                //     let enabled = {
-                                //         let state = app.state.lock().unwrap();
-                                //         state
-                                //             .find_clip(clip_id)
-                                //             .and_then(|(track, loc)| {
-                                //                 if let ClipLocation::Midi(idx) = loc {
-                                //                     track
-                                //                         .midi_clips
-                                //                         .get(idx)
-                                //                         .map(|c| !c.loop_enabled)
-                                //                 } else {
-                                //                     None
-                                //                 }
-                                //             })
-                                //             .unwrap_or(true)
-                                //     };
-                                //     let _ = app
-                                //         .command_tx
-                                //         .send(AudioCommand::ToggleClipLoop { clip_id, enabled });
-                                //     close_menu = true;
-                                // }
+                                .get(&primary_clip_id)
+                                .map(|r| r.track_id)
+                            {
+                                app.selected_track = tid;
+                            }
+                        }
+                        app.paste_at_playhead();
+                        close_menu = true;
+                    }
 
-                                ui.separator();
+                    ui.separator();
 
-                                let is_alias = {
+                    if ui.button("Split at Playhead").clicked() {
+                        app.split_selected_at_playhead();
+                        close_menu = true;
+                    }
+                    if ui.button("Delete").clicked() {
+                        app.delete_selected();
+                        close_menu = true;
+                    }
+
+                    if let Some(primary_clip_id) = app.selected_clips.first().copied() {
+                        let is_midi = app
+                            .state
+                            .lock()
+                            .unwrap()
+                            .clips_by_id
+                            .get(&primary_clip_id)
+                            .map_or(false, |r| r.is_midi);
+                        if is_midi {
+                            ui.separator();
+                            if ui.button("Toggle Loop").clicked() {
+                                let enabled = {
                                     let st = app.state.lock().unwrap();
-                                    st.find_clip(clip_id)
+                                    st.find_clip(primary_clip_id)
                                         .and_then(|(track, loc)| {
-                                            if let ClipLocation::Midi(idx) = loc {
-                                                track.midi_clips.get(idx).and_then(|c| c.pattern_id)
+                                            if let crate::project::ClipLocation::Midi(idx) = loc {
+                                                track.midi_clips.get(idx).map(|c| !c.loop_enabled)
                                             } else {
                                                 None
                                             }
                                         })
-                                        .is_some()
+                                        .unwrap_or(true)
                                 };
+                                let _ = app.command_tx.send(
+                                    crate::messages::AudioCommand::ToggleClipLoop {
+                                        clip_id: primary_clip_id,
+                                        enabled,
+                                    },
+                                );
+                                close_menu = true;
+                            }
 
-                                if ui.button("Duplicate (independent)").clicked() {
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::DuplicateMidiClip { clip_id });
-                                    close_menu = true;
+                            ui.separator();
+                            ui.label("Quantize");
+
+                            let (mut q_grid, mut q_strength, mut q_swing, mut q_enabled) = {
+                                app.state
+                                    .lock()
+                                    .unwrap()
+                                    .find_clip(primary_clip_id)
+                                    .and_then(|(track, loc)| {
+                                        if let crate::project::ClipLocation::Midi(idx) = loc {
+                                            track.midi_clips.get(idx).map(|c| {
+                                                (
+                                                    c.quantize_grid,
+                                                    c.quantize_strength,
+                                                    c.swing,
+                                                    c.quantize_enabled,
+                                                )
+                                            })
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or((0.25, 1.0, 0.0, false))
+                            };
+
+                            ui.horizontal(|ui| {
+                                ui.label("Grid:");
+                                const GRIDS: [(&str, f32); 6] = [
+                                    ("1/1", 1.0),
+                                    ("1/2", 0.5),
+                                    ("1/4", 0.25),
+                                    ("1/8", 0.125),
+                                    ("1/16", 0.0625),
+                                    ("1/32", 0.03125),
+                                ];
+                                for (label, g) in GRIDS {
+                                    ui.selectable_value(&mut q_grid, g, label);
                                 }
-                                if ui.button("Duplicate as Alias").clicked() {
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::DuplicateMidiClipAsAlias { clip_id });
-                                    close_menu = true;
-                                }
-                                if ui
-                                    .add_enabled(is_alias, egui::Button::new("Make Unique"))
-                                    .clicked()
-                                {
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::MakeClipUnique { clip_id });
-                                    close_menu = true;
-                                }
+                            });
+                            ui.add(egui::Slider::new(&mut q_strength, 0.0..=1.0).text("Strength"));
+                            ui.add(egui::Slider::new(&mut q_swing, -0.5..=0.5).text("Swing"));
+                            ui.checkbox(&mut q_enabled, "Enabled");
 
-                                // ui.separator();
-                                // ui.label("Quantize");
+                            if ui.button("Apply Quantize").clicked() {
+                                let _ = app.command_tx.send(
+                                    crate::messages::AudioCommand::SetClipQuantize {
+                                        clip_id: primary_clip_id,
+                                        grid: q_grid,
+                                        strength: q_strength,
+                                        swing: q_swing,
+                                        enabled: q_enabled,
+                                    },
+                                );
+                                close_menu = true;
+                            }
 
-                                // let (mut grid, mut strength, mut swing, mut enabled) = {
-                                //     app.state
-                                //         .lock()
-                                //         .unwrap()
-                                //         .find_clip(clip_id)
-                                //         .and_then(|(track, loc)| {
-                                //             if let ClipLocation::Midi(idx) = loc {
-                                //                 track.midi_clips.get(idx).map(|c| {
-                                //                     (
-                                //                         c.quantize_grid,
-                                //                         c.quantize_strength,
-                                //                         c.swing,
-                                //                         c.quantize_enabled,
-                                //                     )
-                                //                 })
-                                //             } else {
-                                //                 None
-                                //             }
-                                //         })
-                                //         .unwrap_or((0.25, 1.0, 0.0, false))
-                                // };
+                            ui.separator();
+                            if ui.button("Duplicate (independent)").clicked() {
+                                let _ = app.command_tx.send(
+                                    crate::messages::AudioCommand::DuplicateMidiClip {
+                                        clip_id: primary_clip_id,
+                                    },
+                                );
+                                close_menu = true;
+                            }
+                            if ui.button("Duplicate as Alias").clicked() {
+                                let _ = app.command_tx.send(
+                                    crate::messages::AudioCommand::DuplicateMidiClipAsAlias {
+                                        clip_id: primary_clip_id,
+                                    },
+                                );
+                                close_menu = true;
+                            }
 
-                                // static GRIDS: [(&str, f32); 6] = [
-                                //     ("1/1", 1.0),
-                                //     ("1/2", 0.5),
-                                //     ("1/4", 0.25),
-                                //     ("1/8", 0.125),
-                                //     ("1/16", 0.0625),
-                                //     ("1/32", 0.03125),
-                                // ];
-                                // for (label, g) in GRIDS {
-                                //     if ui
-                                //         .selectable_label((grid - g).abs() < 1e-6, label)
-                                //         .clicked()
-                                //     {
-                                //         grid = g;
-                                //     }
-                                // }
-                                // ui.add(
-                                //     egui::Slider::new(&mut strength, 0.0..=1.0).text("Strength"),
-                                // );
-                                // ui.add(egui::Slider::new(&mut swing, -0.5..=0.5).text("Swing"));
-                                // if ui.checkbox(&mut enabled, "Enabled").changed() {}
-                                // if ui.button("Apply Quantize").clicked() {
-                                //     let _ = app.command_tx.send(AudioCommand::SetClipQuantize {
-                                //         clip_id,
-                                //         grid,
-                                //         strength,
-                                //         swing,
-                                //         enabled,
-                                //     });
-                                //     close_menu = true;
-                                // }
+                            let is_alias = {
+                                let st = app.state.lock().unwrap();
+                                st.find_clip(primary_clip_id)
+                                    .and_then(|(track, loc)| {
+                                        if let crate::project::ClipLocation::Midi(idx) = loc {
+                                            track.midi_clips.get(idx).and_then(|c| c.pattern_id)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .is_some()
+                            };
+                            if ui
+                                .add_enabled(is_alias, egui::Button::new("Make Unique"))
+                                .clicked()
+                            {
+                                let _ = app.command_tx.send(
+                                    crate::messages::AudioCommand::MakeClipUnique {
+                                        clip_id: primary_clip_id,
+                                    },
+                                );
+                                close_menu = true;
                             }
                         }
-                    });
+                    }
                 });
-
-            // close on any click outside the popup
-            let outside_clicked = ui.ctx().input(|i| {
-                i.pointer.any_pressed()
-                    && i.pointer
-                        .interact_pos()
-                        .map(|p| popup_rect.map(|r| !r.contains(p)).unwrap_or(true))
-                        .unwrap_or(true)
             });
-            if close_menu || outside_clicked {
-                self.show_clip_menu = false;
-            }
+
+        // close on any outside click
+        let outside_clicked = ui.ctx().input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .map(|p| popup_rect.map(|r| !r.contains(p)).unwrap_or(true))
+                    .unwrap_or(true)
+        });
+
+        if close_menu || outside_clicked {
+            self.show_clip_menu = false;
         }
     }
 

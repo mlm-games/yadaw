@@ -945,10 +945,46 @@ fn process_command(
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
-        AudioCommand::CreateGroup(_, _)
-        | AudioCommand::RemoveGroup(_)
-        | AudioCommand::AddTrackToGroup(_, _)
-        | AudioCommand::RemoveTrackFromGroup(_) => {}
+        AudioCommand::CreateGroup(_name, track_ids) => {
+            // Assign a compact new group id (max+1).
+            let mut st = app_state.lock().unwrap();
+            let next_gid = st
+                .tracks
+                .values()
+                .filter_map(|t| t.group_id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
+            for tid in track_ids {
+                if let Some(t) = st.tracks.get_mut(&tid) {
+                    t.group_id = Some(next_gid);
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::RemoveGroup(group_id) => {
+            let mut st = app_state.lock().unwrap();
+            for t in st.tracks.values_mut() {
+                if t.group_id == Some(group_id) {
+                    t.group_id = None;
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::AddTrackToGroup(track_id, group_id) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                t.group_id = Some(group_id);
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::RemoveTrackFromGroup(track_id) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                t.group_id = None;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
         AudioCommand::ToggleClipLoop { clip_id, enabled } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
@@ -1384,20 +1420,413 @@ fn process_command(
             let st = app_state.lock().unwrap();
             send_graph_snapshot(&st, snapshot_tx);
         }
-        AudioCommand::SetTrackInput(_, _) => {}
-        AudioCommand::SetTrackOutput(_, _) => {}
-        AudioCommand::FreezeTrack(_) => {}
-        AudioCommand::UnfreezeTrack(_) => {}
-        AudioCommand::CreateMidiClipWithData { .. } => {}
-        AudioCommand::SplitMidiClip { .. } => {}
-        AudioCommand::SplitAudioClip { .. } => {}
-        AudioCommand::SetAudioClipGain(_, _) => {}
-        AudioCommand::SetAudioClipFadeIn(_, _) => {}
-        AudioCommand::SetAudioClipFadeOut(_, _) => {}
-        AudioCommand::MoveMidiClipToTrack { .. } => {}
-        AudioCommand::MoveAudioClipToTrack { .. } => {}
-        AudioCommand::SetAutomationMode(_, _, automation_mode) => todo!(),
-        AudioCommand::ClearAutomationLane(_, _) => todo!(),
+        AudioCommand::MoveMidiClipToTrack {
+            clip_id,
+            dest_track_id,
+            new_start,
+        } => {
+            // 1) Snapshot the clip to move (immutable read)
+            let clip_opt = {
+                let st = app_state.lock().unwrap();
+                st.find_clip(clip_id).and_then(|(track, loc)| {
+                    if let ClipLocation::Midi(idx) = loc {
+                        track.midi_clips.get(idx).cloned()
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            if let Some(mut clip) = clip_opt {
+                // 2) Mutate: remove from source, insert in destination
+                let mut st = app_state.lock().unwrap();
+
+                // Type guard: destination track must be MIDI
+                if !st
+                    .tracks
+                    .get(&dest_track_id)
+                    .map_or(false, |t| matches!(t.track_type, TrackType::Midi))
+                {
+                    return;
+                }
+
+                // Remove from source
+                if let Some((track, loc)) = st.find_clip_mut(clip_id) {
+                    if let ClipLocation::Midi(idx) = loc {
+                        track.midi_clips.remove(idx);
+                    }
+                }
+                // Update mapping
+                st.clips_by_id.remove(&clip_id);
+
+                // Insert into destination
+                clip.start_beat = new_start;
+                if let Some(dest) = st.tracks.get_mut(&dest_track_id) {
+                    dest.midi_clips.push(clip.clone());
+                }
+
+                // Re-index
+                st.clips_by_id.insert(
+                    clip_id,
+                    ClipRef {
+                        track_id: dest_track_id,
+                        is_midi: true,
+                    },
+                );
+
+                send_graph_snapshot(&st, snapshot_tx);
+            }
+        }
+        AudioCommand::MoveAudioClipToTrack {
+            clip_id,
+            dest_track_id,
+            new_start,
+        } => {
+            let clip_opt = {
+                let st = app_state.lock().unwrap();
+                st.find_clip(clip_id).and_then(|(track, loc)| {
+                    if let ClipLocation::Audio(idx) = loc {
+                        track.audio_clips.get(idx).cloned()
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            if let Some(mut clip) = clip_opt {
+                let mut st = app_state.lock().unwrap();
+
+                // Destination must be non-MIDI
+                if !st
+                    .tracks
+                    .get(&dest_track_id)
+                    .map_or(false, |t| !matches!(t.track_type, TrackType::Midi))
+                {
+                    return;
+                }
+
+                if let Some((track, loc)) = st.find_clip_mut(clip_id) {
+                    if let ClipLocation::Audio(idx) = loc {
+                        track.audio_clips.remove(idx);
+                    }
+                }
+                st.clips_by_id.remove(&clip_id);
+
+                clip.start_beat = new_start;
+                if let Some(dest) = st.tracks.get_mut(&dest_track_id) {
+                    dest.audio_clips.push(clip.clone());
+                }
+                st.clips_by_id.insert(
+                    clip_id,
+                    ClipRef {
+                        track_id: dest_track_id,
+                        is_midi: false,
+                    },
+                );
+
+                send_graph_snapshot(&st, snapshot_tx);
+            }
+        }
+        AudioCommand::SetAudioClipGain(clip_id, gain) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some((track, loc)) = st.find_clip_mut(clip_id) {
+                if let ClipLocation::Audio(idx) = loc {
+                    if let Some(ac) = track.audio_clips.get_mut(idx) {
+                        ac.gain = gain;
+                    }
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetAudioClipFadeIn(clip_id, dur) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some((track, loc)) = st.find_clip_mut(clip_id) {
+                if let ClipLocation::Audio(idx) = loc {
+                    if let Some(ac) = track.audio_clips.get_mut(idx) {
+                        ac.fade_in = dur;
+                    }
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetAudioClipFadeOut(clip_id, dur) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some((track, loc)) = st.find_clip_mut(clip_id) {
+                if let ClipLocation::Audio(idx) = loc {
+                    if let Some(ac) = track.audio_clips.get_mut(idx) {
+                        ac.fade_out = dur;
+                    }
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::CreateMidiClipWithData { track_id, mut clip } => {
+            let mut st = app_state.lock().unwrap();
+
+            if !st
+                .tracks
+                .get(&track_id)
+                .map_or(false, |t| matches!(t.track_type, TrackType::Midi))
+            {
+                return;
+            }
+
+            if clip.id == 0 {
+                clip.id = idgen::next();
+            }
+            for n in &mut clip.notes {
+                if n.id == 0 {
+                    n.id = idgen::next();
+                }
+                if !n.duration.is_finite() || n.duration <= 0.0 {
+                    n.duration = 1e-6;
+                }
+                if !n.start.is_finite() || n.start < 0.0 {
+                    n.start = 0.0;
+                }
+            }
+
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                t.midi_clips.push(clip.clone());
+                st.clips_by_id.insert(
+                    clip.id,
+                    ClipRef {
+                        track_id,
+                        is_midi: true,
+                    },
+                );
+            }
+
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SplitMidiClip { clip_id, position } => {
+            // Snapshot original
+            let src = {
+                let st = app_state.lock().unwrap();
+                st.find_clip(clip_id).and_then(|(track, loc)| {
+                    if let ClipLocation::Midi(idx) = loc {
+                        Some((track.id, track.midi_clips[idx].clone()))
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some((track_id, clip)) = src else {
+                return;
+            };
+
+            let split_rel = position - clip.start_beat;
+            if split_rel <= 0.0 || split_rel >= clip.length_beats {
+                return;
+            }
+
+            // Resolve source notes (pattern-aware)
+            let (notes, use_pattern) = {
+                let st = app_state.lock().unwrap();
+                if let Some(pid) = clip.pattern_id {
+                    let base = st
+                        .patterns
+                        .get(&pid)
+                        .map(|p| p.notes.clone())
+                        .unwrap_or_default();
+                    (base, true)
+                } else {
+                    (clip.notes.clone(), false)
+                }
+            };
+
+            // Distribute notes across halves (split overlapping)
+            let mut left_notes: Vec<MidiNote> = Vec::new();
+            let mut right_notes: Vec<MidiNote> = Vec::new();
+
+            for n in notes {
+                let s = n.start;
+                let e = n.start + n.duration;
+                if e <= split_rel {
+                    left_notes.push(n);
+                } else if s >= split_rel {
+                    let mut nn = n;
+                    nn.start = (s - split_rel).max(0.0);
+                    right_notes.push(nn);
+                } else {
+                    // Spans the cut: split into two
+                    let mut l = n;
+                    l.duration = (split_rel - s).max(1e-6);
+                    left_notes.push(l);
+
+                    let mut r = n;
+                    r.start = 0.0;
+                    r.duration = (e - split_rel).max(1e-6);
+                    r.id = 0; // force new id below
+                    right_notes.push(r);
+                }
+            }
+
+            // Assign new IDs to right half duplicates
+            for n in &mut right_notes {
+                if n.id == 0 {
+                    n.id = idgen::next();
+                }
+            }
+
+            // Build two new clips; ensure pattern isolation to avoid alias bleed
+            let mut left = clip.clone();
+            left.length_beats = split_rel;
+
+            let mut right = clip.clone();
+            right.id = idgen::next();
+            right.start_beat = position;
+            right.length_beats = (clip.length_beats - split_rel).max(0.0);
+
+            // Create fresh patterns for both halves
+            let left_pid = idgen::next();
+            let right_pid = idgen::next();
+
+            left.pattern_id = Some(left_pid);
+            left.notes.clear(); // use pattern
+            right.pattern_id = Some(right_pid);
+            right.notes.clear();
+
+            {
+                let mut st = app_state.lock().unwrap();
+
+                // Install patterns
+                st.patterns.insert(
+                    left_pid,
+                    crate::model::clip::MidiPattern {
+                        id: left_pid,
+                        notes: left_notes,
+                    },
+                );
+                st.patterns.insert(
+                    right_pid,
+                    crate::model::clip::MidiPattern {
+                        id: right_pid,
+                        notes: right_notes,
+                    },
+                );
+
+                // Replace original with left, insert right at next position
+                if let Some((track, loc)) = st.find_clip_mut(clip_id) {
+                    if let ClipLocation::Midi(idx) = loc {
+                        track.midi_clips[idx] = left.clone();
+                        track.midi_clips.insert(idx + 1, right.clone());
+                    }
+                }
+
+                // Update mapping
+                st.clips_by_id.insert(
+                    left.id,
+                    ClipRef {
+                        track_id,
+                        is_midi: true,
+                    },
+                );
+                st.clips_by_id.insert(
+                    right.id,
+                    ClipRef {
+                        track_id,
+                        is_midi: true,
+                    },
+                );
+
+                send_graph_snapshot(&st, snapshot_tx);
+            }
+        }
+        AudioCommand::SplitAudioClip { clip_id, position } => {
+            // Immutable stage: get (track_id, clip clone, bpm)
+            let (track_id, clip, bpm) = {
+                let st = app_state.lock().unwrap();
+                match st.find_clip(clip_id) {
+                    Some((track, ClipLocation::Audio(idx))) => {
+                        (track.id, track.audio_clips[idx].clone(), st.bpm)
+                    }
+                    _ => return,
+                }
+            };
+
+            if let Some((mut first, mut second)) = EditProcessor::split_clip(&clip, position, bpm) {
+                // Keep original id in the left part; assign a fresh id to the right part
+                first.id = clip.id;
+                second.id = idgen::next();
+                second.start_beat = position;
+
+                // Mutating stage: replace original and insert second right after
+                let mut st = app_state.lock().unwrap();
+                if let Some((track, loc)) = st.find_clip_mut(clip_id) {
+                    if let ClipLocation::Audio(idx) = loc {
+                        track.audio_clips[idx] = first.clone();
+                        track.audio_clips.insert(idx + 1, second.clone());
+                    }
+                }
+
+                // Refresh registry
+                st.clips_by_id.insert(
+                    first.id,
+                    ClipRef {
+                        track_id,
+                        is_midi: false,
+                    },
+                );
+                st.clips_by_id.insert(
+                    second.id,
+                    ClipRef {
+                        track_id,
+                        is_midi: false,
+                    },
+                );
+
+                send_graph_snapshot(&st, snapshot_tx);
+            }
+        }
+        AudioCommand::SetTrackInput(track_id, input) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                t.input_device = input;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetTrackOutput(track_id, output) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                t.output_device = output;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::FreezeTrack(track_id) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                t.frozen = true;
+                t.frozen_buffer = None;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::UnfreezeTrack(track_id) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                t.frozen = false;
+                t.frozen_buffer = None;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetAutomationMode(track_id, lane_idx, automation_mode) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                if let Some(lane) = t.automation_lanes.get_mut(lane_idx) {
+                    lane.write_mode = automation_mode;
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::ClearAutomationLane(track_id, lane_idx) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                if let Some(lane) = t.automation_lanes.get_mut(lane_idx) {
+                    lane.points.clear();
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
     }
 }
 

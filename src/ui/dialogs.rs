@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use egui_file_dialog::FileDialog;
 
@@ -1770,117 +1770,114 @@ impl ImportAudioDialog {
     }
 
     pub fn open(&mut self) {
-        self.fd.pick_multiple(); // 0.11 API for multi-select
+        self.fd.pick_multiple();
         self.opened = true;
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
+    pub fn show(&mut self, ctx: &egui::Context, app: &mut YadawApp) {
         if !self.opened {
             return;
         }
 
-        #[cfg(not(target_os = "android"))]
-        {
-            self.fd.update(ctx);
-            if let Some(paths) = self.fd.take_picked_multiple() {
-                app.push_undo();
-                let bpm = app.audio_state.bpm.load();
+        self.fd.update(ctx);
 
-                for path in paths {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
+        if let Some(picked_paths) = self.fd.take_picked_multiple() {
+            app.push_undo();
+            let bpm = app.audio_state.bpm.load();
 
-                    if ext == "mid" || ext == "midi" {
-                        // MIDI import -> requires MIDI track
-                        let is_midi_track = {
-                            let state = app.state.lock().unwrap();
-                            state.tracks.get(&app.selected_track).map(|t| matches!(t.track_type, TrackType::Midi)).unwrap_or(false)
-                        };
+            for path_buf in picked_paths {
 
-                        if !is_midi_track {
-                            app.dialogs.show_warning("Cannot import MIDI into an audio track. Select a MIDI track first.");
-                            continue;
-                        }
-
-                        match crate::midi_import::import_midi_file(&path, bpm) {
-                            Ok(clip) => {
-                                let mut state = app.state.lock().unwrap();
-                                if let Some(track) = state.tracks.get_mut(&app.selected_track) {
-                                    track.midi_clips.push(clip);
-                                    state.ensure_ids();
-                                }
+                let processing_path_result: Result<std::path::PathBuf, anyhow::Error> = {
+                    #[cfg(target_os = "android")]
+                    {
+                        if let Some(uri_str) = path_buf.to_str() {
+                            if uri_str.starts_with("content://") {
+                                let file_name = path_buf.file_name().unwrap_or_else(|| std::ffi::OsStr::new("imported_audio")).to_string_lossy();
+                                let dest_name = format!(
+                                    "import_{}_{}",
+                                    chrono::Local::now().format("%H%M%S"),
+                                    file_name
+                                );
+                                crate::android_saf::copy_from_content_uri_to_internal(uri_str, &dest_name)
+                                    .map_err(anyhow::Error::from)
+                            } else {
+                                Ok(path_buf)
                             }
-                            Err(e) => {
-                                app.dialogs.show_error(&format!("Failed to import MIDI {}: {}", path.display(), e));
-                            }
+                        } else {
+                            Ok(path_buf) // Non-unicode path
                         }
-                    } else {
-                        // Audio import -> requires Audio track
-                        let is_audio_track = {
-                            let state = app.state.lock().unwrap();
-                            state.tracks.get(&app.selected_track).map(|t| matches!(t.track_type, TrackType::Audio)).unwrap_or(false)
-                        };
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        Ok(path_buf)
+                    }
+                };
 
-                        if !is_audio_track {
-                            app.dialogs.show_warning("Cannot import audio into a MIDI track. Select an audio track first.");
-                            continue;
-                        }
-
-                        crate::audio_import::import_audio_file(&path, bpm)
-                            .map_err(|e| crate::error::common::audio_import_failed(&path, e))
-                            .map(|clip| {
-                                let mut state = app.state.lock().unwrap();
-                                if let Some(track) = state.tracks.get_mut(&app.selected_track) {
-                                    track.audio_clips.push(clip);
-                                    state.ensure_ids();
-                                }
-                            })
-                            .notify_user(&mut app.dialogs);
+                match processing_path_result {
+                    Ok(path) => {
+                        self.import_file(&path, app, bpm as f64);
+                    }
+                    Err(e) => {
+                        app.dialogs.show_error(&format!("Failed to import file: {}", e));
                     }
                 }
-
-                self.opened = false;
-        }
-
-            #[cfg(target_os = "android")]
-            {
-                // Minimal UI: allow pasting a content:// URI until you wire Intent-based picker
-                egui::Window::new("Import from content URI")
-                    .default_open(false)
-                    .show(ctx, |ui| {
-                        static mut LAST_URI: Option<String> = None;
-                        let mut uri = unsafe { LAST_URI.clone().unwrap_or_default() };
-                        ui.horizontal(|ui| {
-                            ui.label("content:// URI");
-                            ui.text_edit_singleline(&mut uri);
-                            if ui.button("Import").clicked() && !uri.is_empty() {
-                                unsafe { LAST_URI = Some(uri.clone()); }
-                                let dest_name = format!("import_{}.wav", chrono::Local::now().format("%H%M%S"));
-                                if let Ok(dest) = crate::android_saf::copy_from_content_uri_to_internal(&uri, &dest_name) {
-                                    app.push_undo();
-                                    let bpm = app.audio_state.bpm.load();
-                                    crate::audio_import::import_audio_file(&dest, bpm)
-                                        .map_err(|e| crate::error::common::audio_import_failed(&dest, e))
-                                        .map(|clip| {
-                                            let mut state = app.state.lock().unwrap();
-                                            if let Some(track) = state.tracks.get_mut(&app.selected_track) {
-                                                if !matches!(track.track_type, TrackType::Audio) {
-                                                    track.audio_clips.push(clip);
-                                                    state.ensure_ids();
-                                                } else {
-                                                    app.dialogs.show_warning("Cannot import audio to MIDI track");
-                                                }
-                                            }
-                                        })
-                                        .notify_user(&mut app.dialogs);
-                                }
-                            }
-                        });
-                    });
             }
+
+            self.opened = false;
+        }
+    }
+
+    fn import_file(&self, path: &Path, app: &mut YadawApp, bpm: f64) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        if ext == "mid" || ext == "midi" {
+            let is_midi_track = {
+                let state = app.state.lock().unwrap();
+                state.tracks.get(&app.selected_track).map(|t| t.track_type == TrackType::Midi).unwrap_or(false)
+            };
+
+            if !is_midi_track {
+                app.dialogs.show_warning("Cannot import MIDI into an audio track. Select a MIDI track first.");
+                return;
+            }
+
+            match crate::midi_import::import_midi_file(path, bpm as f32) {
+                Ok(clip) => {
+                    let mut state = app.state.lock().unwrap();
+                    if let Some(track) = state.tracks.get_mut(&app.selected_track) {
+                        track.midi_clips.push(clip);
+                        state.ensure_ids();
+                    }
+                }
+                Err(e) => {
+                    app.dialogs.show_error(&format!("Failed to import MIDI {}: {}", path.display(), e));
+                }
+            }
+        } else {
+            let is_audio_track = {
+                let state = app.state.lock().unwrap();
+                state.tracks.get(&app.selected_track).map(|t| !matches!(t.track_type, TrackType::Midi)).unwrap_or(false)
+            };
+
+            if !is_audio_track {
+                app.dialogs.show_warning("Cannot import audio into a MIDI track. Select an audio track first.");
+                return;
+            }
+
+            crate::audio_import::import_audio_file(path, bpm as f32)
+                .map_err(|e| crate::error::common::audio_import_failed(path, e))
+                .map(|clip| {
+                    let mut state = app.state.lock().unwrap();
+                    if let Some(track) = state.tracks.get_mut(&app.selected_track) {
+                        track.audio_clips.push(clip);
+                        state.ensure_ids();
+                    }
+                })
+                .notify_user(&mut app.dialogs);
         }
     }
 
@@ -2047,77 +2044,113 @@ impl TrackGroupingDialog {
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
         let mut open = true;
 
-        egui::Window::new("Track Grouping (not yet implemented fully)")
+        egui::Window::new("Track Grouping")
             .open(&mut open)
             .resizable(true)
-            .default_size(egui::vec2(400.0, 500.0))
+            .default_size(egui::vec2(420.0, 420.0))
             .show(ctx, |ui| {
-                ui.heading("Track Groups");
+                ui.heading("Groups");
 
-                // List existing groups
+                // Build group list from current tracks
+                let (groups, order, names): (Vec<usize>, Vec<u64>, Vec<String>) = {
+                    let st = app.state.lock().unwrap();
+                    let mut gids: Vec<usize> = st.tracks.values()
+                        .filter_map(|t| t.group_id)
+                        .collect();
+                    gids.sort_unstable();
+                    gids.dedup();
+
+                    let order = st.track_order.clone();
+                    let names = order.iter()
+                        .filter_map(|tid| st.tracks.get(tid).map(|t| t.name.clone()))
+                        .collect::<Vec<_>>();
+
+                    (gids, order, names)
+                };
+
                 ui.group(|ui| {
                     ui.label("Existing Groups:");
-
-                    let groups = app.track_manager.get_groups().to_vec();
-                    for (idx, group) in groups.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .selectable_label(self.selected_group == Some(idx), &group.name)
-                                .clicked()
-                            {
-                                self.selected_group = Some(idx);
-                            }
-
-                            ui.label(format!("({} tracks)", group.track_ids.len()));
-
-                            if ui.small_button("Delete").clicked() {
-                                // TODO: Remove group
-                            }
-                        });
-                    }
-                });
-
-                ui.separator();
-
-                // Create new group
-                ui.group(|ui| {
-                    ui.label("Create New Group:");
-
-                    ui.horizontal(|ui| {
-                        ui.label("Name:");
-                        ui.text_edit_singleline(&mut self.new_group_name);
-                    });
-
-                    ui.label("Select tracks to group:");
-
-                    let state = app.state.lock().unwrap();
-                    for (track_id, track) in state.tracks.iter() {
-                        let Some(idx) = state.track_order.iter().position(|&id| id == *track_id) else {
-                            return None;
-                        };
-                        let mut is_selected = self.selected_tracks.contains(&idx);
-                        if ui.checkbox(&mut is_selected, &track.name).changed() {
-                            if is_selected {
-                                self.selected_tracks.push(idx);
-                            } else {
-                                self.selected_tracks.retain(|&i| i != idx);
+                    if groups.is_empty() {
+                        ui.label(egui::RichText::new("(none)").weak());
+                    } else {
+                        for gid in &groups {
+                            let selected = self.selected_group == Some(*gid);
+                            if ui.selectable_label(selected, format!("Group {}", gid)).clicked() {
+                                self.selected_group = Some(*gid);
                             }
                         }
                     }
-                    drop(state);
 
-                    Some(if ui.button("Create Group").clicked() && !self.selected_tracks.is_empty() {
-                        app.track_manager.create_group(
-                            self.new_group_name.clone(),
-                            self.selected_tracks.clone(),
-                        );
-                        self.selected_tracks.clear();
-                        self.new_group_name = String::from("New Group");
-                    })
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(self.selected_group.is_some(), egui::Button::new("Delete Group"))
+                            .clicked()
+                        {
+                            if let Some(gid) = self.selected_group {
+                                let _ = app.command_tx.send(AudioCommand::RemoveGroup(gid));
+                                self.selected_group = None;
+                            }
+                        }
+                    });
                 });
 
                 ui.separator();
 
+                ui.group(|ui| {
+                    ui.label("Create / Modify Groups");
+
+                    ui.horizontal(|ui| {
+                        ui.label("New Group Name:");
+                        ui.text_edit_singleline(&mut self.new_group_name);
+                    });
+
+                    ui.label("Select tracks:");
+                    let mut selected_tids: Vec<u64> = Vec::new();
+
+                    // Build checkboxes against the current order
+                    for (i, tid) in order.iter().enumerate() {
+                        let mut checked = self.selected_tracks.contains(&i);
+                        if ui.checkbox(&mut checked, &names[i]).changed() {
+                            if checked {
+                                self.selected_tracks.push(i);
+                            } else {
+                                self.selected_tracks.retain(|&idx| idx != i);
+                            }
+                        }
+                        if checked {
+                            selected_tids.push(*tid);
+                        }
+                    }
+
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!selected_tids.is_empty(), egui::Button::new("Create Group")).clicked() {
+                            let _ = app.command_tx.send(AudioCommand::CreateGroup(
+                                self.new_group_name.clone(),
+                                selected_tids.clone(),
+                            ));
+                            // reset selection
+                            self.selected_tracks.clear();
+                        }
+
+                        if ui.add_enabled(self.selected_group.is_some() && !selected_tids.is_empty(), egui::Button::new("Add to Selected Group")).clicked() {
+                            if let Some(gid) = self.selected_group {
+                                for tid in &selected_tids {
+                                    let _ = app.command_tx.send(AudioCommand::AddTrackToGroup(*tid, gid));
+                                }
+                            }
+                            self.selected_tracks.clear();
+                        }
+
+                        if ui.add_enabled(!selected_tids.is_empty(), egui::Button::new("Remove from Group")).clicked() {
+                            for tid in &selected_tids {
+                                let _ = app.command_tx.send(AudioCommand::RemoveTrackFromGroup(*tid));
+                            }
+                            self.selected_tracks.clear();
+                        }
+                    });
+                });
+
+                ui.separator();
                 if ui.button("Close").clicked() {
                     self.closed = true;
                 }

@@ -93,7 +93,7 @@ pub fn presets_dir() -> std::path::PathBuf {
 #[cfg(target_os = "android")]
 fn files_dir_pathbuf() -> std::path::PathBuf {
     use anyhow::Context;
-    crate::android_saf::with_env(|&mut env, context| {
+    crate::android_saf::with_env(|env, context| {
         let file_obj = env
             .call_method(&context, "getFilesDir", "()Ljava/io/File;", &[])?
             .l()?;
@@ -117,4 +117,22 @@ pub fn config_root_dir() -> std::path::PathBuf {
 #[cfg(target_os = "android")]
 pub fn config_root_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("/data/data/com.yadaw.app/files/config")
+}
+
+pub fn shortcuts_path() -> std::path::PathBuf {
+    let dir = config_root_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("shortcuts.json")
+}
+
+pub fn custom_themes_path() -> std::path::PathBuf {
+    let dir = config_root_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("custom_themes.json")
+}
+
+pub fn current_theme_path() -> std::path::PathBuf {
+    let dir = config_root_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("current_theme.json")
 }
