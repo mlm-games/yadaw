@@ -22,6 +22,12 @@ fn default_false() -> bool {
     false
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MidiPattern {
+    pub id: u64,
+    pub notes: Vec<MidiNote>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MidiNote {
     #[serde(default = "zero_u64")]

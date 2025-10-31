@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::Track;
+use crate::model::clip::MidiPattern;
 use crate::time_utils::TimeConverter;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -14,6 +15,8 @@ pub struct AppState {
     pub track_order: Vec<u64>,
     /// Global clip registry for fast lookup
     pub clips_by_id: HashMap<u64, ClipRef>,
+    /// Shared MIDI patterns (for alias clips)
+    pub patterns: HashMap<u64, MidiPattern>,
 
     pub master_volume: f32,
     pub playing: bool,
@@ -42,6 +45,7 @@ impl Default for AppState {
             tracks: HashMap::new(),
             track_order: Vec::new(),
             clips_by_id: HashMap::new(),
+            patterns: HashMap::new(),
             master_volume: 0.8,
             playing: false,
             recording: false,
@@ -63,6 +67,7 @@ pub struct AppStateSnapshot {
     pub tracks: HashMap<u64, Track>,
     pub track_order: Vec<u64>,
     pub master_volume: f32,
+    pub patterns: HashMap<u64, MidiPattern>,
     pub bpm: f32,
     pub loop_start: f64,
     pub loop_end: f64,
@@ -78,6 +83,7 @@ impl AppState {
         AppStateSnapshot {
             tracks: self.tracks.clone(),
             track_order: self.track_order.clone(),
+            patterns: self.patterns.clone(),
             bpm: self.bpm,
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
@@ -93,6 +99,7 @@ impl AppState {
     pub fn restore(&mut self, snapshot: AppStateSnapshot) {
         self.tracks = snapshot.tracks;
         self.track_order = snapshot.track_order;
+        self.patterns = snapshot.patterns;
         self.bpm = snapshot.bpm;
         self.time_signature = snapshot.time_signature;
         self.sample_rate = snapshot.sample_rate;

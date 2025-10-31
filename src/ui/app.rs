@@ -1364,6 +1364,7 @@ impl YadawApp {
             Escape => {
                 // Close dialogs or deselect
                 self.deselect_all();
+                self.timeline_ui.show_clip_menu = false;
             }
         }
     }

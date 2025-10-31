@@ -8,10 +8,11 @@ use crate::audio_export::AudioExporter;
 use crate::audio_state::{AudioGraphSnapshot, AudioState, MidiNoteSnapshot, RealtimeCommand};
 use crate::messages::{AudioCommand, UIUpdate};
 use crate::midi_input::MidiInputHandler;
+use crate::model::clip::MidiPattern;
 use crate::model::track::TrackType;
-use crate::model::{AutomationPoint, MidiClip, PluginDescriptor};
+use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor};
 use crate::plugin::{create_plugin_instance, get_control_port_info};
-use crate::project::{AppState, ClipLocation};
+use crate::project::{AppState, ClipLocation, ClipRef};
 
 pub fn run_command_processor(
     app_state: Arc<std::sync::Mutex<AppState>>,
@@ -663,7 +664,7 @@ fn process_command(
                 // Update clip index
                 state.clips_by_id.insert(
                     new_clip_id,
-                    crate::project::ClipRef {
+                    ClipRef {
                         track_id: *track_id,
                         is_midi: true,
                     },
@@ -677,7 +678,7 @@ fn process_command(
         AudioCommand::DeleteMidiClip { clip_id } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     track.midi_clips.remove(idx);
                     state.clips_by_id.remove(clip_id);
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
@@ -689,7 +690,7 @@ fn process_command(
         AudioCommand::MoveMidiClip { clip_id, new_start } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         clip.start_beat = *new_start;
                     }
@@ -705,7 +706,7 @@ fn process_command(
         } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         clip.start_beat = *new_start;
                         clip.length_beats = (*new_length).max(0.0);
@@ -719,7 +720,7 @@ fn process_command(
             let source = {
                 let state = app_state.lock().unwrap();
                 state.find_clip(*clip_id).and_then(|(track, loc)| {
-                    if let crate::project::ClipLocation::Midi(idx) = loc {
+                    if let ClipLocation::Midi(idx) = loc {
                         track.midi_clips.get(idx).cloned()
                     } else {
                         None
@@ -743,7 +744,7 @@ fn process_command(
                         track.midi_clips.push(clip);
                         state.clips_by_id.insert(
                             new_clip_id,
-                            crate::project::ClipRef {
+                            ClipRef {
                                 track_id,
                                 is_midi: true,
                             },
@@ -758,7 +759,7 @@ fn process_command(
         AudioCommand::MoveAudioClip { clip_id, new_start } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Audio(idx) = loc {
+                if let ClipLocation::Audio(idx) = loc {
                     if let Some(clip) = track.audio_clips.get_mut(idx) {
                         clip.start_beat = *new_start;
                     }
@@ -774,7 +775,7 @@ fn process_command(
         } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Audio(idx) = loc {
+                if let ClipLocation::Audio(idx) = loc {
                     if let Some(clip) = track.audio_clips.get_mut(idx) {
                         let old_start = clip.start_beat;
                         let delta_beats = *new_start - old_start;
@@ -793,7 +794,7 @@ fn process_command(
             let source = {
                 let state = app_state.lock().unwrap();
                 state.find_clip(*clip_id).and_then(|(track, loc)| {
-                    if let crate::project::ClipLocation::Audio(idx) = loc {
+                    if let ClipLocation::Audio(idx) = loc {
                         track.audio_clips.get(idx).cloned()
                     } else {
                         None
@@ -815,7 +816,7 @@ fn process_command(
                         track.audio_clips.push(clip.clone());
                         state.clips_by_id.insert(
                             new_clip_id,
-                            crate::project::ClipRef {
+                            ClipRef {
                                 track_id,
                                 is_midi: false,
                             },
@@ -829,7 +830,7 @@ fn process_command(
         AudioCommand::DeleteAudioClip { clip_id } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Audio(idx) = loc {
+                if let ClipLocation::Audio(idx) = loc {
                     track.audio_clips.remove(idx);
                     state.clips_by_id.remove(clip_id);
                 }
@@ -992,7 +993,7 @@ fn process_command(
                         dest_track.midi_clips.push(new_clip.clone());
                         st.clips_by_id.insert(
                             new_clip.id,
-                            crate::project::ClipRef {
+                            ClipRef {
                                 track_id: *dest_track_id,
                                 is_midi: true,
                             },
@@ -1027,7 +1028,7 @@ fn process_command(
                         dest_track.audio_clips.push(new_clip.clone());
                         st.clips_by_id.insert(
                             new_clip.id,
-                            crate::project::ClipRef {
+                            ClipRef {
                                 track_id: *dest_track_id,
                                 is_midi: false,
                             },
@@ -1048,7 +1049,7 @@ fn process_command(
         AudioCommand::ToggleClipLoop { clip_id, enabled } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         clip.loop_enabled = *enabled;
                         if clip.content_len_beats <= 0.0 {
@@ -1066,7 +1067,7 @@ fn process_command(
                 state
                     .find_clip(*clip_id)
                     .map(|(track, loc)| {
-                        if let crate::project::ClipLocation::Midi(idx) = loc {
+                        if let ClipLocation::Midi(idx) = loc {
                             track
                                 .midi_clips
                                 .get(idx)
@@ -1087,7 +1088,7 @@ fn process_command(
             let mut state = app_state.lock().unwrap();
             let new_id = state.fresh_id(); // safe (no field borrows yet)
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         // Double-check in case of races
                         if clip.pattern_id.is_none() {
@@ -1102,7 +1103,7 @@ fn process_command(
         AudioCommand::MakeClipUnique { clip_id } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         clip.pattern_id = None;
                     }
@@ -1120,7 +1121,7 @@ fn process_command(
         } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         clip.quantize_grid = *grid;
                         clip.quantize_strength = strength.clamp(0.0, 1.0);
@@ -1145,7 +1146,7 @@ fn process_command(
                     None => return,
                 };
                 let clip = match loc {
-                    crate::project::ClipLocation::Midi(idx) => track.midi_clips.get(idx),
+                    ClipLocation::Midi(idx) => track.midi_clips.get(idx),
                     _ => None,
                 };
                 (
@@ -1162,19 +1163,27 @@ fn process_command(
             let track_id = track_id.unwrap();
 
             // 3) Assign pattern_id to source if needed
-            let final_pid = if src_pid.is_none() {
-                let new_pid = state.fresh_id();
-                // Safe: we still hold state lock
-                if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                    if let crate::project::ClipLocation::Midi(idx) = loc {
-                        if let Some(clip) = track.midi_clips.get_mut(idx) {
-                            clip.pattern_id = Some(new_pid);
+            let final_pid = match src_pid {
+                Some(pid) => pid,
+                None => {
+                    // Create a new pattern from the source clip's notes and assign to source
+                    let new_pid = state.fresh_id();
+                    state.patterns.insert(
+                        new_pid,
+                        MidiPattern {
+                            id: new_pid,
+                            notes: src_clip.notes.clone(),
+                        },
+                    );
+                    if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
+                        if let ClipLocation::Midi(idx) = loc {
+                            if let Some(clip) = track.midi_clips.get_mut(idx) {
+                                clip.pattern_id = Some(new_pid);
+                            }
                         }
                     }
+                    new_pid
                 }
-                new_pid
-            } else {
-                src_pid.unwrap()
             };
 
             // 4) Build duplicate
@@ -1196,7 +1205,7 @@ fn process_command(
                 track.midi_clips.push(dup.clone());
                 state.clips_by_id.insert(
                     dup.id,
-                    crate::project::ClipRef {
+                    ClipRef {
                         track_id,
                         is_midi: true,
                     },
@@ -1212,7 +1221,7 @@ fn process_command(
         } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         let len = clip.content_len_beats.max(0.000001);
                         // Wrap offset into [0, len)
@@ -1227,7 +1236,7 @@ fn process_command(
             let mut state = app_state.lock().unwrap();
 
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         // Partition notes into 'kept' and 'cut'
                         let original_notes = std::mem::take(&mut clip.notes);
@@ -1251,7 +1260,7 @@ fn process_command(
         AudioCommand::DeleteSelectedNotes { clip_id, note_ids } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         clip.notes.retain(|n| !note_ids.contains(&n.id));
                     }
@@ -1263,7 +1272,7 @@ fn process_command(
         AudioCommand::PasteNotes { clip_id, notes } => {
             let mut state = app_state.lock().unwrap();
             if let Some((track, loc)) = state.find_clip_mut(*clip_id) {
-                if let crate::project::ClipLocation::Midi(idx) = loc {
+                if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
                         clip.notes.extend_from_slice(notes);
                         clip.notes

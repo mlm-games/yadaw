@@ -37,7 +37,7 @@ pub struct TimelineView {
 
     timeline_interaction: Option<TimelineInteraction>,
     automation_widgets: Vec<AutomationLaneWidget>,
-    show_clip_menu: bool,
+    pub show_clip_menu: bool,
     clip_menu_pos: egui::Pos2,
 
     track_height: f32,
@@ -1706,11 +1706,12 @@ impl TimelineView {
     fn draw_context_menus(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         if self.show_clip_menu {
             let mut close_menu = false;
-
+            let mut popup_rect: Option<egui::Rect> = None;
             egui::Area::new(ui.id().with("clip_context_menu"))
                 .fixed_pos(self.clip_menu_pos)
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        popup_rect = Some(ui.min_rect());
                         ui.set_min_width(150.0);
 
                         if ui.button("Cut").clicked() {
@@ -1723,17 +1724,17 @@ impl TimelineView {
                             close_menu = true;
                         }
 
-                        if ui.button("Paste").clicked() {
-                            app.paste_at_playhead();
-                            close_menu = true;
-                        }
+                        // if ui.button("Paste").clicked() { // FIXME for all commented
+                        //     app.paste_at_playhead();
+                        //     close_menu = true;
+                        // }
 
-                        ui.separator();
+                        // ui.separator();
 
-                        if ui.button("Split at Playhead").clicked() {
-                            app.split_selected_at_playhead();
-                            close_menu = true;
-                        }
+                        // if ui.button("Split at Playhead").clicked() {
+                        //     app.split_selected_at_playhead(); // FIXME
+                        //     close_menu = true;
+                        // }
 
                         if ui.button("Delete").clicked() {
                             app.delete_selected();
@@ -1742,25 +1743,25 @@ impl TimelineView {
 
                         ui.separator();
 
-                        if ui.button("Normalize").clicked() {
-                            app.normalize_selected();
-                            close_menu = true;
-                        }
+                        // if ui.button("Normalize").clicked() {
+                        //     app.normalize_selected();
+                        //     close_menu = true;
+                        // }
 
-                        if ui.button("Reverse").clicked() {
-                            app.reverse_selected();
-                            close_menu = true;
-                        }
+                        // if ui.button("Reverse").clicked() {
+                        //     app.reverse_selected();
+                        //     close_menu = true;
+                        // }
 
-                        if ui.button("Fade In").clicked() {
-                            app.apply_fade_in();
-                            close_menu = true;
-                        }
+                        // if ui.button("Fade In").clicked() {
+                        //     app.apply_fade_in();
+                        //     close_menu = true;
+                        // }
 
-                        if ui.button("Fade Out").clicked() {
-                            app.apply_fade_out();
-                            close_menu = true;
-                        }
+                        // if ui.button("Fade Out").clicked() {
+                        //     app.apply_fade_out();
+                        //     close_menu = true;
+                        // }
 
                         let primary = app.selected_clips.first().copied();
 
@@ -1774,28 +1775,28 @@ impl TimelineView {
                                 .map_or(false, |r| r.is_midi);
                             if is_midi {
                                 ui.separator();
-                                if ui.button("Toggle Loop").clicked() {
-                                    let enabled = {
-                                        let state = app.state.lock().unwrap();
-                                        state
-                                            .find_clip(clip_id)
-                                            .and_then(|(track, loc)| {
-                                                if let ClipLocation::Midi(idx) = loc {
-                                                    track
-                                                        .midi_clips
-                                                        .get(idx)
-                                                        .map(|c| !c.loop_enabled)
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                            .unwrap_or(true)
-                                    };
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::ToggleClipLoop { clip_id, enabled });
-                                    close_menu = true;
-                                }
+                                // if ui.button("Toggle Loop").clicked() {
+                                //     let enabled = {
+                                //         let state = app.state.lock().unwrap();
+                                //         state
+                                //             .find_clip(clip_id)
+                                //             .and_then(|(track, loc)| {
+                                //                 if let ClipLocation::Midi(idx) = loc {
+                                //                     track
+                                //                         .midi_clips
+                                //                         .get(idx)
+                                //                         .map(|c| !c.loop_enabled)
+                                //                 } else {
+                                //                     None
+                                //                 }
+                                //             })
+                                //             .unwrap_or(true)
+                                //     };
+                                //     let _ = app
+                                //         .command_tx
+                                //         .send(AudioCommand::ToggleClipLoop { clip_id, enabled });
+                                //     close_menu = true;
+                                // }
 
                                 ui.separator();
 
@@ -1834,68 +1835,76 @@ impl TimelineView {
                                     close_menu = true;
                                 }
 
-                                ui.separator();
-                                ui.label("Quantize");
+                                // ui.separator();
+                                // ui.label("Quantize");
 
-                                let (mut grid, mut strength, mut swing, mut enabled) = {
-                                    app.state
-                                        .lock()
-                                        .unwrap()
-                                        .find_clip(clip_id)
-                                        .and_then(|(track, loc)| {
-                                            if let ClipLocation::Midi(idx) = loc {
-                                                track.midi_clips.get(idx).map(|c| {
-                                                    (
-                                                        c.quantize_grid,
-                                                        c.quantize_strength,
-                                                        c.swing,
-                                                        c.quantize_enabled,
-                                                    )
-                                                })
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .unwrap_or((0.25, 1.0, 0.0, false))
-                                };
+                                // let (mut grid, mut strength, mut swing, mut enabled) = {
+                                //     app.state
+                                //         .lock()
+                                //         .unwrap()
+                                //         .find_clip(clip_id)
+                                //         .and_then(|(track, loc)| {
+                                //             if let ClipLocation::Midi(idx) = loc {
+                                //                 track.midi_clips.get(idx).map(|c| {
+                                //                     (
+                                //                         c.quantize_grid,
+                                //                         c.quantize_strength,
+                                //                         c.swing,
+                                //                         c.quantize_enabled,
+                                //                     )
+                                //                 })
+                                //             } else {
+                                //                 None
+                                //             }
+                                //         })
+                                //         .unwrap_or((0.25, 1.0, 0.0, false))
+                                // };
 
-                                static GRIDS: [(&str, f32); 6] = [
-                                    ("1/1", 1.0),
-                                    ("1/2", 0.5),
-                                    ("1/4", 0.25),
-                                    ("1/8", 0.125),
-                                    ("1/16", 0.0625),
-                                    ("1/32", 0.03125),
-                                ];
-                                for (label, g) in GRIDS {
-                                    if ui
-                                        .selectable_label((grid - g).abs() < 1e-6, label)
-                                        .clicked()
-                                    {
-                                        grid = g;
-                                    }
-                                }
-                                ui.add(
-                                    egui::Slider::new(&mut strength, 0.0..=1.0).text("Strength"),
-                                );
-                                ui.add(egui::Slider::new(&mut swing, -0.5..=0.5).text("Swing"));
-                                if ui.checkbox(&mut enabled, "Enabled").changed() {}
-                                if ui.button("Apply Quantize").clicked() {
-                                    let _ = app.command_tx.send(AudioCommand::SetClipQuantize {
-                                        clip_id,
-                                        grid,
-                                        strength,
-                                        swing,
-                                        enabled,
-                                    });
-                                    close_menu = true;
-                                }
+                                // static GRIDS: [(&str, f32); 6] = [
+                                //     ("1/1", 1.0),
+                                //     ("1/2", 0.5),
+                                //     ("1/4", 0.25),
+                                //     ("1/8", 0.125),
+                                //     ("1/16", 0.0625),
+                                //     ("1/32", 0.03125),
+                                // ];
+                                // for (label, g) in GRIDS {
+                                //     if ui
+                                //         .selectable_label((grid - g).abs() < 1e-6, label)
+                                //         .clicked()
+                                //     {
+                                //         grid = g;
+                                //     }
+                                // }
+                                // ui.add(
+                                //     egui::Slider::new(&mut strength, 0.0..=1.0).text("Strength"),
+                                // );
+                                // ui.add(egui::Slider::new(&mut swing, -0.5..=0.5).text("Swing"));
+                                // if ui.checkbox(&mut enabled, "Enabled").changed() {}
+                                // if ui.button("Apply Quantize").clicked() {
+                                //     let _ = app.command_tx.send(AudioCommand::SetClipQuantize {
+                                //         clip_id,
+                                //         grid,
+                                //         strength,
+                                //         swing,
+                                //         enabled,
+                                //     });
+                                //     close_menu = true;
+                                // }
                             }
                         }
                     });
                 });
 
-            if close_menu || ui.input(|i| i.pointer.any_click() && !self.show_clip_menu) {
+            // close on any click outside the popup
+            let outside_clicked = ui.ctx().input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .map(|p| popup_rect.map(|r| !r.contains(p)).unwrap_or(true))
+                        .unwrap_or(true)
+            });
+            if close_menu || outside_clicked {
                 self.show_clip_menu = false;
             }
         }

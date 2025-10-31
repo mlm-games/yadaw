@@ -23,11 +23,11 @@ pub fn build_track_snapshots(state: &AppState) -> Vec<TrackSnapshot> {
         .track_order
         .iter()
         .filter_map(|&id| state.tracks.get(&id))
-        .map(track_to_snapshot)
+        .map(|t| track_to_snapshot(t, state))
         .collect()
 }
 
-fn track_to_snapshot(t: &Track) -> TrackSnapshot {
+fn track_to_snapshot(t: &Track, state: &AppState) -> TrackSnapshot {
     TrackSnapshot {
         track_id: t.id,
         name: t.name.clone(),
@@ -39,7 +39,11 @@ fn track_to_snapshot(t: &Track) -> TrackSnapshot {
         track_type: t.track_type,
         monitor_enabled: t.monitor_enabled,
         audio_clips: t.audio_clips.iter().map(audio_clip_to_snapshot).collect(),
-        midi_clips: t.midi_clips.iter().map(midi_clip_to_snapshot).collect(),
+        midi_clips: t
+            .midi_clips
+            .iter()
+            .map(|c| midi_clip_to_snapshot(c, state))
+            .collect(),
         plugin_chain: t.plugin_chain.iter().map(plugin_desc_to_snapshot).collect(),
         automation_lanes: t
             .automation_lanes
@@ -64,7 +68,17 @@ fn audio_clip_to_snapshot(c: &AudioClip) -> AudioClipSnapshot {
     }
 }
 
-fn midi_clip_to_snapshot(c: &MidiClip) -> MidiClipSnapshot {
+fn midi_clip_to_snapshot(c: &MidiClip, state: &AppState) -> MidiClipSnapshot {
+    // Resolve notes: if clip references a pattern, use its notes; otherwise use clip-local notes
+    let base_notes: Vec<MidiNote> = if let Some(pid) = c.pattern_id {
+        state
+            .patterns
+            .get(&pid)
+            .map(|p| p.notes.clone())
+            .unwrap_or_else(|| c.notes.clone())
+    } else {
+        c.notes.clone()
+    };
     MidiClipSnapshot {
         name: c.name.clone(),
         start_beat: c.start_beat,
@@ -75,7 +89,7 @@ fn midi_clip_to_snapshot(c: &MidiClip) -> MidiClipSnapshot {
             c.length_beats.max(0.000001)
         },
         loop_enabled: c.loop_enabled,
-        notes: c.notes.iter().map(midi_note_to_snapshot).collect(),
+        notes: base_notes.iter().map(midi_note_to_snapshot).collect(),
         color: c.color,
         transpose: c.transpose,
         velocity_offset: c.velocity_offset,
