@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::constants::DEFAULT_LOOP_LEN;
-use crate::model::Track;
 use crate::model::clip::MidiPattern;
+use crate::model::{MidiNote, Track};
 use crate::time_utils::TimeConverter;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -110,6 +110,7 @@ impl AppState {
         self.loop_end = snapshot.loop_end;
         self.loop_enabled = snapshot.loop_enabled;
         self.rebuild_clip_index();
+        crate::idgen::seed_from_max(self.max_id_in_project());
         self.ensure_ids();
     }
 
@@ -190,6 +191,11 @@ impl AppState {
             self.tracks.insert(track_id, track);
         }
 
+        self.patterns.clear();
+        for pat in project.patterns {
+            self.patterns.insert(pat.id, pat);
+        }
+
         self.bpm = project.bpm;
         self.time_signature = project.time_signature;
         self.sample_rate = project.sample_rate;
@@ -198,6 +204,7 @@ impl AppState {
         self.loop_end = project.loop_end;
         self.loop_enabled = project.loop_enabled;
         self.rebuild_clip_index();
+        crate::idgen::seed_from_max(self.max_id_in_project());
         self.ensure_ids();
     }
 
@@ -213,6 +220,7 @@ impl AppState {
             version: "1.0.0".to_string(),
             name: "Untitled Project".to_string(),
             tracks,
+            patterns: self.patterns.values().cloned().collect(),
             bpm: self.bpm,
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
@@ -225,68 +233,40 @@ impl AppState {
         }
     }
 
-    pub fn fresh_id(&mut self) -> u64 {
-        if self.next_id == 0 {
-            self.reseed_next_id_from_max();
-        }
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        id
+    #[inline]
+    pub fn fresh_id(&self) -> u64 {
+        crate::idgen::next()
     }
 
     pub fn ensure_ids(&mut self) {
-        // Ensure all tracks have IDs
+        // Track IDs (stable)
         let track_ids: Vec<u64> = self.tracks.keys().copied().collect();
-        for track_id in &track_ids {
-            if let Some(track) = self.tracks.get_mut(track_id) {
-                if track.id == 0 {
-                    track.id = *track_id;
+        for tid in &track_ids {
+            if let Some(t) = self.tracks.get_mut(tid) {
+                if t.id == 0 {
+                    t.id = *tid;
                 }
             }
         }
 
-        // Normalize MIDI clips and assign IDs
-        for track_id in &track_ids {
-            // First, collect all info needed to generate IDs without holding a mutable borrow on the track.
-            let mut ids_to_generate = (0, 0, 0, 0); // (midi_clips, audio_clips, notes, plugin_ids)
-            if let Some(track) = self.tracks.get(track_id) {
-                for c in &track.midi_clips {
-                    if c.id == 0 {
-                        ids_to_generate.0 += 1;
-                    }
-                    for n in &c.notes {
-                        if n.id == 0 {
-                            ids_to_generate.2 += 1;
-                        }
-                    }
-                }
-                for c in &track.audio_clips {
-                    if c.id == 0 {
-                        ids_to_generate.1 += 1;
-                    }
-                }
-                for c in &track.plugin_chain {
-                    if c.id == 0 {
-                        ids_to_generate.3 += 1;
-                    }
-                }
-            }
+        // Stage new patterns to avoid double-borrows
+        struct NewPattern {
+            pid: u64,
+            notes: Vec<crate::model::clip::MidiNote>,
+        }
+        let mut staged: Vec<NewPattern> = Vec::new();
 
-            // Now, generate all IDs at once.
-            let mut new_midi_clip_ids: Vec<u64> =
-                (0..ids_to_generate.0).map(|_| self.fresh_id()).collect();
-            let mut new_audio_clip_ids: Vec<u64> =
-                (0..ids_to_generate.1).map(|_| self.fresh_id()).collect();
-            let mut new_note_ids: Vec<u64> =
-                (0..ids_to_generate.2).map(|_| self.fresh_id()).collect();
-            let mut new_plugin_ids: Vec<u64> =
-                (0..ids_to_generate.3).map(|_| self.fresh_id()).collect();
-
-            // Finally, apply the new IDs.
-            if let Some(track) = self.tracks.get_mut(track_id) {
+        for tid in &track_ids {
+            if let Some(track) = self.tracks.get_mut(tid) {
                 for c in &mut track.midi_clips {
                     if c.id == 0 {
-                        c.id = new_midi_clip_ids.pop().unwrap();
+                        c.id = crate::idgen::next();
+                    }
+                    if c.pattern_id.is_none() {
+                        let pid = crate::idgen::next();
+                        let moved = std::mem::take(&mut c.notes);
+                        staged.push(NewPattern { pid, notes: moved });
+                        c.pattern_id = Some(pid);
                     }
 
                     if !c.content_len_beats.is_finite() || c.content_len_beats <= 0.0 {
@@ -297,64 +277,43 @@ impl AppState {
                     }
                     let len = c.content_len_beats.max(0.000001);
                     c.content_offset_beats = ((c.content_offset_beats % len) + len) % len;
-
-                    let clip_len = c.length_beats.max(0.0);
-                    for n in &mut c.notes {
-                        if n.id == 0 {
-                            n.id = new_note_ids.pop().unwrap();
-                        }
-                        if !n.start.is_finite() {
-                            n.start = 0.0;
-                        }
-                        if !n.duration.is_finite() {
-                            n.duration = 0.0;
-                        }
-                        if n.start < 0.0 {
-                            n.start = 0.0;
-                        }
-                        n.duration = n.duration.max(1e-6);
-                        if n.start > clip_len {
-                            n.start = clip_len;
-                        }
-                        if n.start + n.duration > clip_len {
-                            n.duration = (clip_len - n.start).max(1e-6);
-                        }
-                    }
                 }
 
-                for c in &mut track.audio_clips {
-                    if c.id == 0 {
-                        c.id = new_audio_clip_ids.pop().unwrap();
+                for ac in &mut track.audio_clips {
+                    if ac.id == 0 {
+                        ac.id = crate::idgen::next();
                     }
                 }
-                for c in &mut track.plugin_chain {
-                    if c.id == 0 {
-                        c.id = new_plugin_ids.pop().unwrap();
+                for p in &mut track.plugin_chain {
+                    if p.id == 0 {
+                        p.id = crate::idgen::next();
                     }
+                }
+            }
+        }
+
+        for np in staged {
+            self.patterns.entry(np.pid).or_insert(MidiPattern {
+                id: np.pid,
+                notes: np.notes,
+            });
+        }
+
+        for pat in self.patterns.values_mut() {
+            for n in &mut pat.notes {
+                if n.id == 0 {
+                    n.id = crate::idgen::next();
+                }
+                if !n.start.is_finite() || n.start < 0.0 {
+                    n.start = 0.0;
+                }
+                if !n.duration.is_finite() || n.duration <= 0.0 {
+                    n.duration = 1e-6;
                 }
             }
         }
 
         self.rebuild_clip_index();
-    }
-
-    fn reseed_next_id_from_max(&mut self) {
-        let mut max_id = 0u64;
-        for &track_id in self.track_order.iter() {
-            max_id = max_id.max(track_id);
-            if let Some(t) = self.tracks.get(&track_id) {
-                for c in &t.audio_clips {
-                    max_id = max_id.max(c.id);
-                }
-                for c in &t.midi_clips {
-                    max_id = max_id.max(c.id);
-                    for n in &c.notes {
-                        max_id = max_id.max(n.id);
-                    }
-                }
-            }
-        }
-        self.next_id = max_id.saturating_add(1).max(1);
     }
 
     /// Helper: get ordered track list (for UI iteration)
@@ -424,6 +383,29 @@ impl AppState {
         let idx = track.plugin_chain.iter().position(|p| p.id == plugin_id)?;
         Some((track, idx))
     }
+    fn max_id_in_project(&self) -> u64 {
+        let mut max_id = 0u64;
+        for t in self.tracks.values() {
+            max_id = max_id.max(t.id);
+            for c in &t.audio_clips {
+                max_id = max_id.max(c.id);
+            }
+            for c in &t.midi_clips {
+                max_id = max_id.max(c.id);
+                if let Some(pid) = c.pattern_id {
+                    if let Some(p) = self.patterns.get(&pid) {
+                        for n in &p.notes {
+                            max_id = max_id.max(n.id);
+                        }
+                    }
+                }
+            }
+            for p in &t.plugin_chain {
+                max_id = max_id.max(p.id);
+            }
+        }
+        max_id
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -437,6 +419,7 @@ pub struct Project {
     pub version: String,
     pub name: String,
     pub tracks: Vec<Track>, // For serialization compatibility
+    pub patterns: Vec<MidiPattern>,
     pub bpm: f32,
     pub time_signature: (i32, i32),
     pub sample_rate: f32,

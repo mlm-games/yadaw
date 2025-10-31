@@ -201,6 +201,45 @@ pub enum AudioCommand {
         usize, /*send index*/
         u64,   /*dest track id*/
     ),
+    TransposeSelectedNotes {
+        clip_id: u64,
+        note_ids: Vec<u64>,
+        semitones: i32,
+    },
+    NudgeSelectedNotes {
+        clip_id: u64,
+        note_ids: Vec<u64>,
+        delta_beats: f64,
+    },
+    QuantizeSelectedNotes {
+        clip_id: u64,
+        note_ids: Vec<u64>,
+        strength: f32,
+        grid: f32,
+    },
+    HumanizeSelectedNotes {
+        clip_id: u64,
+        note_ids: Vec<u64>,
+        amount: f32,
+    },
+    AddNotesToClip {
+        clip_id: u64,
+        notes: Vec<crate::model::clip::MidiNote>, // id may be 0; command will assign
+    },
+    RemoveNotesById {
+        clip_id: u64,
+        note_ids: Vec<u64>,
+    },
+    UpdateNotesById {
+        clip_id: u64,
+        notes: Vec<crate::model::clip::MidiNote>, // same ids updated in place
+    },
+    DuplicateNotesWithOffset {
+        clip_id: u64,
+        source_note_ids: Vec<u64>,
+        delta_beats: f64,
+        delta_semitones: i32,
+    },
 }
 
 #[derive(Debug, Clone)]

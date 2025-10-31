@@ -5,7 +5,7 @@ use super::*;
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
 use crate::model::track::TrackType;
-use crate::model::{AudioClip, AutomationTarget, MidiClip, Track};
+use crate::model::{AudioClip, AutomationTarget, MidiClip, MidiNote, Track};
 use crate::project::ClipLocation;
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
 use egui::scroll_area::ScrollSource;
@@ -629,10 +629,11 @@ impl TimelineView {
         painter: &egui::Painter,
         ui: &mut egui::Ui,
         track_rect: egui::Rect,
-        clip: &MidiClip,
+        clip: &crate::model::clip::MidiClip,
         track_id: u64,
         app: &mut super::app::YadawApp,
     ) {
+        // Compute clip rectangle
         let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
         let clip_width = clip.length_beats as f32 * self.zoom_x;
 
@@ -645,6 +646,7 @@ impl TimelineView {
             return;
         }
 
+        // Background/outline
         let clip_fill = if let Some((r, g, b)) = clip.color {
             egui::Color32::from_rgba_premultiplied(r, g, b, 196)
         } else {
@@ -659,11 +661,26 @@ impl TimelineView {
             egui::StrokeKind::Middle,
         );
 
-        // Draw MIDI notes preview (using content loop logic)
+        // Resolve notes from Pattern
+        let base_notes: Vec<MidiNote> = {
+            let state = app.state.lock().unwrap();
+            if let Some(pid) = clip.pattern_id {
+                state
+                    .patterns
+                    .get(&pid)
+                    .map(|p| p.notes.clone())
+                    .unwrap_or_else(|| clip.notes.clone())
+            } else {
+                clip.notes.clone()
+            }
+        };
+
+        // Content-loop preview (same logic as before, but using base_notes)
         let content_len = clip.content_len_beats.max(0.000001);
         let inst_len = clip.length_beats.max(0.0);
         let clip_left = clip_rect.left();
 
+        // Determine the visible pattern window relative to the clip
         let vis_start_rel: f64 =
             ((track_rect.left() - clip_left) as f64 + self.scroll_x as f64) / self.zoom_x as f64;
         let vis_end_rel: f64 =
@@ -703,15 +720,18 @@ impl TimelineView {
             .content_offset_beats
             .rem_euclid(clip.content_len_beats.max(0.000001));
 
+        // Draw mini "piano roll" lines
         for k in first_rep..=last_rep {
             let rep_start = k as f64 * content_len;
             if rep_start >= inst_len {
                 break;
             }
 
-            for note in &clip.notes {
+            for note in &base_notes {
                 let s_loc = (note.start + offset).rem_euclid(content_len);
                 let e_loc_raw = s_loc + note.duration;
+
+                // A note that crosses the content boundary is split into two segments visually
                 let mut segs: smallvec::SmallVec<[(f64, f64); 2]> = smallvec::smallvec![];
                 if e_loc_raw <= content_len {
                     segs.push((s_loc, e_loc_raw));
@@ -726,14 +746,18 @@ impl TimelineView {
                         continue;
                     }
                     let e = (rep_start + e_local).min(inst_len);
+
+                    // Project to screen space
                     let seg_left = clip_rect.left() + (s as f32 * self.zoom_x);
                     let seg_right = clip_rect.left() + (e as f32 * self.zoom_x);
                     if seg_right < track_rect.left() || seg_left > track_rect.right() {
                         continue;
                     }
 
+                    // Vertical placement (pitch 0..127 -> bottom..top of clip_rect)
                     let note_y =
                         clip_rect.bottom() - ((note.pitch as f32 / 127.0) * clip_rect.height());
+
                     painter.rect_filled(
                         egui::Rect::from_min_size(
                             egui::pos2(seg_left, note_y - 2.0),
@@ -746,6 +770,7 @@ impl TimelineView {
             }
         }
 
+        // Clip name label
         painter.text(
             clip_rect.min + egui::vec2(5.0, 5.0),
             egui::Align2::LEFT_TOP,
@@ -754,6 +779,7 @@ impl TimelineView {
             egui::Color32::WHITE,
         );
 
+        // Interaction (selection, drag, resize) — unchanged from your existing code
         let response = ui.interact(
             clip_rect,
             ui.id().with(("midi_clip", clip.id)),
@@ -2196,7 +2222,7 @@ impl TimelineView {
         }
 
         // Resize with Cmd/Ctrl (+Shift for left edge)
-        if (mods.command || mods.ctrl) {
+        if mods.command || mods.ctrl {
             if pressed(egui::Key::ArrowRight) || pressed(egui::Key::ArrowLeft) {
                 let resize_delta = if pressed(egui::Key::ArrowRight) {
                     step

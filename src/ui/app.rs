@@ -1,7 +1,7 @@
 use super::*;
 use crate::audio_state::AudioState;
 use crate::config::Config;
-use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
+use crate::constants::{DEFAULT_GRID_SNAP, DEFAULT_MIN_PROJECT_BEATS};
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
@@ -862,46 +862,82 @@ impl YadawApp {
         }
     }
 
-    pub fn quantize_selected_notes_with_params(&mut self, strength: f32, grid: f32, _swing: f32) {
-        self.push_undo();
-
-        let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(&self.selected_track)
-            && let Some(clip) = track
-                .midi_clips
-                .iter_mut()
-                .find(|p| p.id == self.selected_pattern)
-        {
-            EditProcessor::quantize_notes(&mut clip.notes, grid as f64, strength);
-        }
-    }
-
     pub fn transpose_selected_notes(&mut self, semitones: i32) {
         self.push_undo();
-
-        let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(&self.selected_track)
-            && let Some(clip) = track
-                .midi_clips
-                .iter_mut()
-                .find(|p| p.id == self.selected_pattern)
-        {
-            EditProcessor::transpose_notes(&mut clip.notes, semitones);
+        let Some(clip_id) = self.piano_roll_view.selected_clip else {
+            return;
+        };
+        let note_ids = self.piano_roll_view.piano_roll.selected_note_ids.clone();
+        if note_ids.is_empty() {
+            return;
         }
+
+        let _ = self.command_tx.send(AudioCommand::TransposeSelectedNotes {
+            clip_id,
+            note_ids,
+            semitones,
+        });
+    }
+
+    fn nudge_notes(&mut self, direction: f32, fine: bool, coarse: bool) {
+        self.push_undo();
+        let Some(clip_id) = self.piano_roll_view.selected_clip else {
+            return;
+        };
+        let note_ids = self.piano_roll_view.piano_roll.selected_note_ids.clone();
+        if note_ids.is_empty() {
+            return;
+        }
+
+        let grid = self.piano_roll_view.piano_roll.grid_snap as f64;
+        let delta_beats = if fine {
+            (grid / 4.0).max(1e-6) * direction as f64
+        } else if coarse {
+            1.0 * direction as f64
+        } else {
+            grid * direction as f64
+        };
+
+        let _ = self.command_tx.send(AudioCommand::NudgeSelectedNotes {
+            clip_id,
+            note_ids,
+            delta_beats,
+        });
+    }
+
+    pub fn quantize_selected_notes_with_params(&mut self, strength: f32, grid: f32, _swing: f32) {
+        self.push_undo();
+        let Some(clip_id) = self.piano_roll_view.selected_clip else {
+            return;
+        };
+        let note_ids = self.piano_roll_view.piano_roll.selected_note_ids.clone();
+        if note_ids.is_empty() {
+            return;
+        }
+
+        let _ = self.command_tx.send(AudioCommand::QuantizeSelectedNotes {
+            clip_id,
+            note_ids,
+            strength,
+            grid,
+        });
     }
 
     pub fn humanize_selected_notes(&mut self, amount: f32) {
         self.push_undo();
-
-        let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(&self.selected_track)
-            && let Some(clip) = track
-                .midi_clips
-                .iter_mut()
-                .find(|p| p.id == self.selected_pattern)
-        {
-            EditProcessor::humanize_notes(&mut clip.notes, amount);
+        let Some(clip_id) = self.piano_roll_view.selected_clip else {
+            return;
+        };
+        let note_ids = self.piano_roll_view.piano_roll.selected_note_ids.clone();
+        if note_ids.is_empty() {
+            return;
         }
+
+        let _ = self.command_tx.send(AudioCommand::HumanizeSelectedNotes {
+            clip_id,
+            note_ids,
+            amount,
+        });
     }
 
     pub fn add_automation_lane(&mut self, track_id: u64, target: AutomationTarget) {
@@ -1045,21 +1081,20 @@ impl YadawApp {
                 let mut state = self.state.lock().unwrap();
                 clip.id = state.fresh_id();
                 if let Some(track) = state.tracks.get_mut(&track_id) {
-                    if !matches!(track.track_type, TrackType::Midi) {
-                        // Extra safety check
+                    if !matches!(track.track_type, crate::model::track::TrackType::Midi) {
                         track.audio_clips.push(clip);
                     }
                 }
                 drop(state);
-                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+                let _ = self
+                    .command_tx
+                    .send(crate::messages::AudioCommand::UpdateTracks);
             }
-
-            UIUpdate::RecordingStateChanged(is_recording) => {
-                self.is_recording_ui = is_recording;
+            UIUpdate::RecordingStateChanged(on) => {
+                self.is_recording_ui = on;
             }
-
-            UIUpdate::RecordingLevel(_level) => {}
-            UIUpdate::MasterLevel(_left, _right) => {}
+            UIUpdate::RecordingLevel(_) => {}
+            UIUpdate::MasterLevel(_, _) => {}
             UIUpdate::PushUndo(snapshot) => {
                 self.undo_stack.push_back(snapshot);
                 self.redo_stack.clear();
@@ -1074,17 +1109,19 @@ impl YadawApp {
                 plugin_time_ms,
                 latency_ms,
             } => {
-                let metrics = PerformanceMetrics {
+                let metrics = crate::performance::PerformanceMetrics {
                     cpu_usage,
                     memory_usage: 0,
                     disk_streaming_rate: 0.0,
                     audio_buffer_health: buffer_fill,
-                    plugin_processing_time: Duration::from_secs_f32(plugin_time_ms / 1000.0),
+                    plugin_processing_time: std::time::Duration::from_secs_f32(
+                        plugin_time_ms / 1000.0,
+                    ),
                     xruns: xruns as usize,
                     latency_ms,
                 };
                 self.performance_monitor.update_metrics(metrics);
-                self.last_real_metrics_at = Some(Instant::now());
+                self.last_real_metrics_at = Some(std::time::Instant::now());
             }
             UIUpdate::NotesCutToClipboard(notes) => {
                 self.note_clipboard = Some(notes);
@@ -1104,11 +1141,18 @@ impl YadawApp {
                     if plugin_idx < track.plugin_chain.len() {
                         let desc = &mut track.plugin_chain[plugin_idx];
                         for (name, _min, _max, default) in params {
-                            // Only insert if not present to keep user edits
                             desc.params.entry(name).or_insert(default);
                         }
                     }
                 }
+            }
+            UIUpdate::ReservedNoteIds(new_ids) => {
+                // Called e.g. after DuplicateNotesWithOffset
+                self.piano_roll_view.piano_roll.selected_note_ids = new_ids;
+                self.piano_roll_view
+                    .piano_roll
+                    .temp_selected_indices
+                    .clear();
             }
             _ => {}
         }
@@ -1367,42 +1411,6 @@ impl YadawApp {
                 self.timeline_ui.show_clip_menu = false;
             }
         }
-    }
-
-    fn nudge_notes(&mut self, direction: f32, fine: bool, coarse: bool) {
-        let clip_id = match self.piano_roll_view.selected_clip {
-            Some(id) => id,
-            None => return,
-        };
-
-        let grid = self.piano_roll_view.piano_roll.grid_snap as f64;
-        let delta = if fine {
-            (grid / 4.0).max(1e-6) * direction as f64
-        } else if coarse {
-            1.0 * direction as f64
-        } else {
-            grid * direction as f64
-        };
-
-        let mut state = self.state.lock().unwrap();
-        if let Some((track, loc)) = state.find_clip_mut(clip_id) {
-            if let crate::project::ClipLocation::Midi(idx) = loc {
-                if let Some(clip) = track.midi_clips.get_mut(idx) {
-                    let sel_idx = self.piano_roll_view.piano_roll.selected_indices(clip);
-
-                    for &idx in &sel_idx {
-                        if let Some(note) = clip.notes.get_mut(idx) {
-                            let new_start = (note.start + delta).max(0.0);
-                            let max_start = (clip.length_beats - note.duration).max(0.0);
-                            note.start = new_start.min(max_start);
-                        }
-                    }
-                }
-            }
-        }
-        drop(state);
-
-        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     fn adjust_velocity(&mut self, delta: i8) {
