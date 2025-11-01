@@ -51,6 +51,14 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let ui_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
     let available_plugins = ui_facade.scan().unwrap_or_default();
 
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("Panic: {info}");
+        let _ = std::fs::write(
+            crate::paths::cache_dir().join("last_panic.txt"),
+            format!("{info:?}"),
+        );
+    }));
+
     // Start audio thread
     {
         let audio_state_clone = audio_state.clone();

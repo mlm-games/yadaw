@@ -356,8 +356,18 @@ impl YadawApp {
         self.push_undo();
         let mut state = self.state.lock().unwrap();
 
-        if let Some(track) = state.tracks.get(&self.selected_track) {
-            let mut new_track = self.track_manager.duplicate_track(track);
+        if let Some(track) = state.tracks.get(&self.selected_track).cloned() {
+            // Resolve each MIDI clip's notes from pattern into clip.notes before duplicating
+            let mut resolved = track.clone();
+            for mc in &mut resolved.midi_clips {
+                if let Some(pid) = mc.pattern_id {
+                    if let Some(p) = state.patterns.get(&pid) {
+                        mc.notes = p.notes.clone();
+                    }
+                }
+            }
+
+            let mut new_track = self.track_manager.duplicate_track(&resolved);
             let new_track_id = state.fresh_id();
             new_track.id = new_track_id;
 
@@ -373,6 +383,8 @@ impl YadawApp {
             }
 
             state.tracks.insert(new_track_id, new_track);
+            // This will mint fresh pattern ids for clips where pattern_id was None,
+            // and assign ids for notes that had id==0
             state.ensure_ids();
 
             self.selected_track = new_track_id;
