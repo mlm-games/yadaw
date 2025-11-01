@@ -450,8 +450,8 @@ impl TimelineView {
     ) {
         let vis = ui.visuals();
         let base = vis.extreme_bg_color;
-        let bg_color = if rand::random_bool(0.5) {
-            // TODO: make all of them colorful?
+        let idx = app.track_id_to_index(track_id).unwrap_or(0);
+        let bg_color = if idx % 2 == 0 {
             base
         } else {
             egui::Color32::from_rgba_premultiplied(
@@ -1299,41 +1299,25 @@ impl TimelineView {
                                                 .or_default()
                                                 .push(cmd);
                                         } else if new_start > other_start && new_end < other_end {
-                                            // Inside
-                                            let new_other_len = (new_start - other_start).max(0.0);
-                                            if new_other_len < min_len {
-                                                let cmd = if source_is_midi {
-                                                    AudioCommand::DeleteMidiClip {
-                                                        clip_id: other_id,
-                                                    }
-                                                } else {
-                                                    AudioCommand::DeleteAudioClip {
-                                                        clip_id: other_id,
-                                                    }
-                                                };
-                                                track_mod_commands
-                                                    .entry(dest_track_id)
-                                                    .or_default()
-                                                    .push(cmd);
+                                            // Dragged clip is fully inside other clip
+                                            // The underlying clip needs to be split.
+                                            let cmd = if source_is_midi {
+                                                AudioCommand::PunchOutMidiClip {
+                                                    clip_id: other_id,
+                                                    start_beat: new_start,
+                                                    end_beat: new_end,
+                                                }
                                             } else {
-                                                let cmd = if source_is_midi {
-                                                    AudioCommand::ResizeMidiClip {
-                                                        clip_id: other_id,
-                                                        new_start: other_start,
-                                                        new_length: new_other_len,
-                                                    }
-                                                } else {
-                                                    AudioCommand::ResizeAudioClip {
-                                                        clip_id: other_id,
-                                                        new_start: other_start,
-                                                        new_length: new_other_len,
-                                                    }
-                                                };
-                                                track_mod_commands
-                                                    .entry(dest_track_id)
-                                                    .or_default()
-                                                    .push(cmd);
-                                            }
+                                                AudioCommand::PunchOutAudioClip {
+                                                    clip_id: other_id,
+                                                    start_beat: new_start,
+                                                    end_beat: new_end,
+                                                }
+                                            };
+                                            track_mod_commands
+                                                .entry(dest_track_id)
+                                                .or_default()
+                                                .push(cmd);
                                         } else if new_end > other_start && new_start <= other_start
                                         {
                                             // Overlap left

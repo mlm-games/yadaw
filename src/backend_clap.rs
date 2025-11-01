@@ -261,9 +261,6 @@ mod clap_impl {
         pending_param_changes: Vec<(u32, f64)>,
     }
 
-    unsafe impl Send for ClapInstance {} // HACK, should be safe
-    unsafe impl Sync for ClapInstance {}
-
     impl ClapInstance {
         fn ensure_started(&mut self, frames: usize) -> Result<()> {
             if self.started.is_none() {

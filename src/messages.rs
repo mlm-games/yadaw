@@ -84,6 +84,11 @@ pub enum AudioCommand {
         clip_id: u64,
         position: f64,
     },
+    PunchOutMidiClip {
+        clip_id: u64,
+        start_beat: f64,
+        end_beat: f64,
+    },
 
     MoveAudioClip {
         clip_id: u64,
@@ -100,6 +105,11 @@ pub enum AudioCommand {
     SplitAudioClip {
         clip_id: u64,
         position: f64,
+    },
+    PunchOutAudioClip {
+        clip_id: u64,
+        start_beat: f64,
+        end_beat: f64,
     },
     DeleteAudioClip {
         clip_id: u64,

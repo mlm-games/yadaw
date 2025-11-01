@@ -1827,6 +1827,106 @@ fn process_command(
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
+        AudioCommand::PunchOutAudioClip {
+            clip_id,
+            start_beat,
+            end_beat,
+        } => {
+            let mut st = app_state.lock().unwrap();
+            let (track_id, original_clip_opt) =
+                if let Some((track, ClipLocation::Audio(idx))) = st.find_clip(clip_id) {
+                    (track.id, track.audio_clips.get(idx).cloned())
+                } else {
+                    (0, None)
+                };
+
+            if let Some(original_clip) = original_clip_opt {
+                let clip_start = original_clip.start_beat;
+                let clip_end = original_clip.start_beat + original_clip.length_beats;
+
+                // Ensure punch-out is fully within the clip
+                if start_beat > clip_start && end_beat < clip_end {
+                    // 1. Create the right-hand part as a new clip
+                    let mut right_part = original_clip.clone();
+                    right_part.id = idgen::next();
+                    right_part.start_beat = end_beat;
+                    let right_len = clip_end - end_beat;
+                    right_part.length_beats = right_len;
+                    // Adjust audio sample offset for the new right-hand clip
+                    let converter = crate::time_utils::TimeConverter::new(st.sample_rate, st.bpm);
+                    let right_offset_beats = converter
+                        .samples_to_beats(converter.beats_to_samples(
+                            original_clip.offset_beats + (end_beat - clip_start),
+                        ));
+                    right_part.offset_beats = right_offset_beats;
+
+                    // 2. Modify the original clip to become the left-hand part
+                    if let Some((track, ClipLocation::Audio(idx))) = st.find_clip_mut(clip_id) {
+                        if let Some(left_part) = track.audio_clips.get_mut(idx) {
+                            left_part.length_beats = start_beat - clip_start;
+                        }
+                        // 3. Insert the new right-hand part
+                        track.audio_clips.push(right_part.clone());
+                        st.clips_by_id.insert(
+                            right_part.id,
+                            ClipRef {
+                                track_id,
+                                is_midi: false,
+                            },
+                        );
+                    }
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::PunchOutMidiClip {
+            clip_id,
+            start_beat,
+            end_beat,
+        } => {
+            // This is more complex due to patterns. We will split the pattern's notes.
+            let mut st = app_state.lock().unwrap();
+            let (track_id, original_clip_opt) =
+                if let Some((track, ClipLocation::Midi(idx))) = st.find_clip(clip_id) {
+                    (track.id, track.midi_clips.get(idx).cloned())
+                } else {
+                    (0, None)
+                };
+
+            if let Some(original_clip) = original_clip_opt {
+                let clip_start = original_clip.start_beat;
+                let clip_end = original_clip.start_beat + original_clip.length_beats;
+
+                if start_beat > clip_start && end_beat < clip_end {
+                    // For MIDI, we can simply create two new clips that reference the same pattern.
+                    // The audio engine's MIDI processing logic will correctly play only the notes
+                    // within each clip's time window.
+
+                    // 1. Create the right-hand part
+                    let mut right_part = original_clip.clone();
+                    right_part.id = idgen::next();
+                    right_part.start_beat = end_beat;
+                    right_part.length_beats = clip_end - end_beat;
+
+                    // 2. Modify the original to become the left-hand part
+                    if let Some((track, ClipLocation::Midi(idx))) = st.find_clip_mut(clip_id) {
+                        if let Some(left_part) = track.midi_clips.get_mut(idx) {
+                            left_part.length_beats = start_beat - clip_start;
+                        }
+                        // 3. Insert the new right-hand part
+                        track.midi_clips.push(right_part.clone());
+                        st.clips_by_id.insert(
+                            right_part.id,
+                            ClipRef {
+                                track_id,
+                                is_midi: true,
+                            },
+                        );
+                    }
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
     }
 }
 

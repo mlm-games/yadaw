@@ -20,8 +20,8 @@ pub fn projects_dir() -> PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn config_path() -> PathBuf {
-    let p = Path::new("/data/data/com.yadaw.app/files/config");
-    let _ = std::fs::create_dir_all(p);
+    let p = files_dir_pathbuf().join("config");
+    let _ = std::fs::create_dir_all(&p);
     p.join("config.json")
 }
 
@@ -35,8 +35,8 @@ pub fn config_path() -> PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn cache_dir() -> PathBuf {
-    let p = Path::new("/data/data/com.yadaw.app/cache");
-    let _ = std::fs::create_dir_all(p);
+    let p = files_dir_pathbuf().join("cache");
+    let _ = std::fs::create_dir_all(&p);
     p.to_path_buf()
 }
 
@@ -50,10 +50,7 @@ pub fn cache_dir() -> PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn plugins_dir() -> PathBuf {
-    let base = Path::new("/data/data/com.yadaw.app/files");
-    // let base = Path::new("/storage/emulated/0/Android/data/com.yadaw.app/files");
-    // let base = Path::new("/storage/emulated/0/Documents");
-    let dir = base.join("plugins").join("clap");
+    let dir = files_dir_pathbuf().join("plugins").join("clap");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -71,8 +68,7 @@ pub fn plugins_dir() -> PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn presets_dir() -> std::path::PathBuf {
-    let base = std::path::Path::new("/data/data/com.yadaw.app/files");
-    let dir = base.join("presets");
+    let dir = files_dir_pathbuf().join("presets");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -116,7 +112,7 @@ pub fn config_root_dir() -> std::path::PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn config_root_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from("/data/data/com.yadaw.app/files/config")
+    files_dir_pathbuf().join("config")
 }
 
 pub fn shortcuts_path() -> std::path::PathBuf {
