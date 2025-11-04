@@ -1,0 +1,24 @@
+- Update release.yml
+- Update snap-upload.yml
+- broke it, timeline drag to other works again, break for real this time
+- Minor changes, and a plugin back handling refactor
+- whoof, add the other audio commands, fade dots like abelton, take a break from code
+- remove redundant code, make track settings work on the correct track
+- add state independent id generation
+- add patterns to appstate
+- fix plugin duplication, change stop shortcut to S, android saf fixing (incomplete)
+- add resize preview and name metronome "Click" as "Metronome"
+- massive changes (change track_type, add metronome, sends impl, etc)
+- Update snap-upload.yml
+- Add files via upload
+- Create temp
+- hide the unimplemented loop line (only useful for snapping rn)
+- fix drag pos incrementing, add android_saf test
+- remove tracks options dup, fix shortcuts dialog close button
+- add the descs
+- improve the timeline for audio clips
+- fix android drag
+- Update README.md
+- Update io.github.mlm_games.yadaw.desktop
+- Create io.github.mlm_games.yadaw.desktop
+- Update Cargo.toml
