@@ -38,11 +38,11 @@ jobs:
           mkdir -p others/snap/builds others/snap/gui
 
           # Copy desktop and icon files
-          cp others/flathub/io.github.mlm_games.<placeholdername>.desktop others/snap/gui/<placeholdername>.desktop
+          cp others/flathub/io.github.mlm_games.yadaw.desktop others/snap/gui/yadaw.desktop
           cp fastlane/metadata/android/en-US/images/icon.png others/snap/gui/icon.png
-          sed -i -e 's|^Exec=.*|Exec=<placeholdername>|' \
+          sed -i -e 's|^Exec=.*|Exec=yadaw|' \
                  -e 's|^Icon=.*|Icon=${SNAP}/meta/gui/icon.png|' \
-                 others/snap/gui/<placeholdername>.desktop
+                 others/snap/gui/yadaw.desktop
 
           VERSION="${{ inputs.version_name }}"
           TARGET="x86_64-unknown-linux-gnu" 
