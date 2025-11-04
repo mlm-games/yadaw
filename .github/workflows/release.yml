@@ -3,7 +3,7 @@ name: Release binaries (switch to cargo-dist later)
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "*.*.*"
   workflow_dispatch:
     inputs:
         upload_releases:
@@ -429,7 +429,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare-version.outputs.version_name }}
-          name: ${{ needs.prepare-version.outputs.version_name }}
+          name: v${{ needs.prepare-version.outputs.version_name }}
           generate_release_notes: true
           target_commitish: ${{ needs.prepare-version.outputs.commit_sha }}
           prerelease: ${{ inputs.mark_prerelease }}
