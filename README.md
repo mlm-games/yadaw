@@ -13,7 +13,7 @@ Current intention is to not add too much code for outdated parts, and to keep it
 - Hint: Saving and loading works by scrolling fully to the bottom and clicking on the last 4th (or 5th) entry (is a hack for now, will implement proper perms later; currently only works for certain internal folders)
 
 
-#### Missing Essentials? (would not be done in the near future)
+#### Missing common features (would not be done in the near future)
 
 - No VST support (LV2 and CLAP only).
 - No MP3/FLAC export (WAV only).
