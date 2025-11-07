@@ -59,7 +59,7 @@ jobs:
       - name: Update version in snapcraft.yml
         run: |
           sed -i "s/^version: .*/version: '${{ inputs.version_name }}'/" others/snap/snap/snapcraft.yaml
-          echo "others/snap/snap/snapcraft.yaml version updated"
+          echo "others/snap/snapcraft.yaml version updated"
 
       - name: Build snap
         uses: snapcore/action-build@v1
