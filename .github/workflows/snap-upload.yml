@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Version name (e.g., v0.2.4)'
+        description: 'Version name (e.g., 0.4.4)'
         required: true
 
 concurrency:
