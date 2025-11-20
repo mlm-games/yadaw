@@ -1,5 +1,5 @@
 name: yadaw
-base: core22
+base: core24
 version: '9.9.9' # Will be auto-updated
 summary: Rust-powered, plugin-first multiplatform DAW
 description: |
@@ -17,7 +17,7 @@ source-code: https://github.com/mlm-games/yadaw
 issues: https://github.com/mlm-games/yadaw/issues
 donation: https://github.com/sponsors/mlm-games
 
-architectures:
+platforms:
   - build-on: amd64
   - build-on: arm64
 
