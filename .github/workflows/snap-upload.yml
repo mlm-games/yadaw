@@ -35,7 +35,7 @@ jobs:
       - name: Fetch Linux binary (from tar.gz)
         run: |
           set -euo pipefail
-          mkdir -p others/snap/snap/builds others/snap/snap/gui
+          mkdir -p others/snap/builds others/snap/snap/gui
 
           # Copy desktop and icon files
           cp others/flathub/io.github.mlm_games.yadaw.desktop others/snap/snap/gui/yadaw.desktop
