@@ -1,12 +1,20 @@
 name: yadaw
 base: core22
-version: '9.9.9'
-summary: “Rust‑powered, plugin‑first multiplatform DAW.”
+version: '9.9.9' # Will be auto-updated
+summary: Rust-powered, plugin-first multiplatform DAW
 description: |
-  A small and lightweight DAW for sound design and prototyping. CLAP/LV2 hosting, runs on desktop and Android. Made using Rust + egui. is fully OSS (AGPL).
+  A small and lightweight DAW for sound design and prototyping. CLAP/LV2 hosting, 
+  runs on desktop and Android. Made using Rust + egui. Fully OSS (AGPL).
 
 grade: stable
 confinement: strict
+
+title: YADAW
+license: AGPL-3.0
+contact: https://github.com/mlm-games/yadaw/issues
+website: https://github.com/mlm-games/yadaw
+source-code: https://github.com/mlm-games/yadaw
+issues: https://github.com/mlm-games/yadaw/issues
 
 architectures:
   - build-on: amd64
@@ -16,7 +24,16 @@ apps:
   yadaw:
     command: yadaw
     extensions: [gnome]
-    plugs: [home, network, removable-media, unity7]
+    plugs: 
+      - home
+      - network
+      - removable-media
+      - unity7
+      - audio-playback
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
 
 parts:
   yadaw:
@@ -24,15 +41,21 @@ parts:
     source: ./builds/
     source-type: local
     stage-packages:
+      - liblilv-0-0
+      - libpulse0
+      - libasound2
       - libglu1-mesa
       - libxcursor1
       - libxinerama1
       - libxrandr2
       - libxi6
-      - libpulse0
+      - lv2-dev
+      - libserd-0-0
+      - libsord-0-0
+      - libsratom-0-0
     override-build: |
-      snapcraftctl build
-      chmod +x $SNAPCRAFT_PART_INSTALL/yadaw
+      craftctl default
+      chmod +x $CRAFT_PART_INSTALL/yadaw
 
 layout:
   /usr/share/yadaw:
