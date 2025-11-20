@@ -22,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="v${{ inputs.version_name }}"
+          tag="${{ inputs.version_name }}"
           mkdir -p downloads
           wget -O downloads/yadaw-${{ inputs.version_name }}-x86_64-unknown-linux-gnu.tar.gz \
             "https://github.com/mlm-games/yadaw/releases/download/${tag}/yadaw-${{ inputs.version_name }}-x86_64-unknown-linux-gnu.tar.gz"
@@ -66,7 +66,7 @@ jobs:
         shell: bash
         run: |
           ver="${{ inputs.version_name }}"
-          tag="v${{ inputs.version_name }}"
+          tag="${{ inputs.version_name }}"
           mkdir -p aur-package
           cat > aur-package/PKGBUILD <<'EOF'
           # Maintainer: MLM-stuff <gfxoxinzh@mozmail.com>
@@ -87,8 +87,8 @@ jobs:
           conflicts=('yadaw')
           options=('!strip')
 
-          source_x86_64=("${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/yadaw/releases/download/v${pkgver}/${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
-          source_aarch64=("${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/yadaw/releases/download/v${pkgver}/${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
+          source_x86_64=("${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/yadaw/releases/download/${pkgver}/${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
+          source_aarch64=("${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/yadaw/releases/download/${pkgver}/${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
           # Icon
           source=("icon.png::https://raw.githubusercontent.com/mlm-games/yadaw/refs/heads/master/src/experiments/icon.png")
 
@@ -138,4 +138,4 @@ jobs:
           commit_username: MLM-stuff
           commit_email: gfxoxinzh@mozmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to v${{ inputs.version_name }}-${{ steps.pkgrel.outputs.pkgrel }}"
+          commit_message: "Update to ${{ inputs.version_name }}-${{ steps.pkgrel.outputs.pkgrel }}"
