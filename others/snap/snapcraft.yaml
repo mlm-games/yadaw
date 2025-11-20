@@ -15,6 +15,7 @@ contact: https://github.com/mlm-games/yadaw/issues
 website: https://github.com/mlm-games/yadaw
 source-code: https://github.com/mlm-games/yadaw
 issues: https://github.com/mlm-games/yadaw/issues
+donation: https://github.com/sponsors/mlm-games
 
 architectures:
   - build-on: amd64
