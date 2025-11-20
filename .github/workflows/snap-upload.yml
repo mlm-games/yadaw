@@ -52,8 +52,8 @@ jobs:
           # Extract tar.gz and copy binary
           mkdir -p /tmp/app_extract
           tar -xzf /tmp/app.tar.gz -C /tmp/app_extract
-          cp "/tmp/app_extract/${{ env.BIN_NAME }}-${VERSION}-${TARGET}/${{ env.BIN_NAME }}" "others/snap/snap/builds/${{ env.BIN_NAME }}"
-          chmod +x others/snap/snap/builds/${{ env.BIN_NAME }}
+          cp "/tmp/app_extract/${{ env.BIN_NAME }}-${VERSION}-${TARGET}/${{ env.BIN_NAME }}" "others/snap/builds/${{ env.BIN_NAME }}"
+          chmod +x others/snap/builds/${{ env.BIN_NAME }}
 
 
       - name: Update version in snapcraft.yml
