@@ -18,8 +18,8 @@ issues: https://github.com/mlm-games/yadaw/issues
 donation: https://github.com/sponsors/mlm-games
 
 platforms:
-  - build-on: amd64
-  - build-on: arm64
+  amd64:
+  arm64:
 
 apps:
   yadaw:
