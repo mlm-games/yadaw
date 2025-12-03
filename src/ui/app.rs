@@ -60,6 +60,8 @@ pub struct YadawApp {
     // Plugin management
     pub(super) available_plugins: HashMap<String, UnifiedPluginInfo>,
     pub(super) selected_track_for_plugin: Option<u64>,
+    pub(super) clap_param_meta:
+        std::collections::HashMap<(u64, usize), Vec<(String, f32, f32, f32)>>,
 
     // Selection state
     pub(super) selected_track: u64,
@@ -183,6 +185,7 @@ impl YadawApp {
             ui_rx,
             config: config.clone(),
             available_plugins: available_plugins_map,
+            clap_param_meta: std::collections::HashMap::new(),
 
             selected_track: initial_track_id,
             selected_pattern: 0,
@@ -1134,15 +1137,7 @@ impl YadawApp {
                 plugin_idx,
                 params,
             } => {
-                let mut state = self.state.lock().unwrap();
-                if let Some(track) = state.tracks.get_mut(&track_id) {
-                    if plugin_idx < track.plugin_chain.len() {
-                        let desc = &mut track.plugin_chain[plugin_idx];
-                        for (name, _min, _max, default) in params {
-                            desc.params.entry(name).or_insert(default);
-                        }
-                    }
-                }
+                self.clap_param_meta.insert((track_id, plugin_idx), params);
             }
             UIUpdate::ReservedNoteIds(new_ids) => {
                 // Called e.g. after DuplicateNotesWithOffset

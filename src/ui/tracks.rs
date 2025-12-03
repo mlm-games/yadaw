@@ -6,6 +6,7 @@ use crate::level_meter::LevelMeter;
 use crate::messages::AudioCommand;
 use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
+use crate::model::plugin_api::BackendKind;
 use crate::model::track::TrackType;
 use crate::plugin::get_control_port_info;
 use crate::project::AppState;
@@ -464,22 +465,21 @@ impl TracksPanel {
 
         // Only lock when we need to read plugin data
         for plugin_idx in 0..chain_len {
-            let (plugin_id, plugin_name, plugin_uri, bypass, params) = {
+            let (plugin_id, plugin_name, plugin_uri, backend, bypass, params) = {
                 let state = app.state.lock().unwrap();
                 let track = match state.tracks.get(&track_id) {
                     Some(t) => t,
                     None => continue,
                 };
-
                 let plugin = match track.plugin_chain.get(plugin_idx) {
                     Some(p) => p,
                     None => continue,
                 };
-
                 (
                     plugin.id,
                     plugin.name.clone(),
                     plugin.uri.clone(),
+                    plugin.backend,
                     plugin.bypass,
                     plugin.params.clone(),
                 )
@@ -547,41 +547,97 @@ impl TracksPanel {
                     });
 
                     // Draw parameters
-                    for (pname, &pval) in &params {
-                        let mut v = pval;
-                        ui.horizontal(|ui| {
-                            ui.label(pname);
+                    match backend {
+                        BackendKind::Lv2 => {
+                            for (pname, &pval) in &params {
+                                let mut v = pval;
+                                ui.horizontal(|ui| {
+                                    ui.label(pname);
 
-                            let meta = get_control_port_info(&plugin_uri, pname);
-                            let (min_v, max_v, default_v) = meta
-                                .as_ref()
-                                .map(|m| (m.min, m.max, m.default))
-                                .unwrap_or((0.0, 1.0, 0.0));
+                                    let meta = get_control_port_info(&plugin_uri, pname);
+                                    let (min_v, max_v, default_v) = meta
+                                        .as_ref()
+                                        .map(|m| (m.min, m.max, m.default))
+                                        .unwrap_or((0.0, 1.0, 0.0));
 
-                            if ui
-                                .add(egui::Slider::new(&mut v, min_v..=max_v).show_value(true))
-                                .changed()
-                            {
-                                let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                                    track_id,
-                                    plugin_id,
-                                    pname.clone(),
-                                    v,
-                                ));
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut v, min_v..=max_v)
+                                                .show_value(true),
+                                        )
+                                        .changed()
+                                    {
+                                        let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                            track_id,
+                                            plugin_id,
+                                            pname.clone(),
+                                            v,
+                                        ));
+                                    }
+                                    if ui
+                                        .small_button("↺")
+                                        .on_hover_text(format!(
+                                            "Reset to default ({:.3})",
+                                            default_v
+                                        ))
+                                        .clicked()
+                                    {
+                                        let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                            track_id,
+                                            plugin_id,
+                                            pname.clone(),
+                                            default_v,
+                                        ));
+                                    }
+                                });
                             }
-                            if ui
-                                .small_button("↺")
-                                .on_hover_text(format!("Reset to default ({:.3})", default_v))
-                                .clicked()
-                            {
-                                let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                                    track_id,
-                                    plugin_id,
-                                    pname.clone(),
-                                    default_v,
-                                ));
+                        }
+                        BackendKind::Clap => {
+                            // Use CLAP metadata from clap_param_meta
+                            if let Some(meta) = app.clap_param_meta.get(&(track_id, plugin_idx)) {
+                                for (name, min_v, max_v, default_v) in meta {
+                                    let mut v = params.get(name).copied().unwrap_or(*default_v);
+                                    ui.horizontal(|ui| {
+                                        ui.label(name);
+
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut v, *min_v..=*max_v)
+                                                    .show_value(true),
+                                            )
+                                            .changed()
+                                        {
+                                            let _ =
+                                                app.command_tx.send(AudioCommand::SetPluginParam(
+                                                    track_id,
+                                                    plugin_id,
+                                                    name.clone(),
+                                                    v,
+                                                ));
+                                        }
+
+                                        if ui
+                                            .small_button("↺")
+                                            .on_hover_text(format!(
+                                                "Reset to default ({:.3})",
+                                                default_v
+                                            ))
+                                            .clicked()
+                                        {
+                                            let _ =
+                                                app.command_tx.send(AudioCommand::SetPluginParam(
+                                                    track_id,
+                                                    plugin_id,
+                                                    name.clone(),
+                                                    *default_v,
+                                                ));
+                                        }
+                                    });
+                                }
+                            } else {
+                                ui.label(egui::RichText::new("No parameter info available").weak());
                             }
-                        });
+                        }
                     }
                 });
         }

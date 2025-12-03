@@ -1289,44 +1289,34 @@ impl AudioEngine {
     }
 
     fn rebuild_track_chain_rt(&mut self, track_id: u64, chain: &[PluginDescriptorSnapshot]) {
-        // Ensure a processor exists for this track
         let proc = self
             .track_processors
             .entry(track_id)
             .or_insert_with(|| TrackProcessor::new(track_id));
 
-        // 1) Drop existing plugin instances for this track
-        for (_, pp) in proc.plugins.drain() {
-            if let Some(handle) = pp.rt_instance_id {
-                self.plugin_instances.remove(&handle);
-            }
-        }
+        proc.plugins.clear();
         proc.plugin_order.clear();
 
-        // 2) Recreate chain in order
-        for pdesc in chain {
+        for (plugin_idx, pdesc) in chain.iter().enumerate() {
             match self.host_facade.instantiate(pdesc.backend, &pdesc.uri) {
                 Ok(mut inst) => {
-                    // Build param name → key map once
+                    // Build param name -> key map once
                     let param_map: std::collections::HashMap<String, ParamKey> = inst
                         .params()
                         .iter()
                         .map(|p| (p.name.clone(), p.key.clone()))
                         .collect();
 
-                    // Apply saved params
+                    // Apply saved params (no Clap(0) placeholders)
                     for kv in pdesc.params.iter() {
                         let name = kv.key().clone();
                         let val = *kv.value();
 
                         match pdesc.backend {
                             BackendKind::Lv2 => {
-                                // LV2 params are keyed by symbol
-                                let key = ParamKey::Lv2(name.clone());
-                                inst.set_param(&key, val);
+                                inst.set_param(&ParamKey::Lv2(name.clone()), val);
                             }
                             BackendKind::Clap => {
-                                // Only set if we can resolve name -> ClapId
                                 if let Some(actual_key) = param_map.get(&name) {
                                     inst.set_param(actual_key, val);
                                 } else {
@@ -1339,6 +1329,19 @@ impl AudioEngine {
                             }
                         }
                     }
+
+                    // Send metadata for UI
+                    let params_for_ui: Vec<(String, f32, f32, f32)> = inst
+                        .params()
+                        .iter()
+                        .map(|p| (p.name.clone(), p.min, p.max, p.default))
+                        .collect();
+
+                    let _ = self.updates.try_send(UIUpdate::PluginParamsDiscovered {
+                        track_id,
+                        plugin_idx,
+                        params: params_for_ui,
+                    });
 
                     let handle = generate_plugin_handle();
                     self.plugin_instances.insert(
@@ -1360,6 +1363,12 @@ impl AudioEngine {
                 }
                 Err(e) => {
                     log::error!("RebuildChain: instantiate failed {}: {}", pdesc.uri, e);
+                    let msg = format!(
+                        "Failed to load plugin '{}' on track {}: {}",
+                        pdesc.name, track_id, e
+                    );
+                    let _ = self.updates.try_send(UIUpdate::Error(msg));
+
                     let pp = PluginProcessorUnified {
                         plugin_id: pdesc.plugin_id,
                         rt_instance_id: None,
