@@ -1,6 +1,6 @@
 [package]
 name = "yadaw"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 
 [[bin]]
@@ -92,7 +92,7 @@ resources = "src/experiments/res"
 icon = "@drawable/ic_launcher_monochrome"
 
 [package.metadata.android.sdk]
-version_code = 16777986
+version_code = 16777987
 min_sdk_version = 29
 target_sdk_version = 36
 # max_sdk_version = 29
