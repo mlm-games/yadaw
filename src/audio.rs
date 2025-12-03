@@ -249,108 +249,143 @@ pub fn run_audio_thread(
 
     // Audio callback
     let audio_callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        let num_frames = data.len() / channels;
-        let cb_start = Instant::now();
+        if let Err(panic) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let num_frames = data.len() / channels;
+            let cb_start = Instant::now();
 
-        data.fill(0.0);
+            data.fill(0.0);
 
-        let is_playing = engine.audio_state.playing.load(Ordering::Relaxed);
-        let should_be_recording = engine.audio_state.recording.load(Ordering::Relaxed);
-        let is_actually_recording = engine.recording_state.is_recording;
+            let is_playing = engine.audio_state.playing.load(Ordering::Relaxed);
+            let should_be_recording = engine.audio_state.recording.load(Ordering::Relaxed);
+            let is_actually_recording = engine.recording_state.is_recording;
 
-        // Drain RT commands at block start
-        while let Ok(cmd) = realtime_commands.try_recv() {
-            engine.process_realtime_command(cmd);
-        }
-
-        if let Ok(new_snapshot) = snapshot_rx.try_recv() {
-            engine.apply_new_snapshot(new_snapshot);
-        }
-
-        // Cap monitor queue
-        if engine.recording_state.monitor_queue.len() > 2 * MAX_BUFFER_SIZE {
-            let drop_n = engine.recording_state.monitor_queue.len() - 2 * MAX_BUFFER_SIZE;
-            engine.recording_state.monitor_queue.drain(0..drop_n);
-        }
-
-        if is_playing && should_be_recording && !is_actually_recording {
-            // START RECORDING
-            if engine.recording_state.recording_track.is_some() {
-                engine.recording_state.is_recording = true;
-                // Capture the precise start position in samples
-                engine.recording_state.recording_start_position = engine.audio_state.get_position();
-                engine.recording_state.accumulated_samples.clear();
-                let _ = engine
-                    .updates
-                    .try_send(UIUpdate::RecordingStateChanged(true));
+            // Drain RT commands at block start
+            while let Ok(cmd) = realtime_commands.try_recv() {
+                engine.process_realtime_command(cmd);
             }
-        } else if (!is_playing || !should_be_recording) && is_actually_recording {
-            // STOP RECORDING
-            engine.recording_state.is_recording = false;
-            engine.audio_state.recording.store(false, Ordering::Relaxed); // Sync atomic back
-            let _ = engine
-                .updates
-                .try_send(UIUpdate::RecordingStateChanged(false));
 
-            if let Some(track_id) = engine.recording_state.recording_track {
-                if !engine.recording_state.accumulated_samples.is_empty() {
-                    let converter = TimeConverter::new(
-                        engine.sample_rate as f32,
-                        engine.audio_state.bpm.load(),
-                    );
-                    let start_beat =
-                        converter.samples_to_beats(engine.recording_state.recording_start_position);
+            if let Ok(new_snapshot) = snapshot_rx.try_recv() {
+                engine.apply_new_snapshot(new_snapshot);
+            }
 
-                    // Calculate length from number of samples recorded
-                    let num_samples = engine.recording_state.accumulated_samples.len();
-                    let length_beats = converter.samples_to_beats(num_samples as f64);
+            // Cap monitor queue
+            if engine.recording_state.monitor_queue.len() > 2 * MAX_BUFFER_SIZE {
+                let drop_n = engine.recording_state.monitor_queue.len() - 2 * MAX_BUFFER_SIZE;
+                engine.recording_state.monitor_queue.drain(0..drop_n);
+            }
 
-                    let clip = AudioClip {
-                        id: 0, // Will be assigned by UI thread
-                        name: format!("Rec {}", chrono::Local::now().format("%H:%M:%S")),
-                        start_beat,
-                        length_beats,
-                        samples: engine.recording_state.accumulated_samples.clone(),
-                        sample_rate: engine.sample_rate as f32,
-                        ..Default::default()
-                    };
-
+            if is_playing && should_be_recording && !is_actually_recording {
+                // START RECORDING
+                if engine.recording_state.recording_track.is_some() {
+                    engine.recording_state.is_recording = true;
+                    // Capture the precise start position in samples
+                    engine.recording_state.recording_start_position =
+                        engine.audio_state.get_position();
+                    engine.recording_state.accumulated_samples.clear();
                     let _ = engine
                         .updates
-                        .send(UIUpdate::RecordingFinished(track_id, clip));
-                    engine.recording_state.accumulated_samples.clear();
+                        .try_send(UIUpdate::RecordingStateChanged(true));
+                }
+            } else if (!is_playing || !should_be_recording) && is_actually_recording {
+                // STOP RECORDING
+                engine.recording_state.is_recording = false;
+                engine.audio_state.recording.store(false, Ordering::Relaxed); // Sync atomic back
+                let _ = engine
+                    .updates
+                    .try_send(UIUpdate::RecordingStateChanged(false));
+
+                if let Some(track_id) = engine.recording_state.recording_track {
+                    if !engine.recording_state.accumulated_samples.is_empty() {
+                        let converter = TimeConverter::new(
+                            engine.sample_rate as f32,
+                            engine.audio_state.bpm.load(),
+                        );
+                        let start_beat = converter
+                            .samples_to_beats(engine.recording_state.recording_start_position);
+
+                        // Calculate length from number of samples recorded
+                        let num_samples = engine.recording_state.accumulated_samples.len();
+                        let length_beats = converter.samples_to_beats(num_samples as f64);
+
+                        let clip = AudioClip {
+                            id: 0, // Will be assigned by UI thread
+                            name: format!("Rec {}", chrono::Local::now().format("%H:%M:%S")),
+                            start_beat,
+                            length_beats,
+                            samples: engine.recording_state.accumulated_samples.clone(),
+                            sample_rate: engine.sample_rate as f32,
+                            ..Default::default()
+                        };
+
+                        let _ = engine
+                            .updates
+                            .send(UIUpdate::RecordingFinished(track_id, clip));
+                        engine.recording_state.accumulated_samples.clear();
+                    }
                 }
             }
-        }
 
-        // Accumulate samples ONLY if actually recording
-        if engine.recording_state.is_recording {
-            while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
-                engine.recording_state.accumulated_samples.push(sample);
-                engine.recording_state.monitor_queue.push(sample);
-            }
-        } else {
-            // If not recording, just drain the consumer into the monitor queue
-            while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
-                engine.recording_state.monitor_queue.push(sample);
-            }
-        }
-
-        if !is_playing {
-            if !engine.paused_last {
-                engine.midi_panic();
-                engine.paused_last = true;
-                for processor in engine.track_processors.values_mut() {
-                    processor.last_pattern_position = 0.0;
-                    processor.pattern_loop_count = 0;
-                    processor.notes_triggered_this_loop.clear();
-                    processor.plugin_active_notes.clear();
+            // Accumulate samples ONLY if actually recording
+            if engine.recording_state.is_recording {
+                while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
+                    engine.recording_state.accumulated_samples.push(sample);
+                    engine.recording_state.monitor_queue.push(sample);
+                }
+            } else {
+                // If not recording, just drain the consumer into the monitor queue
+                while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
+                    engine.recording_state.monitor_queue.push(sample);
                 }
             }
+
+            if !is_playing {
+                if !engine.paused_last {
+                    engine.midi_panic();
+                    engine.paused_last = true;
+                    for processor in engine.track_processors.values_mut() {
+                        processor.last_pattern_position = 0.0;
+                        processor.pattern_loop_count = 0;
+                        processor.notes_triggered_this_loop.clear();
+                        processor.plugin_active_notes.clear();
+                    }
+                }
+
+                let elapsed = cb_start.elapsed();
+                let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
+                let cpu = (elapsed.as_secs_f64() / budget) as f32;
+                let health = (1.0 - cpu).clamp(0.0, 1.0);
+                let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
+
+                let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
+                    cpu_usage: cpu,
+                    buffer_fill: health,
+                    xruns: engine.xrun_count as u32,
+                    plugin_time_ms: 0.0,
+                    latency_ms,
+                });
+                return;
+            } else {
+                engine.paused_last = false;
+            }
+
+            let mut plugin_time_ms_accum: f32 = 0.0;
+
+            let current_position = engine.audio_state.get_position();
+            let next_position = engine.process_audio(
+                data,
+                num_frames,
+                channels,
+                current_position,
+                &mut plugin_time_ms_accum,
+            );
+            engine.audio_state.set_position(next_position);
 
             let elapsed = cb_start.elapsed();
             let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
             let cpu = (elapsed.as_secs_f64() / budget) as f32;
+            if cpu > 1.0 {
+                engine.xrun_count += 1;
+            }
             let health = (1.0 - cpu).clamp(0.0, 1.0);
             let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
 
@@ -358,44 +393,26 @@ pub fn run_audio_thread(
                 cpu_usage: cpu,
                 buffer_fill: health,
                 xruns: engine.xrun_count as u32,
-                plugin_time_ms: 0.0,
+                plugin_time_ms: plugin_time_ms_accum,
                 latency_ms,
             });
-            return;
-        } else {
-            engine.paused_last = false;
+
+            let _ = engine.updates.try_send(UIUpdate::Position(next_position));
+        })) {
+            data.fill(0.0);
+
+            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                format!("Audio callback panicked: {}", s)
+            } else if let Some(s) = panic.downcast_ref::<String>() {
+                format!("Audio callback panicked: {}", s)
+            } else {
+                "Audio callback panicked with unknown error".to_string()
+            };
+
+            let _ = updates.try_send(UIUpdate::Error(msg));
+            // stop playback to prevent repeated panics
+            engine.audio_state.playing.store(false, Ordering::Relaxed);
         }
-
-        let mut plugin_time_ms_accum: f32 = 0.0;
-
-        let current_position = engine.audio_state.get_position();
-        let next_position = engine.process_audio(
-            data,
-            num_frames,
-            channels,
-            current_position,
-            &mut plugin_time_ms_accum,
-        );
-        engine.audio_state.set_position(next_position);
-
-        let elapsed = cb_start.elapsed();
-        let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
-        let cpu = (elapsed.as_secs_f64() / budget) as f32;
-        if cpu > 1.0 {
-            engine.xrun_count += 1;
-        }
-        let health = (1.0 - cpu).clamp(0.0, 1.0);
-        let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
-
-        let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
-            cpu_usage: cpu,
-            buffer_fill: health,
-            xruns: engine.xrun_count as u32,
-            plugin_time_ms: plugin_time_ms_accum,
-            latency_ms,
-        });
-
-        let _ = engine.updates.try_send(UIUpdate::Position(next_position));
     };
 
     let stream = device
@@ -678,7 +695,11 @@ impl AudioEngine {
                             params: params_for_ui,
                         });
                     }
-                    Err(e) => eprintln!("Plugin instantiate failed {}: {}", uri, e),
+                    Err(e) => {
+                        let msg = format!("Failed to instantiate plugin {}: {}", uri, e);
+                        eprintln!("{}", msg);
+                        let _ = self.updates.try_send(UIUpdate::Error(msg));
+                    }
                 }
             }
 
@@ -1581,15 +1602,16 @@ impl AudioEngine {
             *plugin_time_ms_accum += t0.elapsed().as_secs_f32() * 1000.0;
 
             if panicked {
-                // Mark the plugin bypassed
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     if let Some(ppu) = proc.plugins.get_mut(&plugin_id) {
-                        log::error!(
-                            "Plugin '{}' (URI: {}) panicked during processing. Bypassing.",
-                            ppu.uri,
-                            uri
+                        let msg = format!(
+                            "Plugin '{}' (URI: {}) panicked during processing and has been bypassed.",
+                            ppu.uri, uri
                         );
+                        log::error!("{}", &msg);
                         ppu.bypass = true;
+
+                        let _ = self.updates.try_send(crate::messages::UIUpdate::Error(msg));
                     }
                 }
                 // Do not feed bad output forward; fall back to silence in out_l/out_r (already zeroed)
