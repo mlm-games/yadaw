@@ -1,18 +1,13 @@
 #[cfg(feature = "clap-host")]
 mod clap_impl {
     use anyhow::{Result, anyhow};
-
+    use clack_host::utils::Cookie;
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
-    // Core clack-host types
+    use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
     use clack_host::prelude::*;
     use clack_host::process::StartedPluginAudioProcessor;
-
-    // Event I/O types
-    use clack_host::events::Pckn;
-    use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
-    use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
-    use clack_host::utils::{ClapId, Cookie};
 
     use crate::model::plugin_api::{
         BackendKind, HostConfig, MidiEvent, ParamKey, PluginBackend, PluginInstance as UniInstance,
@@ -34,7 +29,6 @@ mod clap_impl {
         type AudioProcessor<'a> = ();
     }
 
-    // ---------------- Backend ----------------
     pub struct ClapHostBackend {
         cfg: HostConfig,
         host_info: HostInfo,
@@ -48,12 +42,8 @@ mod clap_impl {
 
         fn scan_dirs() -> Vec<PathBuf> {
             let mut v = Vec::new();
-
-            // App-local directory (first)
             let local = crate::paths::plugins_dir();
             v.push(local);
-
-            // User and system locations
             if let Ok(home) = std::env::var("HOME") {
                 v.push(PathBuf::from(format!("{home}/.clap")));
             }
@@ -131,19 +121,18 @@ mod clap_impl {
             Ok((path, id.to_string()))
         }
 
-        fn fetch_params(instance: &mut PluginInstance<MyHost>) -> Vec<UnifiedParamInfo> {
-            // Get the params extension from the shared handle
+        fn fetch_params_with_values(
+            instance: &mut PluginInstance<MyHost>,
+        ) -> (Vec<UnifiedParamInfo>, HashMap<u32, f32>) {
             let Some(params_ext) = instance.plugin_shared_handle().get_extension::<ParamsExt>()
             else {
-                return Vec::new();
+                return (Vec::new(), HashMap::new());
             };
 
-            // Get a main-thread plugin handle to call into the plugin
             let mut plugin = instance.plugin_handle();
-
-            // Count parameters
             let count = params_ext.count(&mut plugin);
-            let mut out = Vec::with_capacity(count as usize);
+            let mut param_infos = Vec::with_capacity(count as usize);
+            let mut param_values = HashMap::with_capacity(count as usize);
 
             for i in 0..count {
                 let mut buf = ParamInfoBuffer::new();
@@ -158,21 +147,39 @@ mod clap_impl {
 
                     let min = info.min_value as f32;
                     let max = info.max_value as f32;
-                    let def = info.default_value as f32;
+                    let default = info.default_value as f32;
                     let stepped = info.flags.contains(ParamInfoFlags::IS_STEPPED);
 
-                    out.push(UnifiedParamInfo {
+                    // Query the actual current value from the plugin
+                    let current_value = params_ext
+                        .get_value(&mut plugin, info.id)
+                        .map(|v| v as f32)
+                        .unwrap_or(default);
+
+                    log::debug!(
+                        "CLAP param {}: name={}, min={}, max={}, default={}, current={}",
+                        id,
+                        name,
+                        min,
+                        max,
+                        default,
+                        current_value
+                    );
+
+                    param_values.insert(id, current_value);
+
+                    param_infos.push(UnifiedParamInfo {
                         key: ParamKey::Clap(id),
                         name,
                         min,
                         max,
-                        default: def,
+                        default,
                         stepped,
                         enum_labels: None,
                     });
                 }
             }
-            out
+            (param_infos, param_values)
         }
     }
 
@@ -205,8 +212,7 @@ mod clap_impl {
 
         fn instantiate(&self, uri: &str) -> Result<Box<dyn UniInstance>> {
             let (lib, plugin_id) = Self::parse_uri(uri)?;
-
-            let result = std::panic::catch_unwind(|| unsafe {
+            unsafe {
                 let bundle = PluginBundle::load(&lib)
                     .map_err(|e| anyhow!("CLAP load bundle failed: {e:?}"))?;
                 let factory = bundle
@@ -230,31 +236,20 @@ mod clap_impl {
                 )
                 .map_err(|e| anyhow!("CLAP instantiate failed: {e:?}"))?;
 
-                let params = Self::fetch_params(&mut inst);
+                let (params, param_values) = Self::fetch_params_with_values(&mut inst);
 
                 Ok(Box::new(ClapInstance {
                     instance: inst,
                     started: None,
                     params,
+                    param_values,
                     sample_rate: self.cfg.sample_rate,
                     max_block: self.cfg.max_block,
                     input_copies: vec![vec![0.0; self.cfg.max_block]; 2],
                     note_ons: Vec::with_capacity(128),
                     note_offs: Vec::with_capacity(128),
                     pending_param_changes: Vec::new(),
-                }) as Box<dyn UniInstance>)
-            });
-
-            match result {
-                Ok(ok) => ok,
-                Err(panic) => {
-                    // Convert panic into a normal error so caller can mark plugin offline
-                    Err(anyhow!(
-                        "CLAP plugin {} panicked during instantiate: {:?}",
-                        uri,
-                        panic
-                    ))
-                }
+                }))
             }
         }
     }
@@ -263,23 +258,21 @@ mod clap_impl {
         instance: PluginInstance<MyHost>,
         started: Option<StartedPluginAudioProcessor<MyHost>>,
         params: Vec<UnifiedParamInfo>,
+        param_values: HashMap<u32, f32>,
         sample_rate: f64,
         max_block: usize,
-        // Unfortunately we need to copy due to InputChannel requiring &mut [f32]
         input_copies: Vec<Vec<f32>>,
-        // Pre-allocated event buffers (reused across calls)
         note_ons: Vec<NoteOnEvent>,
         note_offs: Vec<NoteOffEvent>,
-        // Pending parameter changes
         pending_param_changes: Vec<(u32, f64)>,
     }
 
     impl ClapInstance {
-        fn ensure_started(&mut self, frames: usize) -> Result<()> {
+        fn ensure_started(&mut self) -> Result<()> {
             if self.started.is_none() {
                 let cfg = PluginAudioConfiguration {
                     sample_rate: self.sample_rate,
-                    min_frames_count: 1, // Allow variable buffer sizes
+                    min_frames_count: 1,
                     max_frames_count: self.max_block as u32,
                 };
                 let activated = self
@@ -304,13 +297,11 @@ mod clap_impl {
             events: &[MidiEvent],
         ) -> Result<()> {
             let frames = ctx.frames;
-            self.ensure_started(frames)?;
+            self.ensure_started()?;
 
-            // Clear and build event lists
             self.note_ons.clear();
             self.note_offs.clear();
 
-            // Convert incoming MIDI to typed events
             for e in events {
                 let time = (e.time_frames.clamp(0, frames as i64) as u32).min(frames as u32 - 1);
                 let port = 0u16;
@@ -373,7 +364,6 @@ mod clap_impl {
 
             let mut combined_buffer = EventBuffer::new();
 
-            // Add parameter changes first
             for (id, value) in self.pending_param_changes.drain(..) {
                 combined_buffer.push(&ParamValueEvent::new(
                     0,
@@ -384,12 +374,10 @@ mod clap_impl {
                 ));
             }
 
-            // Add note-offs
             for event in &self.note_offs {
                 combined_buffer.push(event);
             }
 
-            // Add note-ons
             for event in &self.note_ons {
                 combined_buffer.push(event);
             }
@@ -410,12 +398,16 @@ mod clap_impl {
 
         fn set_param(&mut self, key: &ParamKey, value: f32) {
             if let ParamKey::Clap(id) = key {
+                self.param_values.insert(*id, value);
                 self.pending_param_changes.push((*id, value as f64));
             }
         }
 
-        fn get_param(&self, _key: &ParamKey) -> Option<f32> {
-            None
+        fn get_param(&self, key: &ParamKey) -> Option<f32> {
+            match key {
+                ParamKey::Clap(id) => self.param_values.get(id).copied(),
+                _ => None,
+            }
         }
 
         fn params(&self) -> &[UnifiedParamInfo] {

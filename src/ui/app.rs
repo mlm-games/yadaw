@@ -1137,15 +1137,23 @@ impl YadawApp {
                 plugin_idx,
                 params,
             } => {
-                self.clap_param_meta.insert((track_id, plugin_idx), params);
-            }
-            UIUpdate::ReservedNoteIds(new_ids) => {
-                // Called e.g. after DuplicateNotesWithOffset
-                self.piano_roll_view.piano_roll.selected_note_ids = new_ids;
-                self.piano_roll_view
-                    .piano_roll
-                    .temp_selected_indices
-                    .clear();
+                // Store meta info (name, min, max, default) for UI sliders
+                let meta: Vec<(String, f32, f32, f32)> = params
+                    .iter()
+                    .map(|(name, min, max, def, _current)| (name.clone(), *min, *max, *def))
+                    .collect();
+                self.clap_param_meta.insert((track_id, plugin_idx), meta);
+
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if let Some(track) = state.tracks.get_mut(&track_id) {
+                        if let Some(plugin) = track.plugin_chain.get_mut(plugin_idx) {
+                            for (name, _min, _max, _default, current) in &params {
+                                plugin.params.insert(name.clone(), *current);
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }

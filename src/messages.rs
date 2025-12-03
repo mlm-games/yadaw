@@ -292,7 +292,7 @@ pub enum UIUpdate {
     PluginParamsDiscovered {
         track_id: u64,
         plugin_idx: usize,
-        params: Vec<(String, f32, f32, f32)>,
+        params: Vec<(String, f32, f32, f32, f32)>, // (name, min, max, default, (current, for clap))
     },
     NotesCutToClipboard(Vec<MidiNote>),
     ExportStateUpdate(ExportState),

@@ -655,7 +655,16 @@ impl AudioEngine {
                             name_to_key.insert(p.name.clone(), p.key.clone());
                         }
 
-                        // --- REPLACEMENT ---
+                        // Query params WITH current values before moving inst
+                        let params_for_ui: Vec<(String, f32, f32, f32, f32)> = inst
+                            .params()
+                            .iter()
+                            .map(|p| {
+                                let current = inst.get_param(&p.key).unwrap_or(p.default);
+                                (p.name.clone(), p.min, p.max, p.default, current)
+                            })
+                            .collect();
+
                         let handle = generate_plugin_handle();
                         self.plugin_instances
                             .insert(handle, PluginCell(Arc::new(parking_lot::Mutex::new(inst))));
@@ -677,17 +686,6 @@ impl AudioEngine {
                             .iter()
                             .position(|&id| id == plugin_id)
                             .unwrap_or(proc.plugin_order.len().saturating_sub(1));
-
-                        let params_for_ui: Vec<(String, f32, f32, f32)> =
-                            if let Some(cell) = self.plugin_instances.get(&handle) {
-                                let g = cell.lock();
-                                g.params()
-                                    .iter()
-                                    .map(|p| (p.name.clone(), p.min, p.max, p.default))
-                                    .collect()
-                            } else {
-                                Vec::new()
-                            };
 
                         let _ = self.updates.try_send(UIUpdate::PluginParamsDiscovered {
                             track_id,
@@ -1331,10 +1329,13 @@ impl AudioEngine {
                     }
 
                     // Send metadata for UI
-                    let params_for_ui: Vec<(String, f32, f32, f32)> = inst
+                    let params_for_ui: Vec<(String, f32, f32, f32, f32)> = inst
                         .params()
                         .iter()
-                        .map(|p| (p.name.clone(), p.min, p.max, p.default))
+                        .map(|p| {
+                            let current = inst.get_param(&p.key).unwrap_or(p.default);
+                            (p.name.clone(), p.min, p.max, p.default, current)
+                        })
                         .collect();
 
                     let _ = self.updates.try_send(UIUpdate::PluginParamsDiscovered {
