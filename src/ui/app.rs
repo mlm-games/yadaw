@@ -15,7 +15,7 @@ use crate::paths::{
     config_path, config_root_dir, current_theme_path, custom_themes_path, shortcuts_path,
 };
 use crate::performance::{PerformanceMetrics, PerformanceMonitor};
-use crate::project::{AppState, AppStateSnapshot};
+use crate::project::{AppState, AppStateSnapshot, ClipLocation};
 use crate::project_manager::ProjectManager;
 
 use crate::track_manager::{TrackManager, UITrackType};
@@ -856,21 +856,8 @@ impl YadawApp {
 
     // MIDI operations
     pub fn quantize_selected_notes(&mut self, strength: f32) {
-        self.push_undo();
-
-        let mut state = self.state.lock().unwrap();
-        if let Some(track) = state.tracks.get_mut(&self.selected_track)
-            && let Some(clip) = track
-                .midi_clips
-                .iter_mut()
-                .find(|p| p.id == self.selected_pattern)
-        {
-            EditProcessor::quantize_notes(
-                &mut clip.notes,
-                crate::constants::DEFAULT_GRID_SNAP as f64,
-                strength,
-            );
-        }
+        let grid = self.piano_roll_view.piano_roll.grid_snap;
+        self.quantize_selected_notes_with_params(strength, grid, 0.0);
     }
 
     pub fn transpose_selected_notes(&mut self, semitones: i32) {
@@ -1430,24 +1417,54 @@ impl YadawApp {
             None => return,
         };
 
-        let mut state = self.state.lock().unwrap();
-        if let Some((track, loc)) = state.find_clip_mut(clip_id) {
-            if let crate::project::ClipLocation::Midi(idx) = loc {
-                if let Some(clip) = track.midi_clips.get_mut(idx) {
-                    let sel_idx = self.piano_roll_view.piano_roll.selected_indices(clip);
+        let selected_ids = self.piano_roll_view.piano_roll.selected_note_ids.clone();
+        if selected_ids.is_empty() {
+            return;
+        }
 
-                    for &idx in &sel_idx {
-                        if let Some(note) = clip.notes.get_mut(idx) {
-                            let new_vel = (note.velocity as i16 + delta as i16).clamp(1, 127);
-                            note.velocity = new_vel as u8;
-                        }
+        let pattern_notes: Vec<MidiNote> = {
+            let state = self.state.lock().unwrap();
+            match state.find_clip(clip_id) {
+                Some((track, ClipLocation::Midi(idx))) => {
+                    let clip = &track.midi_clips[idx];
+                    if let Some(pid) = clip.pattern_id {
+                        state
+                            .patterns
+                            .get(&pid)
+                            .map(|p| p.notes.clone())
+                            .unwrap_or_else(|| clip.notes.clone())
+                    } else {
+                        clip.notes.clone()
                     }
                 }
+                _ => Vec::new(),
+            }
+        };
+
+        if pattern_notes.is_empty() {
+            return;
+        }
+
+        let mut updated: Vec<MidiNote> = Vec::new();
+        for n in &pattern_notes {
+            if selected_ids.contains(&n.id) {
+                let mut nn = *n;
+                let new_vel = (nn.velocity as i16 + delta as i16).clamp(1, 127) as u8;
+                nn.velocity = new_vel;
+                updated.push(nn);
             }
         }
-        drop(state);
 
-        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+        if updated.is_empty() {
+            return;
+        }
+
+        let _ = self
+            .command_tx
+            .send(crate::messages::AudioCommand::UpdateNotesById {
+                clip_id,
+                notes: updated,
+            });
     }
 
     pub fn switch_to_piano_roll(&mut self) {

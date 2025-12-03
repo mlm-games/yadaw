@@ -41,9 +41,16 @@ pub fn is_initialized() -> bool {
 /// Useful when multiple subsystems race to ensure initialization.
 pub fn ensure(sample_rate: f64, max_block_size: usize) -> Result<()> {
     let mut guard = HOST.write();
-    if guard.is_none() {
+
+    let need_recreate = match guard.as_ref() {
+        None => true,
+        Some(host) => host.sample_rate() != sample_rate || host.max_block_size() != max_block_size,
+    };
+
+    if need_recreate {
         *guard = Some(LV2PluginHost::new(sample_rate, max_block_size)?);
     }
+
     Ok(())
 }
 

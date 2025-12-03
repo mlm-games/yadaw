@@ -955,26 +955,33 @@ impl TimelineView {
 
             // Slip content (Alt+drag)
             if alt && !hover_left && !hover_right {
-                let (start_offset, content_len) = {
+                let (start_offset, content_len, is_midi) = {
                     let state = app.state.lock().unwrap();
                     if let Some((track, loc)) = state.find_clip(clip_id) {
                         if let ClipLocation::Midi(idx) = loc {
                             let c = &track.midi_clips[idx];
-                            (c.content_offset_beats, c.content_len_beats.max(0.000001))
+                            (
+                                c.content_offset_beats,
+                                c.content_len_beats.max(0.000001),
+                                true,
+                            )
                         } else {
-                            (0.0, 1.0)
+                            (0.0, 1.0, false)
                         }
                     } else {
-                        (0.0, 1.0)
+                        (0.0, 1.0, false)
                     }
                 };
 
-                self.timeline_interaction = Some(TimelineInteraction::SlipContent {
-                    clip_id,
-                    start_offset: start_offset.rem_euclid(content_len),
-                    start_mouse_beat: start_beat_under_mouse,
-                });
-                return;
+                if is_midi {
+                    self.timeline_interaction = Some(TimelineInteraction::SlipContent {
+                        clip_id,
+                        start_offset: start_offset.rem_euclid(content_len),
+                        start_mouse_beat: start_beat_under_mouse,
+                    });
+                    return;
+                }
+                // only for midi
             }
 
             // Resize edges

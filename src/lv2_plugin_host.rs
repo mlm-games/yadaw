@@ -1,9 +1,7 @@
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use livi::event::LV2AtomSequence;
-use livi::{
-    Features, FeaturesBuilder, Instance, PortCounts, PortType, World,
-};
+use livi::{Features, FeaturesBuilder, Instance, PortCounts, PortType, World};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -141,6 +139,14 @@ impl LV2PluginHost {
             silent_audio: vec![0.0; self.max_block_size],
             scratch_audio_out: Vec::new(), // will be sized lazily but not allocated per block
         })
+    }
+
+    pub fn sample_rate(&self) -> f64 {
+        self.sample_rate
+    }
+
+    pub fn max_block_size(&self) -> usize {
+        self.max_block_size
     }
 }
 

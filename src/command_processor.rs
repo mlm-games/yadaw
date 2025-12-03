@@ -628,15 +628,29 @@ fn process_command(
                 let mut state = app_state.lock().unwrap();
                 let new_clip_id = idgen::next();
                 let new_pid = idgen::next();
-                let base_notes = if let Some(pid) = clip.pattern_id {
-                    state
-                        .patterns
-                        .get(&pid)
-                        .map(|p| p.notes.clone())
-                        .unwrap_or_else(|| clip.notes.clone())
-                } else {
-                    clip.notes.clone()
-                };
+
+                // Resolve base notes from pattern or clip, then assign fresh IDs.
+                let mut base_notes: Vec<crate::model::clip::MidiNote> =
+                    if let Some(pid) = clip.pattern_id {
+                        state
+                            .patterns
+                            .get(&pid)
+                            .map(|p| p.notes.clone())
+                            .unwrap_or_else(|| clip.notes.clone())
+                    } else {
+                        clip.notes.clone()
+                    };
+
+                for n in &mut base_notes {
+                    n.id = idgen::next();
+                    if !n.duration.is_finite() || n.duration <= 0.0 {
+                        n.duration = 1e-6;
+                    }
+                    if !n.start.is_finite() || n.start < 0.0 {
+                        n.start = 0.0;
+                    }
+                }
+
                 state.patterns.insert(
                     new_pid,
                     MidiPattern {
@@ -644,10 +658,9 @@ fn process_command(
                         notes: base_notes,
                     },
                 );
+
                 clip.id = new_clip_id;
-                for n in &mut clip.notes {
-                    n.id = idgen::next();
-                }
+                clip.notes.clear(); // pattern is the source of truth
                 clip.name = format!("{} (copy)", clip.name);
                 clip.start_beat += clip.length_beats;
                 clip.pattern_id = Some(new_pid);
@@ -665,6 +678,8 @@ fn process_command(
                         );
                     }
                 }
+
+                state.ensure_ids();
                 send_graph_snapshot(&state, snapshot_tx);
             }
         }
@@ -879,15 +894,27 @@ fn process_command(
                     new_clip.id = idgen::next();
                     new_clip.start_beat = new_start;
 
-                    let base_notes = if let Some(pid) = original.pattern_id {
-                        state
-                            .patterns
-                            .get(&pid)
-                            .map(|p| p.notes.clone())
-                            .unwrap_or_else(|| original.notes.clone())
-                    } else {
-                        original.notes.clone()
-                    };
+                    let mut base_notes: Vec<crate::model::clip::MidiNote> =
+                        if let Some(pid) = original.pattern_id {
+                            state
+                                .patterns
+                                .get(&pid)
+                                .map(|p| p.notes.clone())
+                                .unwrap_or_else(|| original.notes.clone())
+                        } else {
+                            original.notes.clone()
+                        };
+
+                    for n in &mut base_notes {
+                        n.id = idgen::next();
+                        if !n.duration.is_finite() || n.duration <= 0.0 {
+                            n.duration = 1e-6;
+                        }
+                        if !n.start.is_finite() || n.start < 0.0 {
+                            n.start = 0.0;
+                        }
+                    }
+
                     let new_pid = idgen::next();
                     state.patterns.insert(
                         new_pid,
@@ -897,6 +924,7 @@ fn process_command(
                         },
                     );
                     new_clip.pattern_id = Some(new_pid);
+                    new_clip.notes.clear();
 
                     if let Some(dest_track) = state.tracks.get_mut(&dest_track_id) {
                         dest_track.midi_clips.push(new_clip.clone());
@@ -912,6 +940,7 @@ fn process_command(
                     let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
+            state.ensure_ids();
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::DuplicateAndMoveAudioClip {
@@ -1000,39 +1029,46 @@ fn process_command(
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::MakeClipAlias { clip_id } => {
-            let needs_pid = {
-                let state = app_state.lock().unwrap();
-                state
-                    .find_clip(clip_id)
-                    .map(|(track, loc)| {
-                        if let ClipLocation::Midi(idx) = loc {
-                            track
-                                .midi_clips
-                                .get(idx)
-                                .map(|c| c.pattern_id.is_none())
-                                .unwrap_or(false)
+            use crate::model::clip::MidiPattern;
+
+            let mut state = app_state.lock().unwrap();
+
+            // Only alias MIDI clips that don't yet have a pattern, and still have local notes.
+            let (needs_pid, notes_to_move) = match state.find_clip_mut(clip_id) {
+                Some((track, ClipLocation::Midi(idx))) => {
+                    if let Some(clip) = track.midi_clips.get_mut(idx) {
+                        if clip.pattern_id.is_none() && !clip.notes.is_empty() {
+                            let moved = std::mem::take(&mut clip.notes);
+                            (true, Some(moved))
                         } else {
-                            false
+                            (false, None)
                         }
-                    })
-                    .unwrap_or(false)
+                    } else {
+                        (false, None)
+                    }
+                }
+                _ => (false, None),
             };
 
             if !needs_pid {
                 return;
             }
 
-            let mut state = app_state.lock().unwrap();
-            let new_id = idgen::next();
-            if let Some((track, loc)) = state.find_clip_mut(clip_id) {
-                if let ClipLocation::Midi(idx) = loc {
+            let new_pid = idgen::next();
+            if let Some(notes) = notes_to_move {
+                state
+                    .patterns
+                    .insert(new_pid, MidiPattern { id: new_pid, notes });
+
+                if let Some((track, ClipLocation::Midi(idx))) = state.find_clip_mut(clip_id) {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
-                        if clip.pattern_id.is_none() {
-                            clip.pattern_id = Some(new_id);
-                        }
+                        clip.pattern_id = Some(new_pid);
                     }
                 }
             }
+
+            // Normalize IDs and rebuild indices so future edits use the pattern.
+            state.ensure_ids();
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::MakeClipUnique { clip_id } => {
@@ -1097,20 +1133,34 @@ fn process_command(
                 Some(pid) => pid,
                 None => {
                     let new_pid = idgen::next();
-                    state.patterns.insert(
-                        new_pid,
-                        MidiPattern {
-                            id: new_pid,
-                            notes: src_clip.notes.clone(),
-                        },
-                    );
+
+                    // Normalize notes from src_clip into a new pattern
+                    let mut notes = src_clip.notes.clone();
+                    for n in &mut notes {
+                        if n.id == 0 {
+                            n.id = idgen::next();
+                        }
+                        if !n.duration.is_finite() || n.duration <= 0.0 {
+                            n.duration = 1e-6;
+                        }
+                        if !n.start.is_finite() || n.start < 0.0 {
+                            n.start = 0.0;
+                        }
+                    }
+
+                    state
+                        .patterns
+                        .insert(new_pid, MidiPattern { id: new_pid, notes });
+
                     if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                         if let ClipLocation::Midi(idx) = loc {
                             if let Some(clip) = track.midi_clips.get_mut(idx) {
                                 clip.pattern_id = Some(new_pid);
+                                clip.notes.clear();
                             }
                         }
                     }
+
                     new_pid
                 }
             };
@@ -1120,12 +1170,7 @@ fn process_command(
             dup.start_beat += dup.length_beats;
             dup.pattern_id = Some(final_pid);
             dup.name = format!("{} (alias)", dup.name);
-
-            for n in &mut dup.notes {
-                if n.id == 0 {
-                    n.id = idgen::next();
-                }
-            }
+            dup.notes.clear(); // pattern is the source of truth
 
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.midi_clips.push(dup.clone());
@@ -1138,6 +1183,7 @@ fn process_command(
                 );
             }
 
+            state.ensure_ids();
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::SetClipContentOffset {
@@ -1587,15 +1633,10 @@ fn process_command(
             }
 
             if let Some(t) = st.tracks.get_mut(&track_id) {
-                t.midi_clips.push(clip.clone());
-                st.clips_by_id.insert(
-                    clip.id,
-                    ClipRef {
-                        track_id,
-                        is_midi: true,
-                    },
-                );
+                t.midi_clips.push(clip);
             }
+
+            st.ensure_ids();
 
             send_graph_snapshot(&st, snapshot_tx);
         }

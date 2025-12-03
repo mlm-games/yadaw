@@ -338,13 +338,7 @@ impl PianoRollView {
 
                     ui.label("MIDI Clip:");
 
-                    let (
-                        clip_names,
-                        selected_text,
-                        create_clip_data,
-                        duplicate_clip_data,
-                        can_delete,
-                    ) = {
+                    let (clip_names, selected_text, create_clip_data, can_delete) = {
                         let state = app.state.lock().unwrap();
                         if let Some(track) = state.tracks.get(&app.selected_track) {
                             let clip_names: Vec<String> =
@@ -364,35 +358,11 @@ impl PianoRollView {
                             let create_clip_data =
                                 Some(state.position_to_beats(app.audio_state.get_position()));
 
-                            let duplicate_clip_data = if let Some(clip_id) = self.selected_clip {
-                                track
-                                    .midi_clips
-                                    .iter()
-                                    .find(|c| c.id == clip_id)
-                                    .map(|clip| MidiClip {
-                                        name: format!("{} (copy)", clip.name),
-                                        start_beat: clip.start_beat + clip.length_beats,
-                                        length_beats: clip.length_beats,
-                                        content_len_beats: clip.content_len_beats,
-                                        notes: clip.notes.clone(),
-                                        color: clip.color,
-                                        ..Default::default()
-                                    })
-                            } else {
-                                None
-                            };
-
                             let can_delete = self.selected_clip.is_some();
 
-                            (
-                                clip_names,
-                                selected_text,
-                                create_clip_data,
-                                duplicate_clip_data,
-                                can_delete,
-                            )
+                            (clip_names, selected_text, create_clip_data, can_delete)
                         } else {
-                            (vec![], "No Track".to_string(), None, None, false)
+                            (vec![], "No Track".to_string(), None, false)
                         }
                     };
 
@@ -471,12 +441,11 @@ impl PianoRollView {
 
                     // Duplicate clip
                     if ui.button("⎘").on_hover_text("Duplicate Clip").clicked()
-                        && let Some(new_clip) = duplicate_clip_data
+                        && let Some(clip_id) = self.selected_clip
                     {
-                        let _ = app.command_tx.send(AudioCommand::CreateMidiClipWithData {
-                            track_id: app.selected_track,
-                            clip: new_clip,
-                        });
+                        let _ = app
+                            .command_tx
+                            .send(AudioCommand::DuplicateMidiClip { clip_id });
                     }
 
                     // Delete clip
@@ -772,36 +741,49 @@ impl PianoRollView {
         let clip_id = self.selected_clip?;
 
         let state_guard = state.lock().unwrap();
-        let clip = state_guard
-            .tracks
-            .get(&selected_track)?
-            .midi_clips
-            .iter()
-            .find(|c| c.id == clip_id)?;
+        let track = state_guard.tracks.get(&selected_track)?;
+        let clip = track.midi_clips.iter().find(|c| c.id == clip_id)?;
 
-        let sel_idx = self.piano_roll.selected_indices(clip);
-        if sel_idx.is_empty() {
+        // Prefer pattern notes if this is an alias; fall back to clip-local notes.
+        let base_notes: &[MidiNote] = if let Some(pid) = clip.pattern_id {
+            state_guard
+                .patterns
+                .get(&pid)
+                .map(|p| p.notes.as_slice())
+                .unwrap_or_else(|| clip.notes.as_slice())
+        } else {
+            clip.notes.as_slice()
+        };
+
+        if base_notes.is_empty() {
             return None;
         }
 
-        let mut min_start = f64::INFINITY;
-        for &idx in &sel_idx {
-            if let Some(n) = clip.notes.get(idx) {
-                min_start = min_start.min(n.start);
-            }
+        // Use the selected note IDs from the piano roll; this is stable for pattern clips.
+        if self.piano_roll.selected_note_ids.is_empty() {
+            return None;
         }
 
-        let clipboard: Vec<MidiNote> = sel_idx
+        let mut selected: Vec<MidiNote> = base_notes
             .iter()
-            .filter_map(|&idx| clip.notes.get(idx))
-            .map(|n| {
-                let mut nn = *n;
-                nn.start = (nn.start - min_start).max(0.0);
-                nn
-            })
+            .filter(|n| n.id != 0 && self.piano_roll.selected_note_ids.contains(&n.id))
+            .cloned()
             .collect();
 
-        Some(clipboard)
+        if selected.is_empty() {
+            return None;
+        }
+
+        let min_start = selected
+            .iter()
+            .map(|n| n.start)
+            .fold(f64::INFINITY, f64::min);
+
+        for n in &mut selected {
+            n.start = (n.start - min_start).max(0.0);
+        }
+
+        Some(selected)
     }
 
     pub fn cut_selected_notes(&mut self, command_tx: &Sender<AudioCommand>) {
@@ -893,7 +875,18 @@ impl PianoRollView {
             self.piano_roll.selected_note_ids.clear();
             self.piano_roll.temp_selected_indices.clear();
 
-            for (i, note) in clip.notes.iter().enumerate() {
+            // pattern notes for aliases, then fallback
+            let source_notes: &[MidiNote] = if let Some(pid) = clip.pattern_id {
+                state_guard
+                    .patterns
+                    .get(&pid)
+                    .map(|p| p.notes.as_slice())
+                    .unwrap_or_else(|| clip.notes.as_slice())
+            } else {
+                clip.notes.as_slice()
+            };
+
+            for (i, note) in source_notes.iter().enumerate() {
                 if note.id != 0 {
                     self.piano_roll.selected_note_ids.push(note.id);
                 } else {
