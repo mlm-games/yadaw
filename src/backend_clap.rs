@@ -205,7 +205,8 @@ mod clap_impl {
 
         fn instantiate(&self, uri: &str) -> Result<Box<dyn UniInstance>> {
             let (lib, plugin_id) = Self::parse_uri(uri)?;
-            unsafe {
+
+            let result = std::panic::catch_unwind(|| unsafe {
                 let bundle = PluginBundle::load(&lib)
                     .map_err(|e| anyhow!("CLAP load bundle failed: {e:?}"))?;
                 let factory = bundle
@@ -241,7 +242,19 @@ mod clap_impl {
                     note_ons: Vec::with_capacity(128),
                     note_offs: Vec::with_capacity(128),
                     pending_param_changes: Vec::new(),
-                }))
+                }) as Box<dyn UniInstance>)
+            });
+
+            match result {
+                Ok(ok) => ok,
+                Err(panic) => {
+                    // Convert panic into a normal error so caller can mark plugin offline
+                    Err(anyhow!(
+                        "CLAP plugin {} panicked during instantiate: {:?}",
+                        uri,
+                        panic
+                    ))
+                }
             }
         }
     }

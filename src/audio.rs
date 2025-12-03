@@ -1307,38 +1307,40 @@ impl AudioEngine {
         for pdesc in chain {
             match self.host_facade.instantiate(pdesc.backend, &pdesc.uri) {
                 Ok(mut inst) => {
-                    // apply saved params
-                    for kv in pdesc.params.iter() {
-                        let name = kv.key().clone();
-                        let val = *kv.value();
-                        let key = match pdesc.backend {
-                            BackendKind::Lv2 => ParamKey::Lv2(name.clone()),
-                            BackendKind::Clap => {
-                                // We will remap by name below once params() are available
-                                // Use a placeholder here; then immediately set by actual key when known.
-                                ParamKey::Clap(0)
-                            }
-                        };
-                        inst.set_param(&key, val);
-                    }
-
-                    // insert into store and capture param map
-                    let handle = generate_plugin_handle();
+                    // Build param name → key map once
                     let param_map: std::collections::HashMap<String, ParamKey> = inst
                         .params()
                         .iter()
                         .map(|p| (p.name.clone(), p.key.clone()))
                         .collect();
 
-                    // Re-apply saved params with true keys for CLAP (where we used placeholder)
+                    // Apply saved params
                     for kv in pdesc.params.iter() {
                         let name = kv.key().clone();
                         let val = *kv.value();
-                        if let Some(actual_key) = param_map.get(&name) {
-                            inst.set_param(actual_key, val);
+
+                        match pdesc.backend {
+                            BackendKind::Lv2 => {
+                                // LV2 params are keyed by symbol
+                                let key = ParamKey::Lv2(name.clone());
+                                inst.set_param(&key, val);
+                            }
+                            BackendKind::Clap => {
+                                // Only set if we can resolve name -> ClapId
+                                if let Some(actual_key) = param_map.get(&name) {
+                                    inst.set_param(actual_key, val);
+                                } else {
+                                    log::warn!(
+                                        "CLAP param '{}' not found for plugin {} when rebuilding chain",
+                                        name,
+                                        pdesc.uri
+                                    );
+                                }
+                            }
                         }
                     }
 
+                    let handle = generate_plugin_handle();
                     self.plugin_instances.insert(
                         handle,
                         PluginCell(Arc::new(parking_lot::Mutex::new(Box::from(inst)))),
