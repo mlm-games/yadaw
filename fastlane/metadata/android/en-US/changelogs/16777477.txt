@@ -1,3 +1,0 @@
-- Fix tag_name assignment in test-release.yml
-- use proper tag name
-- Simplify description in test-release workflow

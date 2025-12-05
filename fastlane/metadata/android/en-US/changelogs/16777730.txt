@@ -1,5 +1,0 @@
-- cargo fix + build on correct commit for android
-- update deprecated fns, and scan Documents for plugins in android
-- clap plugin params show up now!
-- Fix bpm alloc
-- enable ruler placement with click

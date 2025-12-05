@@ -1,6 +1,0 @@
-- update notes for android
-- android plugins do work! (tested vitsel-clap)
-- Rename test-release.yml to release.yml
-- Update AUR upload workflow for versioning and sources
-- (for formatting)Add another repo's AUR publishing workflow for yadaw-bin
-- Add GitHub Actions workflow for Chocolatey publishing (for later?)

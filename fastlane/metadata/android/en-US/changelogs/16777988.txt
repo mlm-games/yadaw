@@ -1,4 +1,0 @@
-- do not save 0.00 params when saving (not for snapshots, they still save 0.0)
-- fix clap plugin crash on reloading save
-- update deps
-- surface other errs to ui too
