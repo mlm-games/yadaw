@@ -51,11 +51,11 @@ impl PluginBackend for Lv2HostBackend {
     }
 
     fn instantiate(&self, uri: &str) -> Result<Box<dyn PluginInstance>> {
-        // Instantiate LV2 instance using your existing API
+        use crate::model::plugin_api::ParamKind;
+
         let instance = crate::plugin_host::instantiate(uri)
             .map_err(|e| anyhow!("LV2 instantiate failed: {e}"))?;
 
-        // Build parameter metadata once from the scan results
         let list = crate::plugin_host::get_available_plugins()?;
         let info = list
             .into_iter()
@@ -73,6 +73,8 @@ impl PluginBackend for Lv2HostBackend {
                 default: cp.default,
                 stepped: false,
                 enum_labels: None,
+                kind: ParamKind::Float,
+                group: None,
             })
             .collect();
 

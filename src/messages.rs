@@ -9,9 +9,30 @@ use crate::{
         MidiNote,
         automation::{AutomationMode, AutomationTarget},
         clip::{AudioClip, MidiClip},
-        plugin_api::BackendKind,
+        plugin_api::{BackendKind, ParamKind},
     },
 };
+
+/// Serializable param type tag for message passing
+#[derive(Debug, Clone)]
+pub enum ParamTypeTag {
+    Float,
+    Bool,
+    Int,
+    Enum(Vec<String>),
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginParamInfo {
+    pub name: String,
+    pub min: f32,
+    pub max: f32,
+    pub default: f32,
+    pub current: f32,
+    pub kind: ParamKind,
+    pub enum_labels: Option<Vec<String>>,
+    pub group: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AudioCommand {
@@ -273,15 +294,15 @@ pub enum UIUpdate {
     TrackRemoved(u64),
     TrackUpdated(u64),
 
-    ClipAdded(u64),   // Clip ID
-    ClipRemoved(u64), // Clip ID
-    ClipUpdated(u64), // Clip ID
+    ClipAdded(u64), // Clip ID
+    ClipRemoved(u64),
+    ClipUpdated(u64),
 
     AutomationUpdated(u64, usize), // Track ID, lane index
 
-    PluginAdded(u64, usize),   // Track ID, plugin index
-    PluginRemoved(u64, usize), // Track ID, plugin index
-    PluginUpdated(u64, usize), // Track ID, plugin index
+    PluginAdded(u64, usize),
+    PluginRemoved(u64, usize),
+    PluginUpdated(u64, usize),
 
     Error(String),
     Warning(String),
@@ -292,7 +313,7 @@ pub enum UIUpdate {
     PluginParamsDiscovered {
         track_id: u64,
         plugin_idx: usize,
-        params: Vec<(String, f32, f32, f32, f32)>, // (name, min, max, default, (current, for clap))
+        params: Vec<PluginParamInfo>,
     },
     NotesCutToClipboard(Vec<MidiNote>),
     ExportStateUpdate(ExportState),

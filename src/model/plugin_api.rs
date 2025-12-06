@@ -7,6 +7,20 @@ pub enum BackendKind {
     Lv2,
 }
 
+/// Parameter type for UI rendering
+/// High-level parameter kind for UI rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParamKind {
+    /// Continuous floating-point parameter.
+    Float,
+    /// Boolean on/off parameter.
+    Bool,
+    /// Integer/stepped parameter.
+    Int,
+    /// Enum with discrete, labeled values.
+    Enum,
+}
+
 pub type RtMidiEvent = MidiEvent;
 
 #[derive(Clone, Debug)]
@@ -29,7 +43,12 @@ pub struct UnifiedParamInfo {
     pub max: f32,
     pub default: f32,
     pub stepped: bool,
+    /// If this parameter has discrete named choices, these are the labels in order.
     pub enum_labels: Option<Vec<String>>,
+    /// High-level kind for UI (slider, checkbox, enum combo, etc.).
+    pub kind: ParamKind,
+    /// Optional group/module for UI grouping (e.g. CLAP module name).
+    pub group: Option<String>,
 }
 
 #[derive(Clone, Debug)]

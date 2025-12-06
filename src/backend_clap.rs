@@ -3,6 +3,7 @@ mod clap_impl {
     use anyhow::{Result, anyhow};
     use clack_host::utils::Cookie;
     use std::collections::HashMap;
+    use std::mem::MaybeUninit;
     use std::path::{Path, PathBuf};
 
     use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
@@ -10,8 +11,8 @@ mod clap_impl {
     use clack_host::process::StartedPluginAudioProcessor;
 
     use crate::model::plugin_api::{
-        BackendKind, HostConfig, MidiEvent, ParamKey, PluginBackend, PluginInstance as UniInstance,
-        ProcessCtx, UnifiedParamInfo, UnifiedPluginInfo,
+        BackendKind, HostConfig, MidiEvent, ParamKey, ParamKind, PluginBackend,
+        PluginInstance as UniInstance, ProcessCtx, UnifiedParamInfo, UnifiedPluginInfo,
     };
     use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
 
@@ -121,6 +122,70 @@ mod clap_impl {
             Ok((path, id.to_string()))
         }
 
+        /// Determine the param kind and optional enum labels.
+        fn detect_kind_and_labels(
+            params_ext: &ParamsExt,
+            plugin: &mut PluginMainThreadHandle<'_>,
+            info: &clack_extensions::params::ParamInfo<'_>,
+        ) -> (ParamKind, Option<Vec<String>>) {
+            let min = info.min_value;
+            let max = info.max_value;
+            let stepped = info
+                .flags
+                .contains(clack_extensions::params::ParamInfoFlags::IS_STEPPED);
+
+            if !stepped {
+                return (ParamKind::Float, None);
+            }
+
+            let range = (max - min).round() as i32;
+
+            // Boolean: stepped 0..1
+            if range == 1 && min.round() as i32 == 0 && max.round() as i32 == 1 {
+                return (ParamKind::Bool, None);
+            }
+
+            // Try enum: small stepped range, use value_to_text for labels
+            if range > 0 && range <= 32 {
+                let mut labels = Vec::with_capacity((range + 1) as usize);
+                let mut all_valid = true;
+                let mut all_numeric = true;
+
+                for i in 0..=range {
+                    let value = min + i as f64;
+                    let mut buf: [MaybeUninit<u8>; 256] = [MaybeUninit::uninit(); 256];
+
+                    match params_ext.value_to_text(plugin, info.id, value, &mut buf) {
+                        Ok(bytes) => {
+                            let label = String::from_utf8_lossy(bytes)
+                                .trim_end_matches('\0')
+                                .trim()
+                                .to_string();
+                            if label.is_empty() {
+                                all_valid = false;
+                                break;
+                            }
+                            if label.parse::<f64>().is_err() {
+                                all_numeric = false;
+                            }
+                            labels.push(label);
+                        }
+                        Err(_) => {
+                            all_valid = false;
+                            break;
+                        }
+                    }
+                }
+
+                if all_valid && labels.len() == (range + 1) as usize && !all_numeric {
+                    return (ParamKind::Enum, Some(labels));
+                }
+            }
+
+            // Fallback: integer
+            (ParamKind::Int, None)
+        }
+
         fn fetch_params_with_values(
             instance: &mut PluginInstance<MyHost>,
         ) -> (Vec<UnifiedParamInfo>, HashMap<u32, f32>) {
@@ -148,23 +213,25 @@ mod clap_impl {
                     let min = info.min_value as f32;
                     let max = info.max_value as f32;
                     let default = info.default_value as f32;
-                    let stepped = info.flags.contains(ParamInfoFlags::IS_STEPPED);
+                    let stepped = info
+                        .flags
+                        .contains(clack_extensions::params::ParamInfoFlags::IS_STEPPED);
 
-                    // Query the actual current value from the plugin
+                    // Group/module (for UI grouping)
+                    let group = std::str::from_utf8(info.module)
+                        .ok()
+                        .and_then(|s| s.split('\0').next().map(str::to_string))
+                        .filter(|s| !s.is_empty());
+
+                    // Kind + enum labels
+                    let (kind, enum_labels) =
+                        Self::detect_kind_and_labels(&params_ext, &mut plugin, &info);
+
+                    // Current value from plugin
                     let current_value = params_ext
                         .get_value(&mut plugin, info.id)
                         .map(|v| v as f32)
                         .unwrap_or(default);
-
-                    log::debug!(
-                        "CLAP param {}: name={}, min={}, max={}, default={}, current={}",
-                        id,
-                        name,
-                        min,
-                        max,
-                        default,
-                        current_value
-                    );
 
                     param_values.insert(id, current_value);
 
@@ -175,10 +242,13 @@ mod clap_impl {
                         max,
                         default,
                         stepped,
-                        enum_labels: None,
+                        enum_labels,
+                        kind,
+                        group,
                     });
                 }
             }
+
             (param_infos, param_values)
         }
     }

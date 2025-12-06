@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use super::*;
 use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
-use crate::messages::AudioCommand;
+use crate::messages::{AudioCommand, PluginParamInfo};
 use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
-use crate::model::plugin_api::BackendKind;
+use crate::model::plugin_api::{BackendKind, ParamKind};
 use crate::model::track::TrackType;
 use crate::plugin::get_control_port_info;
 use crate::project::AppState;
@@ -21,7 +21,7 @@ pub struct TracksPanel {
     dnd_dragging_track: Option<u64>,
     dnd_dragging_from_idx: Option<usize>,
     dnd_drop_target_idx: Option<usize>,
-    dnd_row_rects: Vec<(u64, egui::Rect, usize)>, // (track_id, header_rect, index)
+    dnd_row_rects: Vec<(u64, egui::Rect, usize)>,
     dnd_pointer_offset: egui::Vec2,
 }
 
@@ -209,11 +209,7 @@ impl TracksPanel {
                         // Draw in a small reserved space
                         let (resp, painter) =
                             ui.allocate_painter(egui::vec2(60.0, 10.0), egui::Sense::hover());
-                        // Re-use meter painter (horizontal)
-                        // Note: LevelMeter::ui draws its own size; here we provide a minimal inline bar.
-                        // If you prefer the existing visual, replace this block with: meter.ui(ui, false);
-                        // Simple inline bar: draw a filled rect proportional to peak
-                        let peak = meter.clone().data.peak_normalized(); // if data is private, fallback to a fixed small bar
+                        let peak = meter.clone().data.peak_normalized();
                         let w = (resp.rect.width() * peak).clamp(0.0, resp.rect.width());
                         painter.rect_filled(
                             egui::Rect::from_min_size(
@@ -286,12 +282,10 @@ impl TracksPanel {
             );
         }
 
-        // combined response
         drag_resp.union(inner.response)
     }
 
     fn draw_mixer_strip(&mut self, ui: &mut egui::Ui, track_id: u64, app: &super::app::YadawApp) {
-        // Read the track's current state
         let (mut volume, mut pan, muted, solo, armed, monitor_enabled, is_midi) = {
             let state = app.state.lock().unwrap();
             state
@@ -512,21 +506,17 @@ impl TracksPanel {
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.menu_button("Presets ▾", |ui| {
-                            // Save snapshot (timestamped name)
                             if ui.button("Save Snapshot").clicked() {
                                 let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
                                 let preset_name = format!("Snapshot_{}", ts);
-                                let _ = app.command_tx.send(
-                                    crate::messages::AudioCommand::SavePluginPreset(
-                                        track_id,
-                                        plugin_idx,
-                                        preset_name,
-                                    ),
-                                );
+                                let _ = app.command_tx.send(AudioCommand::SavePluginPreset(
+                                    track_id,
+                                    plugin_idx,
+                                    preset_name,
+                                ));
                                 ui.close();
                             }
 
-                            // List existing presets for this plugin URI
                             let presets = crate::presets::list_presets_for(&plugin_uri);
                             if presets.is_empty() {
                                 ui.label(egui::RichText::new("(no presets)").weak());
@@ -534,11 +524,10 @@ impl TracksPanel {
                                 ui.separator();
                                 for pname in presets {
                                     if ui.button(&pname).clicked() {
-                                        let _ = app.command_tx.send(
-                                            crate::messages::AudioCommand::LoadPluginPreset(
+                                        let _ =
+                                            app.command_tx.send(AudioCommand::LoadPluginPreset(
                                                 track_id, plugin_idx, pname,
-                                            ),
-                                        );
+                                            ));
                                         ui.close();
                                     }
                                 }
@@ -546,108 +535,31 @@ impl TracksPanel {
                         });
                     });
 
-                    // Draw parameters
+                    // Draw parameters based on backend
                     match backend {
                         BackendKind::Lv2 => {
-                            for (pname, &pval) in &params {
-                                let mut v = pval;
-                                ui.horizontal(|ui| {
-                                    ui.label(pname);
-
-                                    let meta = get_control_port_info(&plugin_uri, pname);
-                                    let (min_v, max_v, default_v) = meta
-                                        .as_ref()
-                                        .map(|m| (m.min, m.max, m.default))
-                                        .unwrap_or((0.0, 1.0, 0.0));
-
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(&mut v, min_v..=max_v)
-                                                .show_value(true),
-                                        )
-                                        .changed()
-                                    {
-                                        let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                                            track_id,
-                                            plugin_id,
-                                            pname.clone(),
-                                            v,
-                                        ));
-                                    }
-                                    if ui
-                                        .small_button("↺")
-                                        .on_hover_text(format!(
-                                            "Reset to default ({:.3})",
-                                            default_v
-                                        ))
-                                        .clicked()
-                                    {
-                                        let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                                            track_id,
-                                            plugin_id,
-                                            pname.clone(),
-                                            default_v,
-                                        ));
-                                    }
-                                });
-                            }
+                            self.draw_lv2_params(
+                                ui,
+                                app,
+                                track_id,
+                                plugin_id,
+                                &plugin_uri,
+                                &params,
+                            );
                         }
                         BackendKind::Clap => {
-                            // Use CLAP metadata from clap_param_meta
-                            if let Some(meta) = app.clap_param_meta.get(&(track_id, plugin_idx)) {
-                                for (name, min_v, max_v, default_v) in meta {
-                                    let mut v = params.get(name).copied().unwrap_or(*default_v);
-                                    ui.horizontal(|ui| {
-                                        ui.label(name);
-
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut v, *min_v..=*max_v)
-                                                    .show_value(true),
-                                            )
-                                            .changed()
-                                        {
-                                            let _ =
-                                                app.command_tx.send(AudioCommand::SetPluginParam(
-                                                    track_id,
-                                                    plugin_id,
-                                                    name.clone(),
-                                                    v,
-                                                ));
-                                        }
-
-                                        if ui
-                                            .small_button("↺")
-                                            .on_hover_text(format!(
-                                                "Reset to default ({:.3})",
-                                                default_v
-                                            ))
-                                            .clicked()
-                                        {
-                                            let _ =
-                                                app.command_tx.send(AudioCommand::SetPluginParam(
-                                                    track_id,
-                                                    plugin_id,
-                                                    name.clone(),
-                                                    *default_v,
-                                                ));
-                                        }
-                                    });
-                                }
-                            } else {
-                                ui.label(egui::RichText::new("No parameter info available").weak());
-                            }
+                            self.draw_clap_params(
+                                ui, app, track_id, plugin_id, plugin_idx, &params,
+                            );
                         }
                     }
                 });
         }
 
-        // Apply actions after iteration
         if let Some(id_to_remove) = plugin_to_remove {
             let _ = app
                 .command_tx
                 .send(AudioCommand::RemovePlugin(track_id, id_to_remove));
-            // Invalidate cache
             self.cached_plugin_chains.remove(&track_id);
         }
 
@@ -656,6 +568,198 @@ impl TracksPanel {
                 .command_tx
                 .send(AudioCommand::MovePlugin(track_id, from, to));
             self.cached_plugin_chains.remove(&track_id);
+        }
+    }
+
+    fn draw_lv2_params(
+        &self,
+        ui: &mut egui::Ui,
+        app: &super::app::YadawApp,
+        track_id: u64,
+        plugin_id: u64,
+        plugin_uri: &str,
+        params: &HashMap<String, f32>,
+    ) {
+        for (pname, &pval) in params {
+            let mut v = pval;
+            ui.horizontal(|ui| {
+                ui.label(pname);
+
+                let meta = get_control_port_info(plugin_uri, pname);
+                let (min_v, max_v, default_v) = meta
+                    .as_ref()
+                    .map(|m| (m.min, m.max, m.default))
+                    .unwrap_or((0.0, 1.0, 0.0));
+
+                if ui
+                    .add(egui::Slider::new(&mut v, min_v..=max_v).show_value(true))
+                    .changed()
+                {
+                    let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                        track_id,
+                        plugin_id,
+                        pname.clone(),
+                        v,
+                    ));
+                }
+                if ui
+                    .small_button("↺")
+                    .on_hover_text(format!("Reset to default ({:.3})", default_v))
+                    .clicked()
+                {
+                    let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                        track_id,
+                        plugin_id,
+                        pname.clone(),
+                        default_v,
+                    ));
+                }
+            });
+        }
+    }
+
+    fn draw_clap_params(
+        &self,
+        ui: &mut egui::Ui,
+        app: &super::app::YadawApp,
+        track_id: u64,
+        plugin_id: u64,
+        plugin_idx: usize,
+        params: &HashMap<String, f32>,
+    ) {
+        if let Some(meta_list) = app.clap_param_meta.get(&(track_id, plugin_idx)) {
+            let mut meta: Vec<PluginParamInfo> = meta_list.clone();
+
+            meta.sort_by(|a, b| {
+                let ga = a.group.as_deref().unwrap_or("");
+                let gb = b.group.as_deref().unwrap_or("");
+                match ga.cmp(gb) {
+                    std::cmp::Ordering::Equal => a.name.cmp(&b.name),
+                    other => other,
+                }
+            });
+
+            let mut current_group: Option<String> = None;
+
+            for pinfo in meta {
+                if pinfo.group != current_group {
+                    current_group = pinfo.group.clone();
+                    ui.separator();
+                    if let Some(grp) = &current_group {
+                        ui.label(egui::RichText::new(grp).strong());
+                    }
+                }
+
+                let mut v = params.get(&pinfo.name).copied().unwrap_or(pinfo.current);
+
+                ui.horizontal(|ui| {
+                    ui.label(&pinfo.name);
+
+                    let changed = match pinfo.kind {
+                        ParamKind::Bool => {
+                            let mut bool_val = v > 0.5;
+                            let resp = ui.checkbox(&mut bool_val, "");
+                            if resp.changed() {
+                                v = if bool_val { 1.0 } else { 0.0 };
+                            }
+                            resp.changed()
+                        }
+                        ParamKind::Enum => {
+                            if let Some(labels) = &pinfo.enum_labels {
+                                let steps = (pinfo.max - pinfo.min).round() as i32;
+                                let idx = ((v - pinfo.min).round() as i32).clamp(0, steps) as usize;
+                                let current_label = labels
+                                    .get(idx)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("{}", idx));
+
+                                let mut new_idx = idx;
+                                let resp = egui::ComboBox::from_id_salt((
+                                    &pinfo.name,
+                                    track_id,
+                                    plugin_id,
+                                ))
+                                .selected_text(current_label)
+                                .width(120.0)
+                                .show_ui(ui, |ui| {
+                                    let mut changed = false;
+                                    for (i, label) in labels.iter().enumerate() {
+                                        if ui.selectable_value(&mut new_idx, i, label).changed() {
+                                            changed = true;
+                                        }
+                                    }
+                                    changed
+                                });
+
+                                if resp.inner.unwrap_or(false) {
+                                    v = pinfo.min + new_idx as f32;
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                // Fallback to int slider if enum labels are missing
+                                let mut int_val = v.round() as i32;
+                                let min_i = pinfo.min.round() as i32;
+                                let max_i = pinfo.max.round() as i32;
+                                let resp = ui.add(
+                                    egui::Slider::new(&mut int_val, min_i..=max_i)
+                                        .step_by(1.0)
+                                        .show_value(true),
+                                );
+                                if resp.changed() {
+                                    v = int_val as f32;
+                                }
+                                resp.changed()
+                            }
+                        }
+                        ParamKind::Int => {
+                            let mut int_val = v.round() as i32;
+                            let min_i = pinfo.min.round() as i32;
+                            let max_i = pinfo.max.round() as i32;
+                            let resp = ui.add(
+                                egui::Slider::new(&mut int_val, min_i..=max_i)
+                                    .step_by(1.0)
+                                    .show_value(true),
+                            );
+                            if resp.changed() {
+                                v = int_val as f32;
+                            }
+                            resp.changed()
+                        }
+                        ParamKind::Float => {
+                            let resp = ui.add(
+                                egui::Slider::new(&mut v, pinfo.min..=pinfo.max).show_value(true),
+                            );
+                            resp.changed()
+                        }
+                    };
+
+                    if changed {
+                        let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                            track_id,
+                            plugin_id,
+                            pinfo.name.clone(),
+                            v,
+                        ));
+                    }
+
+                    if ui
+                        .small_button("↺")
+                        .on_hover_text(format!("Reset to default ({:.3})", pinfo.default))
+                        .clicked()
+                    {
+                        let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                            track_id,
+                            plugin_id,
+                            pinfo.name.clone(),
+                            pinfo.default,
+                        ));
+                    }
+                });
+            }
+        } else {
+            ui.label(egui::RichText::new("No parameter info available").weak());
         }
     }
 
@@ -669,7 +773,6 @@ impl TracksPanel {
             if matches!(track.track_type, TrackType::Midi) {
                 ui.horizontal(|ui| {
                     ui.label("MIDI In:");
-
                     let mut selected_port = track
                         .midi_input_port
                         .clone()
@@ -707,7 +810,7 @@ impl TracksPanel {
                     }
                 });
             } else {
-                ui.horizontal(|ui: &mut egui::Ui| {
+                ui.horizontal(|ui| {
                     ui.label("Audio In:");
                     let mut in_sel = track
                         .input_device
@@ -802,7 +905,6 @@ impl TracksPanel {
             let x0 = any_rect.left();
             let x1 = any_rect.right();
             let y = if target_idx == rows.len() {
-                // after last -> line below last row
                 rows.last().unwrap().1.bottom()
             } else {
                 rows[target_idx].1.top()
@@ -813,7 +915,6 @@ impl TracksPanel {
             );
         }
 
-        // ghost: show semi-transparent preview following pointer, using dragged row size
         if let Some((_, src_rect, _)) = rows.iter().find(|(tid, _, _)| *tid == drag_id) {
             let pos = pointer - self.dnd_pointer_offset;
             let ghost_rect = egui::Rect::from_min_size(pos, src_rect.size());
@@ -849,7 +950,6 @@ impl TracksPanel {
                     new_to = new_to.saturating_sub(1);
                 }
                 if new_to != from && new_to < len {
-                    // Apply reorder in AppState
                     use crate::track_manager::move_track;
                     {
                         let mut st = app.state.lock().unwrap();
@@ -858,12 +958,9 @@ impl TracksPanel {
                 }
 
                 app.selected_track = drag_id;
-                let _ = app
-                    .command_tx
-                    .send(crate::messages::AudioCommand::UpdateTracks);
+                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
             }
 
-            // Clear DnD state
             self.dnd_dragging_track = None;
             self.dnd_dragging_from_idx = None;
             self.dnd_drop_target_idx = None;
@@ -914,7 +1011,6 @@ impl TracksPanel {
                     let _ = app.command_tx.send(AudioCommand::RebuildAllRtChains);
                 }
             }
-
             "delete" => {
                 let can_delete = {
                     let st = app.state.lock().unwrap();
@@ -963,7 +1059,6 @@ impl TracksPanel {
                 };
                 let _ = app.command_tx.send(cmd);
             }
-
             _ => {}
         }
     }

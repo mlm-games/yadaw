@@ -6,7 +6,7 @@ use crate::audio_utils::{calculate_stereo_gains, soft_clip};
 use crate::constants::{
     DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION, RECORDING_BUFFER_SIZE,
 };
-use crate::messages::UIUpdate;
+use crate::messages::{PluginParamInfo, UIUpdate};
 use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::{ChannelStrip, MixerEngine};
 use crate::model::clip::AudioClip;
@@ -655,13 +655,21 @@ impl AudioEngine {
                             name_to_key.insert(p.name.clone(), p.key.clone());
                         }
 
-                        // Query params WITH current values before moving inst
-                        let params_for_ui: Vec<(String, f32, f32, f32, f32)> = inst
+                        let params_for_ui: Vec<PluginParamInfo> = inst
                             .params()
                             .iter()
                             .map(|p| {
                                 let current = inst.get_param(&p.key).unwrap_or(p.default);
-                                (p.name.clone(), p.min, p.max, p.default, current)
+                                PluginParamInfo {
+                                    name: p.name.clone(),
+                                    min: p.min,
+                                    max: p.max,
+                                    default: p.default,
+                                    current,
+                                    kind: p.kind,
+                                    enum_labels: p.enum_labels.clone(),
+                                    group: p.group.clone(),
+                                }
                             })
                             .collect();
 
@@ -1329,12 +1337,21 @@ impl AudioEngine {
                     }
 
                     // Send metadata for UI
-                    let params_for_ui: Vec<(String, f32, f32, f32, f32)> = inst
+                    let params_for_ui: Vec<PluginParamInfo> = inst
                         .params()
                         .iter()
                         .map(|p| {
                             let current = inst.get_param(&p.key).unwrap_or(p.default);
-                            (p.name.clone(), p.min, p.max, p.default, current)
+                            PluginParamInfo {
+                                name: p.name.clone(),
+                                min: p.min,
+                                max: p.max,
+                                default: p.default,
+                                current,
+                                kind: p.kind,
+                                enum_labels: p.enum_labels.clone(),
+                                group: p.group.clone(),
+                            }
                         })
                         .collect();
 

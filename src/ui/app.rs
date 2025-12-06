@@ -6,6 +6,7 @@ use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
+use crate::messages::PluginParamInfo;
 use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::UnifiedPluginInfo;
@@ -60,8 +61,7 @@ pub struct YadawApp {
     // Plugin management
     pub(super) available_plugins: HashMap<String, UnifiedPluginInfo>,
     pub(super) selected_track_for_plugin: Option<u64>,
-    pub(super) clap_param_meta:
-        std::collections::HashMap<(u64, usize), Vec<(String, f32, f32, f32)>>,
+    pub(super) clap_param_meta: std::collections::HashMap<(u64, usize), Vec<PluginParamInfo>>,
 
     // Selection state
     pub(super) selected_track: u64,
@@ -1138,18 +1138,17 @@ impl YadawApp {
                 params,
             } => {
                 // Store meta info (name, min, max, default) for UI sliders
-                let meta: Vec<(String, f32, f32, f32)> = params
-                    .iter()
-                    .map(|(name, min, max, def, _current)| (name.clone(), *min, *max, *def))
-                    .collect();
+                let meta: Vec<PluginParamInfo> = params.iter().map(|p| p.clone()).collect();
                 self.clap_param_meta.insert((track_id, plugin_idx), meta);
 
                 {
                     let mut state = self.state.lock().unwrap();
                     if let Some(track) = state.tracks.get_mut(&track_id) {
                         if let Some(plugin) = track.plugin_chain.get_mut(plugin_idx) {
-                            for (name, _min, _max, _default, current) in &params {
-                                plugin.params.insert(name.clone(), *current);
+                            for (param_info) in &params {
+                                plugin
+                                    .params
+                                    .insert(param_info.name.clone(), param_info.current);
                             }
                         }
                     }
