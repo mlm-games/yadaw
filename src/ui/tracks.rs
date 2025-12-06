@@ -635,7 +635,6 @@ impl TracksPanel {
     ) {
         if let Some(meta_list) = app.clap_param_meta.get(&(track_id, plugin_idx)) {
             let mut meta: Vec<PluginParamInfo> = meta_list.clone();
-
             meta.sort_by(|a, b| {
                 let ga = a.group.as_deref().unwrap_or("");
                 let gb = b.group.as_deref().unwrap_or("");
@@ -645,17 +644,12 @@ impl TracksPanel {
                 }
             });
 
-            let mut current_group: Option<String> = None;
-
-            for pinfo in meta {
-                if pinfo.group != current_group {
-                    current_group = pinfo.group.clone();
-                    ui.separator();
-                    if let Some(grp) = &current_group {
-                        ui.label(egui::RichText::new(grp).strong());
-                    }
-                }
-
+            let draw_param = |ui: &mut egui::Ui,
+                              pinfo: &PluginParamInfo,
+                              params: &HashMap<String, f32>,
+                              track_id: u64,
+                              plugin_id: u64,
+                              app: &super::app::YadawApp| {
                 let mut v = params.get(&pinfo.name).copied().unwrap_or(pinfo.current);
 
                 ui.horizontal(|ui| {
@@ -763,6 +757,32 @@ impl TracksPanel {
                         ));
                     }
                 });
+            };
+
+            // Walk meta grouped by `group`
+            let mut i = 0;
+            while i < meta.len() {
+                let group = meta[i].group.clone();
+                if let Some(ref grp) = group {
+                    // contiguous run of same group
+                    let start = i;
+                    while i < meta.len() && meta[i].group.as_deref() == Some(grp.as_str()) {
+                        i += 1;
+                    }
+
+                    egui::CollapsingHeader::new(grp)
+                        .id_salt((grp.as_str(), track_id, plugin_id))
+                        .show(ui, |ui| {
+                            for pinfo in &meta[start..i] {
+                                draw_param(ui, pinfo, params, track_id, plugin_id, app);
+                            }
+                        });
+                } else {
+                    // ungrouped, draw directly
+                    let pinfo = &meta[i];
+                    draw_param(ui, pinfo, params, track_id, plugin_id, app);
+                    i += 1;
+                }
             }
         } else {
             ui.label(egui::RichText::new("No parameter info available").weak());
