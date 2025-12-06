@@ -1554,6 +1554,10 @@ impl YadawApp {
         let state = self.state.lock().unwrap();
         state.tracks.get(&track_id).cloned()
     }
+
+    pub fn invalidate_clap_params_for_track(&mut self, track_id: u64) {
+        self.clap_param_meta.retain(|(tid, _), _| *tid != track_id);
+    }
 }
 
 impl eframe::App for YadawApp {

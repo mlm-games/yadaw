@@ -561,6 +561,9 @@ impl TracksPanel {
                 .command_tx
                 .send(AudioCommand::RemovePlugin(track_id, id_to_remove));
             self.cached_plugin_chains.remove(&track_id);
+
+            app.invalidate_clap_params_for_track(track_id);
+            let _ = app.command_tx.send(AudioCommand::RebuildAllRtChains);
         }
 
         if let Some((from, to)) = move_action {
@@ -568,6 +571,9 @@ impl TracksPanel {
                 .command_tx
                 .send(AudioCommand::MovePlugin(track_id, from, to));
             self.cached_plugin_chains.remove(&track_id);
+
+            app.invalidate_clap_params_for_track(track_id);
+            let _ = app.command_tx.send(AudioCommand::RebuildAllRtChains);
         }
     }
 
