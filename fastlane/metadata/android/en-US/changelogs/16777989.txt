@@ -1,0 +1,5 @@
+- add hiding of group params
+- fix plugin param transfer on removal issue
+- add groups and other param kinds for clap plugings (lv2 later)
+- rm old .txt chlg notes
+- fix clap plugin params saving and loading
