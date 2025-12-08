@@ -634,7 +634,12 @@ impl TracksPanel {
         params: &HashMap<String, f32>,
     ) {
         if let Some(meta_list) = app.clap_param_meta.get(&(track_id, plugin_idx)) {
-            let mut meta: Vec<PluginParamInfo> = meta_list.clone();
+            let mut meta: Vec<PluginParamInfo> = meta_list
+                .iter()
+                .filter(|p| !p.is_hidden) // Skip hidden params
+                .cloned()
+                .collect();
+
             meta.sort_by(|a, b| {
                 let ga = a.group.as_deref().unwrap_or("");
                 let gb = b.group.as_deref().unwrap_or("");
@@ -652,13 +657,16 @@ impl TracksPanel {
                               app: &super::app::YadawApp| {
                 let mut v = params.get(&pinfo.name).copied().unwrap_or(pinfo.current);
 
+                let is_readonly = pinfo.is_readonly;
+
                 ui.horizontal(|ui| {
                     ui.label(&pinfo.name);
 
                     let changed = match pinfo.kind {
                         ParamKind::Bool => {
                             let mut bool_val = v > 0.5;
-                            let resp = ui.checkbox(&mut bool_val, "");
+                            let resp = ui
+                                .add_enabled(!is_readonly, egui::Checkbox::new(&mut bool_val, ""));
                             if resp.changed() {
                                 v = if bool_val { 1.0 } else { 0.0 };
                             }
@@ -666,9 +674,8 @@ impl TracksPanel {
                         }
                         ParamKind::Enum => {
                             if let Some(labels) = &pinfo.enum_labels {
-                                let steps = (pinfo.max - pinfo.min).round() as i32;
                                 let idx = ((v - pinfo.min).round() as i32)
-                                    .clamp(0, (labels.len() as i32) - 1)
+                                    .clamp(0, labels.len() as i32 - 1)
                                     as usize;
 
                                 let current_label = labels
@@ -685,6 +692,7 @@ impl TracksPanel {
                                 .selected_text(current_label)
                                 .width(120.0)
                                 .show_ui(ui, |ui| {
+                                    ui.set_enabled(!is_readonly);
                                     let mut changed = false;
                                     for (i, label) in labels.iter().enumerate() {
                                         if ui.selectable_value(&mut new_idx, i, label).changed() {
@@ -701,26 +709,15 @@ impl TracksPanel {
                                     false
                                 }
                             } else {
-                                // Fallback to int slider if enum labels are missing
-                                let mut int_val = v.round() as i32;
-                                let min_i = pinfo.min.round() as i32;
-                                let max_i = pinfo.max.round() as i32;
-                                let resp = ui.add(
-                                    egui::Slider::new(&mut int_val, min_i..=max_i)
-                                        .step_by(1.0)
-                                        .show_value(true),
-                                );
-                                if resp.changed() {
-                                    v = int_val as f32;
-                                }
-                                resp.changed()
+                                false
                             }
                         }
                         ParamKind::Int => {
                             let mut int_val = v.round() as i32;
                             let min_i = pinfo.min.round() as i32;
                             let max_i = pinfo.max.round() as i32;
-                            let resp = ui.add(
+                            let resp = ui.add_enabled(
+                                !is_readonly,
                                 egui::Slider::new(&mut int_val, min_i..=max_i)
                                     .step_by(1.0)
                                     .show_value(true),
@@ -731,14 +728,22 @@ impl TracksPanel {
                             resp.changed()
                         }
                         ParamKind::Float => {
-                            let resp = ui.add(
-                                egui::Slider::new(&mut v, pinfo.min..=pinfo.max).show_value(true),
+                            let resp = ui.add_enabled(
+                                !is_readonly,
+                                egui::Slider::new(&mut v, pinfo.min..=pinfo.max).show_value(false), // We'll show formatted value
                             );
+
+                            if let Some(ref unit) = pinfo.unit {
+                                ui.label(format!("{:.2}{}", v, unit));
+                            } else {
+                                ui.label(format!("{:.2}", v));
+                            }
+
                             resp.changed()
                         }
                     };
 
-                    if changed {
+                    if changed && !is_readonly {
                         let _ = app.command_tx.send(AudioCommand::SetPluginParam(
                             track_id,
                             plugin_id,
@@ -757,17 +762,30 @@ impl TracksPanel {
                         }
                     }
 
-                    if ui
-                        .small_button("↺")
-                        .on_hover_text(format!("Reset to default ({:.3})", pinfo.default))
-                        .clicked()
-                    {
-                        let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                            track_id,
-                            plugin_id,
-                            pinfo.name.clone(),
-                            pinfo.default,
-                        ));
+                    // Reset button - only if not readonly
+                    if !is_readonly {
+                        let default_text = if let Some(ref unit) = pinfo.unit {
+                            format!("{:.2}{}", pinfo.default, unit)
+                        } else {
+                            format!("{:.3}", pinfo.default)
+                        };
+
+                        if ui
+                            .small_button("↺")
+                            .on_hover_text(format!("Reset to {}", default_text))
+                            .clicked()
+                        {
+                            let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                track_id,
+                                plugin_id,
+                                pinfo.name.clone(),
+                                pinfo.default,
+                            ));
+                        }
+                    }
+
+                    if pinfo.is_automatable {
+                        ui.weak("◉").on_hover_text("Automatable");
                     }
                 });
             };

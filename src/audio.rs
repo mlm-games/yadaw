@@ -669,6 +669,11 @@ impl AudioEngine {
                                     kind: p.kind,
                                     enum_labels: p.enum_labels.clone(),
                                     group: p.group.clone(),
+                                    is_hidden: p.is_hidden,
+                                    is_readonly: p.is_readonly,
+                                    is_automatable: p.is_automatable,
+                                    unit: p.unit.clone(),
+                                    display_text: p.value_to_text.clone(),
                                 }
                             })
                             .collect();
@@ -1351,6 +1356,11 @@ impl AudioEngine {
                                 kind: p.kind,
                                 enum_labels: p.enum_labels.clone(),
                                 group: p.group.clone(),
+                                is_hidden: p.is_hidden,
+                                is_readonly: p.is_readonly,
+                                is_automatable: p.is_automatable,
+                                unit: p.unit.clone(),
+                                display_text: p.value_to_text.clone(),
                             }
                         })
                         .collect();

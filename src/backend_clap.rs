@@ -122,30 +122,32 @@ mod clap_impl {
             Ok((path, id.to_string()))
         }
 
-        /// Determine the param kind and optional enum labels.
-        fn detect_kind_and_labels(
+        /// Detect param kind, labels & extract unit suffix
+        fn detect_kind_labels_and_unit(
             params_ext: &ParamsExt,
             plugin: &mut PluginMainThreadHandle<'_>,
             info: &clack_extensions::params::ParamInfo<'_>,
-        ) -> (ParamKind, Option<Vec<String>>) {
+        ) -> (ParamKind, Option<Vec<String>>, Option<String>) {
             let min = info.min_value;
             let max = info.max_value;
-            let stepped = info
-                .flags
-                .contains(clack_extensions::params::ParamInfoFlags::IS_STEPPED);
+            let default = info.default_value;
+            let stepped = info.flags.contains(ParamInfoFlags::IS_STEPPED);
+
+            // Try to extract unit from default value text
+            let unit = Self::extract_unit(params_ext, plugin, info.id, default);
 
             if !stepped {
-                return (ParamKind::Float, None);
+                return (ParamKind::Float, None, unit);
             }
 
             let range = (max - min).round() as i32;
 
             // Boolean: stepped 0..1
             if range == 1 && min.round() as i32 == 0 && max.round() as i32 == 1 {
-                return (ParamKind::Bool, None);
+                return (ParamKind::Bool, None, unit);
             }
 
-            // Try enum: small stepped range, use value_to_text for labels
+            // Try enum: small stepped range
             if range > 0 && range <= 32 {
                 let mut labels = Vec::with_capacity((range + 1) as usize);
                 let mut all_valid = true;
@@ -178,12 +180,73 @@ mod clap_impl {
                 }
 
                 if all_valid && labels.len() == (range + 1) as usize && !all_numeric {
-                    return (ParamKind::Enum, Some(labels));
+                    return (ParamKind::Enum, Some(labels), None); // Enums don't need unit
                 }
             }
 
-            // Fallback: integer
-            (ParamKind::Int, None)
+            (ParamKind::Int, None, unit)
+        }
+
+        /// Extract unit suffix from value_to_text (e.g., "5.0 ms" -> " ms")
+        fn extract_unit(
+            params_ext: &ParamsExt,
+            plugin: &mut PluginMainThreadHandle<'_>,
+            param_id: ClapId,
+            value: f64,
+        ) -> Option<String> {
+            let mut buf: [MaybeUninit<u8>; 256] = [MaybeUninit::uninit(); 256];
+
+            let bytes = params_ext
+                .value_to_text(plugin, param_id, value, &mut buf)
+                .ok()?;
+            let text = String::from_utf8_lossy(bytes)
+                .trim_end_matches('\0')
+                .to_string();
+
+            // Find where the number ends and unit begins
+            // e.g., "5.00 ms" -> find position after "5.00"
+            let value_str = format!("{:.2}", value);
+
+            // Try to find common patterns
+            if let Some(pos) = text.find(|c: char| c.is_alphabetic() || c == '%' || c == '×') {
+                let unit = text[pos..].trim().to_string();
+                if !unit.is_empty() {
+                    return Some(format!(" {}", unit));
+                }
+            }
+
+            // Check for unit at end after space
+            if let Some(pos) = text.rfind(' ') {
+                let suffix = &text[pos..];
+                if suffix
+                    .chars()
+                    .skip(1)
+                    .any(|c| c.is_alphabetic() || c == '%')
+                {
+                    return Some(suffix.to_string());
+                }
+            }
+
+            None
+        }
+
+        /// Get formatted text for a value
+        fn format_value(
+            params_ext: &ParamsExt,
+            plugin: &mut PluginMainThreadHandle<'_>,
+            param_id: ClapId,
+            value: f64,
+        ) -> Option<String> {
+            let mut buf: [MaybeUninit<u8>; 256] = [MaybeUninit::uninit(); 256];
+
+            params_ext
+                .value_to_text(plugin, param_id, value, &mut buf)
+                .ok()
+                .map(|bytes| {
+                    String::from_utf8_lossy(bytes)
+                        .trim_end_matches('\0')
+                        .to_string()
+                })
         }
 
         fn fetch_params_with_values(
@@ -203,6 +266,12 @@ mod clap_impl {
                 let mut buf = ParamInfoBuffer::new();
                 if let Some(info) = params_ext.get_info(&mut plugin, i, &mut buf) {
                     let id = info.id.get();
+                    let flags = info.flags;
+
+                    // Skip hidden params
+                    if flags.contains(ParamInfoFlags::IS_HIDDEN) {
+                        continue;
+                    }
 
                     let name = std::str::from_utf8(info.name)
                         .ok()
@@ -213,25 +282,24 @@ mod clap_impl {
                     let min = info.min_value as f32;
                     let max = info.max_value as f32;
                     let default = info.default_value as f32;
-                    let stepped = info
-                        .flags
-                        .contains(clack_extensions::params::ParamInfoFlags::IS_STEPPED);
+                    let stepped = flags.contains(ParamInfoFlags::IS_STEPPED);
 
-                    // Group/module (for UI grouping)
                     let group = std::str::from_utf8(info.module)
                         .ok()
                         .and_then(|s| s.split('\0').next().map(str::to_string))
                         .filter(|s| !s.is_empty());
 
-                    // Kind + enum labels
-                    let (kind, enum_labels) =
-                        Self::detect_kind_and_labels(&params_ext, &mut plugin, &info);
+                    let (kind, enum_labels, unit) =
+                        Self::detect_kind_labels_and_unit(&params_ext, &mut plugin, &info);
 
-                    // Current value from plugin
                     let current_value = params_ext
                         .get_value(&mut plugin, info.id)
                         .map(|v| v as f32)
                         .unwrap_or(default);
+
+                    // Get formatted text for current value
+                    let value_to_text =
+                        Self::format_value(&params_ext, &mut plugin, info.id, current_value as f64);
 
                     param_values.insert(id, current_value);
 
@@ -245,6 +313,12 @@ mod clap_impl {
                         enum_labels,
                         kind,
                         group,
+                        is_hidden: flags.contains(ParamInfoFlags::IS_HIDDEN),
+                        is_readonly: flags.contains(ParamInfoFlags::IS_READONLY),
+                        is_automatable: flags.contains(ParamInfoFlags::IS_AUTOMATABLE),
+                        is_bypass: flags.contains(ParamInfoFlags::IS_BYPASS),
+                        unit,
+                        value_to_text,
                     });
                 }
             }

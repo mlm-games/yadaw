@@ -49,6 +49,14 @@ pub struct UnifiedParamInfo {
     pub kind: ParamKind,
     /// Optional group/module for UI grouping (e.g. CLAP module name).
     pub group: Option<String>,
+
+    pub is_hidden: bool,
+    pub is_readonly: bool,
+    pub is_automatable: bool,
+    pub is_bypass: bool,
+
+    pub unit: Option<String>, // for like " ms", " Hz", " dB" display
+    pub value_to_text: Option<String>, // Formatted current value from plugin
 }
 
 #[derive(Clone, Debug)]

@@ -75,6 +75,12 @@ impl PluginBackend for Lv2HostBackend {
                 enum_labels: None,
                 kind: ParamKind::Float,
                 group: None,
+                is_hidden: false,
+                is_readonly: false,
+                is_automatable: true,
+                is_bypass: false,
+                unit: None,
+                value_to_text: None,
             })
             .collect();
 

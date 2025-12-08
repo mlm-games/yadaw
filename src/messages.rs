@@ -32,6 +32,12 @@ pub struct PluginParamInfo {
     pub kind: ParamKind,
     pub enum_labels: Option<Vec<String>>,
     pub group: Option<String>,
+
+    pub is_hidden: bool,
+    pub is_readonly: bool,
+    pub is_automatable: bool,
+    pub unit: Option<String>,
+    pub display_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
