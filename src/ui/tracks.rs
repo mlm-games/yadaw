@@ -667,7 +667,10 @@ impl TracksPanel {
                         ParamKind::Enum => {
                             if let Some(labels) = &pinfo.enum_labels {
                                 let steps = (pinfo.max - pinfo.min).round() as i32;
-                                let idx = ((v - pinfo.min).round() as i32).clamp(0, steps) as usize;
+                                let idx = ((v - pinfo.min).round() as i32)
+                                    .clamp(0, (labels.len() as i32) - 1)
+                                    as usize;
+
                                 let current_label = labels
                                     .get(idx)
                                     .cloned()
@@ -742,6 +745,16 @@ impl TracksPanel {
                             pinfo.name.clone(),
                             v,
                         ));
+
+                        if let Ok(mut state) = app.state.lock() {
+                            if let Some(track) = state.tracks.get_mut(&track_id) {
+                                if let Some(plugin) =
+                                    track.plugin_chain.iter_mut().find(|p| p.id == plugin_id)
+                                {
+                                    plugin.params.insert(pinfo.name.clone(), v);
+                                }
+                            }
+                        }
                     }
 
                     if ui

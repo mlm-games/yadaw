@@ -11,6 +11,7 @@ use crate::idgen;
 use crate::messages::{AudioCommand, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
+use crate::model::plugin_api::BackendKind;
 use crate::model::track::TrackType;
 use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor};
 use crate::plugin::{create_plugin_instance, get_control_port_info};
@@ -318,24 +319,27 @@ fn process_command(
             ));
         }
         AudioCommand::SetPluginParam(track_id, plugin_id, param_name, value) => {
-            let (uri, min_v, max_v) = {
+            let (uri_opt, backend) = {
                 let state = app_state.lock().unwrap();
-                if let Some(plugin) = state
+                state
                     .tracks
                     .get(&track_id)
                     .and_then(|t| t.plugin_chain.iter().find(|p| p.id == plugin_id))
-                {
-                    let (min, max) = get_control_port_info(&plugin.uri, &param_name)
-                        .map(|m| (m.min, m.max))
-                        .unwrap_or((0.0, 1.0));
-                    (Some(plugin.uri.clone()), min, max)
-                } else {
-                    (None, 0.0, 1.0)
-                }
+                    .map(|p| (Some(p.uri.clone()), p.backend))
+                    .unwrap_or((None, BackendKind::Lv2))
             };
 
-            if uri.is_some() {
-                let v = value.clamp(min_v, max_v);
+            if let Some(uri) = uri_opt {
+                // Only clamp for LV2, CLAP plugins handle their own bounds
+                let v = match backend {
+                    BackendKind::Lv2 => {
+                        let (min, max) = get_control_port_info(&uri, &param_name)
+                            .map(|m| (m.min, m.max))
+                            .unwrap_or((0.0, 1.0));
+                        value.clamp(min, max)
+                    }
+                    BackendKind::Clap => value,
+                };
 
                 let mut state = app_state.lock().unwrap();
                 if let Some(track) = state.tracks.get_mut(&track_id) {
