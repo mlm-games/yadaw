@@ -1,0 +1,2 @@
+- add identification for other clap params
+- fix more than 2 enum vals not being selectable
