@@ -94,6 +94,7 @@ pub struct YadawApp {
 
     last_autosave: Instant,
     autosave_interval: Duration,
+    pub show_close_confirmation: bool,
 
     pub midi_input_handler: Option<Arc<MidiInputHandler>>,
     pub available_midi_ports: Vec<String>,
@@ -222,6 +223,7 @@ impl YadawApp {
             autosave_interval: Duration::from_secs(
                 config.behavior.auto_save_interval_minutes as u64 * 60,
             ),
+            show_close_confirmation: false,
 
             midi_input_handler,
             available_midi_ports,
@@ -229,7 +231,7 @@ impl YadawApp {
     }
 
     // Core functionality methods
-    pub(super) fn push_undo(&mut self) {
+    pub fn push_undo(&mut self) {
         let state = self.state.lock().unwrap();
         self.undo_stack.push_back(state.snapshot());
         self.redo_stack.clear();
@@ -237,9 +239,11 @@ impl YadawApp {
         if self.undo_stack.len() > 100 {
             self.undo_stack.pop_front();
         }
+
+        self.project_manager.mark_dirty();
     }
 
-    pub(super) fn undo(&mut self) {
+    pub fn undo(&mut self) {
         if let Some(snapshot) = self.undo_stack.pop_back() {
             let mut state = self.state.lock().unwrap();
             let current = state.snapshot();
@@ -252,7 +256,7 @@ impl YadawApp {
         }
     }
 
-    pub(super) fn redo(&mut self) {
+    pub fn redo(&mut self) {
         if let Some(snapshot) = self.redo_stack.pop_back() {
             let mut state = self.state.lock().unwrap();
             let current = state.snapshot();
@@ -1120,6 +1124,7 @@ impl YadawApp {
                 let _ = self
                     .command_tx
                     .send(crate::messages::AudioCommand::UpdateTracks);
+                self.project_manager.mark_dirty();
             }
             UIUpdate::RecordingStateChanged(on) => {
                 self.is_recording_ui = on;
@@ -1592,7 +1597,44 @@ impl YadawApp {
 
 impl eframe::App for YadawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Apply theme
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.project_manager.is_dirty() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.show_close_confirmation = true;
+            }
+        }
+
+        if self.show_close_confirmation {
+            egui::Modal::new(egui::Id::new("close_confirm_modal")).show(ctx, |ui| {
+                ui.set_width(300.0);
+                ui.heading("Unsaved Changes");
+                ui.label("You have unsaved changes. Do you want to save before closing?");
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        self.save_project();
+                        if !self.project_manager.is_dirty() {
+                            self.show_close_confirmation = false;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
+
+                    if ui.button("Don't Save").clicked() {
+                        self.show_close_confirmation = false;
+                        self.project_manager.mark_clean();
+
+                        std::process::exit(0);
+                    }
+
+                    if ui.button("Cancel").clicked() {
+                        self.show_close_confirmation = false;
+                    }
+                });
+            });
+        }
+
         self.theme_manager.apply_theme(ctx);
 
         // Process UI updates from audio thread

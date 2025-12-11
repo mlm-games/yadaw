@@ -20,9 +20,12 @@ pub struct ProjectManager {
     current_project: Option<ProjectInfo>,
     recent_projects: Vec<PathBuf>,
     max_recent: usize,
+
     auto_save_enabled: bool,
     auto_save_interval: Duration,
     last_auto_save: Instant,
+
+    is_dirty: bool,
 }
 
 impl Default for ProjectManager {
@@ -40,22 +43,30 @@ impl ProjectManager {
             auto_save_enabled: false,
             auto_save_interval: Duration::from_secs(300), // 5 minutes
             last_auto_save: Instant::now(),
+            is_dirty: false,
         }
     }
 
+    pub fn mark_dirty(&mut self) {
+        self.is_dirty = true;
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.is_dirty
+    }
+
     pub fn save_project(&mut self, state: &AppState, path: &Path) -> Result<()> {
-        // Create backup if file exists
+        // Handle Backup if file exists
         if path.exists() {
-            let backup_path = self.create_backup_path(path);
-            fs::copy(path, backup_path)?;
+            self.create_backup(path)?;
         }
 
-        // Save project
+        // Save actual project
         let project = Project::from(state);
         let json = serde_json::to_string_pretty(&project)?;
         fs::write(path, json)?;
 
-        // Update current project info
+        // Update state
         self.current_project = Some(ProjectInfo {
             path: path.to_path_buf(),
             name: path
@@ -67,8 +78,66 @@ impl ProjectManager {
             auto_save_path: None,
         });
 
-        // Add to recent projects
         self.add_to_recent(path);
+
+        // Mark as clean after successful save
+        self.is_dirty = false;
+
+        Ok(())
+    }
+
+    /// Moves the current file at `path` to a `Backups/` subdirectory
+    fn create_backup(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            let backup_dir = parent.join("Backups");
+            if !backup_dir.exists() {
+                fs::create_dir_all(&backup_dir)?;
+            }
+
+            let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("project");
+
+            let backup_filename = format!("{}_{}.{}", stem, timestamp, PROJECT_EXTENSION);
+            let backup_path = backup_dir.join(backup_filename);
+
+            fs::copy(path, &backup_path)?;
+
+            self.rotate_backups(&backup_dir, stem)?;
+        }
+        Ok(())
+    }
+
+    fn rotate_backups(&self, backup_dir: &Path, stem: &str) -> Result<()> {
+        let mut backups = Vec::new();
+
+        // Collect existing backups for this project
+        if let Ok(entries) = fs::read_dir(backup_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.starts_with(stem) && name.ends_with(PROJECT_EXTENSION) {
+                            backups.push(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by modification time (oldest first)
+        backups.sort_by_key(|p| p.metadata().and_then(|m| m.modified()).ok());
+
+        // Delete oldest if we have more than 10
+        const MAX_BACKUPS: usize = 10;
+        if backups.len() > MAX_BACKUPS {
+            let to_remove = backups.len() - MAX_BACKUPS;
+            for path in backups.iter().take(to_remove) {
+                let _ = fs::remove_file(path);
+            }
+        }
 
         Ok(())
     }
@@ -81,7 +150,6 @@ impl ProjectManager {
         let contents = fs::read_to_string(path)?;
         let project: Project = serde_json::from_str(&contents)?;
 
-        // Update current project info
         self.current_project = Some(ProjectInfo {
             path: path.to_path_buf(),
             name: project.name.clone(),
@@ -89,8 +157,9 @@ impl ProjectManager {
             auto_save_path: None,
         });
 
-        // Add to recent projects
         self.add_to_recent(path);
+
+        self.is_dirty = false;
 
         Ok(project)
     }
@@ -184,13 +253,14 @@ impl ProjectManager {
         let dir = cache_dir().join("autosave");
         std::fs::create_dir_all(&dir)?;
         let filename = if let Some(info) = &self.current_project {
-            format!(
-                "{}_autosave.{}",
-                info.name,
-                crate::constants::PROJECT_EXTENSION
-            )
+            let safe_name = info
+                .name
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>();
+            format!("{}_autosave.{}", safe_name, PROJECT_EXTENSION)
         } else {
-            format!("untitled_autosave.{}", crate::constants::PROJECT_EXTENSION)
+            format!("untitled_autosave.{}", PROJECT_EXTENSION)
         };
         Ok(dir.join(filename))
     }
@@ -210,6 +280,8 @@ impl ProjectManager {
         // Save recent projects list
         let _ = self.save_recent_projects();
     }
+
+    pub fn mark_clean(&mut self) { self.is_dirty = false; }
 
     fn load_recent_projects() -> Vec<PathBuf> {
         if let Some(dirs) = directories::ProjectDirs::from("com", "yadaw", "yadaw") {
@@ -237,21 +309,13 @@ impl ProjectManager {
     pub fn get_recent_projects(&self) -> &[PathBuf] {
         &self.recent_projects
     }
-
     pub fn clear_recent_projects(&mut self) {
         self.recent_projects.clear();
         let _ = self.save_recent_projects();
     }
-
     pub fn get_current_project(&self) -> Option<&ProjectInfo> {
         self.current_project.as_ref()
     }
-
-    pub fn has_unsaved_changes(&self) -> bool {
-        // A future improvement: track a state revision counter vs last save.
-        false
-    }
-
     pub fn set_auto_save(&mut self, enabled: bool) {
         self.auto_save_enabled = enabled;
     }
