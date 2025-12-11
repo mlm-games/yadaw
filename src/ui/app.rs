@@ -318,6 +318,7 @@ impl YadawApp {
     }
 
     pub fn add_automation_lane_by_id(&mut self, track_id: u64, target: AutomationTarget) {
+        self.push_undo();
         let _ = self
             .command_tx
             .send(AudioCommand::AddAutomationPoint(track_id, target, 0.0, 0.5));
@@ -843,6 +844,8 @@ impl YadawApp {
     }
 
     pub fn set_loop_to_selection(&mut self) {
+        self.push_undo();
+
         if self.selected_clips.is_empty() {
             // Use visible timeline region
             let visible_start = self.timeline_ui.scroll_x / self.timeline_ui.zoom_x;
@@ -980,6 +983,7 @@ impl YadawApp {
     }
 
     pub fn add_automation_lane(&mut self, track_id: u64, target: AutomationTarget) {
+        self.push_undo();
         let _ = self
             .command_tx
             .send(AudioCommand::AddAutomationPoint(track_id, target, 0.0, 0.5));
@@ -1010,6 +1014,7 @@ impl YadawApp {
     }
 
     pub fn tap_tempo(&mut self) {
+        self.push_undo();
         let now = Instant::now();
         let taps = &mut self.touch_state.tap_times;
 
@@ -1421,6 +1426,8 @@ impl YadawApp {
             ToggleTimeline => self.switch_to_timeline(),
 
             ToggleLoop => {
+                self.push_undo();
+
                 let enabled = !self.audio_state.loop_enabled.load(Ordering::Relaxed);
                 self.audio_state
                     .loop_enabled
@@ -1431,6 +1438,8 @@ impl YadawApp {
             SetLoopToSelection => self.set_loop_to_selection(),
 
             ClearLoop => {
+                self.push_undo();
+
                 self.audio_state
                     .loop_enabled
                     .store(false, Ordering::Relaxed);
@@ -1471,6 +1480,8 @@ impl YadawApp {
     }
 
     fn adjust_velocity(&mut self, delta: i8) {
+        self.push_undo();
+
         let clip_id = match self.piano_roll_view.selected_clip {
             Some(id) => id,
             None => return,
