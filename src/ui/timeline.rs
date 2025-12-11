@@ -236,6 +236,8 @@ impl TimelineView {
         let total_width = view_w.max(content_beats as f32 * self.zoom_x);
 
         // Compute dynamic per-track height: base track + visible lanes (if show_automation)
+        const LANE_HEADER_H: f32 = 22.0;
+
         let track_heights: Vec<f32> = track_data
             .iter()
             .map(|(_, t)| {
@@ -244,7 +246,10 @@ impl TimelineView {
                         .automation_lanes
                         .iter()
                         .filter(|l| l.visible)
-                        .map(|l| l.height.max(20.0))
+                        .map(|l| {
+                            let curve_h = l.height.max(24.0);
+                            curve_h + LANE_HEADER_H
+                        })
                         .sum();
                     self.track_height + extra
                 } else {
@@ -1607,12 +1612,14 @@ impl TimelineView {
         track_id: u64,
         app: &mut super::app::YadawApp,
     ) {
+        const HEADER_H: f32 = 22.0;
+
         let visible_lanes: Vec<(usize, f32)> = track
             .automation_lanes
             .iter()
             .enumerate()
             .filter(|(_, l)| l.visible)
-            .map(|(i, l)| (i, l.height.max(20.0)))
+            .map(|(i, l)| (i, l.height.max(24.0)))
             .collect();
 
         if visible_lanes.is_empty() {
@@ -1620,38 +1627,41 @@ impl TimelineView {
         }
 
         let mut y = track_rect.top() + self.track_height;
-        for (lane_idx, h) in visible_lanes.iter().cloned() {
+
+        for (lane_idx, curve_h) in visible_lanes {
+            let lane_h = HEADER_H + curve_h;
+
             let lane_rect = egui::Rect::from_min_size(
                 egui::pos2(track_rect.left(), y),
-                egui::vec2(track_rect.width(), h),
+                egui::vec2(track_rect.width(), lane_h),
             );
 
-            while self.automation_widgets.len() <= lane_idx {
-                self.automation_widgets.push(AutomationLaneWidget);
-            }
+            let header_rect =
+                egui::Rect::from_min_size(lane_rect.min, egui::vec2(lane_rect.width(), HEADER_H));
 
-            let label_w = 80.0_f32.min(track_rect.width() * 0.25);
-            let label_rect = egui::Rect::from_min_size(lane_rect.min, egui::vec2(label_w, h));
+            let header_bg = egui::Color32::from_gray(30);
+            ui.painter().rect_filled(header_rect, 0.0, header_bg);
 
-            // Draw label background
-            ui.painter()
-                .rect_filled(label_rect, 0.0, egui::Color32::from_gray(28));
-
-            // Build a tiny UI inside the label_rect
-            ui.allocate_ui_at_rect(label_rect, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_clip_rect(label_rect);
-
-                    // Lane name
-                    let lane_name = match &track.automation_lanes[lane_idx].parameter {
+            ui.allocate_ui_at_rect(header_rect, |ui| {
+                ui.set_clip_rect(header_rect);
+                ui.horizontal(|ui| {
+                    // Clear “this lane belongs to this track + param”
+                    let param_label = match &track.automation_lanes[lane_idx].parameter {
                         AutomationTarget::TrackVolume => "Volume",
                         AutomationTarget::TrackPan => "Pan",
                         AutomationTarget::TrackSend(_) => "Send",
                         AutomationTarget::PluginParam { param_name, .. } => param_name.as_str(),
                     };
-                    ui.label(lane_name);
 
-                    // Mode combo (Read/Write/Touch/Latch)
+                    ui.label(
+                        egui::RichText::new(format!("{} – {}", track.name, param_label))
+                            .small()
+                            .strong(),
+                    );
+
+                    ui.add_space(8.0);
+
+                    // Mode combo (Read / Write / Touch / Latch / Off)
                     use crate::model::automation::AutomationMode;
                     let current_mode = {
                         let st = app.state.lock().unwrap();
@@ -1663,22 +1673,22 @@ impl TimelineView {
                     };
 
                     let mut mode = current_mode;
-                    egui::ComboBox::from_id_salt(("auto_mode", track_id, lane_idx as u64))
-                        .width(90.0)
-                        .selected_text(match mode {
-                            AutomationMode::Off => "Off",
-                            AutomationMode::Read => "Read",
-                            AutomationMode::Write => "Write",
-                            AutomationMode::Touch => "Touch",
-                            AutomationMode::Latch => "Latch",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut mode, AutomationMode::Read, "Read");
-                            ui.selectable_value(&mut mode, AutomationMode::Write, "Write");
-                            ui.selectable_value(&mut mode, AutomationMode::Touch, "Touch");
-                            ui.selectable_value(&mut mode, AutomationMode::Latch, "Latch");
-                            ui.selectable_value(&mut mode, AutomationMode::Off, "Off");
-                        });
+                    // egui::ComboBox::from_id_salt(("auto_mode", track_id, lane_idx as u64))
+                    //     .width(90.0)
+                    //     .selected_text(match mode {
+                    //         AutomationMode::Off => "Off",
+                    //         AutomationMode::Read => "Read",
+                    //         AutomationMode::Write => "Write",
+                    //         AutomationMode::Touch => "Touch",
+                    //         AutomationMode::Latch => "Latch",
+                    //     })
+                    //     .show_ui(ui, |ui| {
+                    //         ui.selectable_value(&mut mode, AutomationMode::Read, "Read");
+                    //         ui.selectable_value(&mut mode, AutomationMode::Write, "Write");
+                    //         ui.selectable_value(&mut mode, AutomationMode::Touch, "Touch");
+                    //         ui.selectable_value(&mut mode, AutomationMode::Latch, "Latch");
+                    //         ui.selectable_value(&mut mode, AutomationMode::Off, "Off");
+                    //     }); //TODO
 
                     if mode != current_mode {
                         let _ = app
@@ -1686,10 +1696,11 @@ impl TimelineView {
                             .send(AudioCommand::SetAutomationMode(track_id, lane_idx, mode));
                     }
 
-                    // Clear lane button
+                    ui.add_space(4.0);
+
                     if ui
-                        .small_button("Clear")
-                        .on_hover_text("Clear all points")
+                        .button("Clear")
+                        .on_hover_text("Clear all automation points in this lane")
                         .clicked()
                     {
                         let _ = app
@@ -1698,12 +1709,17 @@ impl TimelineView {
                     }
                 });
             });
+
             let curve_rect = egui::Rect::from_min_max(
-                egui::pos2(lane_rect.left() + label_w + 2.0, lane_rect.top()),
+                egui::pos2(lane_rect.left(), lane_rect.top() + HEADER_H),
                 lane_rect.max,
             );
 
-            self.automation_hit_regions.push(curve_rect);
+            self.automation_hit_regions.push(lane_rect);
+
+            while self.automation_widgets.len() <= lane_idx {
+                self.automation_widgets.push(AutomationLaneWidget);
+            }
 
             let id_ns = ui.id().with(("lane", track_id, lane_idx as u64));
 
@@ -1717,7 +1733,6 @@ impl TimelineView {
             );
 
             let mut pushed_undo_for_move = false;
-
             for action in actions {
                 match action {
                     AutomationAction::AddPoint { beat, value } => {
@@ -1752,7 +1767,8 @@ impl TimelineView {
                     }
                 }
             }
-            y += h;
+
+            y += lane_h;
         }
     }
 

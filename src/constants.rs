@@ -68,7 +68,6 @@ pub const PROJECT_EXTENSION: &str = "yadaw";
 pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg"];
 
 // Others
-pub const MIDI_TIMING_SAMPLE_RATE: f32 = 44100.0; // Might need to be changable later
 pub const DEBUG_PLUGIN_AUDIO: bool = cfg!(debug_assertions);
 
 pub const DEFAULT_MIN_PROJECT_BEATS: f64 = 64.0 * 10.0;
