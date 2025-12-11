@@ -1,0 +1,8 @@
+- make buses act like buses for sends
+- add undos for common actions that were missing it
+- make tracks auto select the last clip when changing tracks
+- Add a save confirmation dialog when closing app
+- make audio clip immediately editable after recording
+- bpm affect audio clip (implement to later easily convert to a setting)
+- load loop related settings in ui
+- move automation lane's title and clear button above (align with the midi clips)
