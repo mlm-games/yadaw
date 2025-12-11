@@ -8,6 +8,7 @@ use crate::model::track::TrackType;
 use crate::model::{AudioClip, AutomationTarget, MidiClip, MidiNote, Track};
 use crate::project::ClipLocation;
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
+use crate::waveform::draw_waveform;
 use egui::scroll_area::ScrollSource;
 
 pub struct TimelineView {
@@ -497,7 +498,13 @@ impl TimelineView {
         app: &mut super::app::YadawApp,
     ) {
         let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
-        let clip_width = clip.length_beats as f32 * self.zoom_x;
+
+        let bpm = app.audio_state.bpm.load();
+        let audio_duration_seconds = clip.samples.len() as f64 / clip.sample_rate as f64;
+        let audio_length_beats = audio_duration_seconds * (bpm as f64 / 60.0);
+
+        let effective_length_beats = (audio_length_beats as f32).min(clip.length_beats as f32);
+        let clip_width = effective_length_beats * self.zoom_x;
 
         let clip_rect = egui::Rect::from_min_size(
             track_rect.min + egui::vec2(clip_x, 20.0),
@@ -508,7 +515,7 @@ impl TimelineView {
             return;
         }
 
-        crate::waveform::draw_waveform(painter, clip_rect, clip, self.zoom_x, self.scroll_x);
+        draw_waveform(painter, clip_rect, clip, self.zoom_x, self.scroll_x);
 
         if app.selected_clips.contains(&clip.id) {
             painter.rect_stroke(

@@ -1806,7 +1806,12 @@ fn process_audio_track(
     for clip in &track.audio_clips {
         let clip_start_samples = converter.beats_to_samples(clip.start_beat);
 
-        let clip_length_samples = converter.beats_to_samples(clip.length_beats);
+        let audio_duration_seconds = clip.samples.len() as f64 / clip.sample_rate as f64;
+        let audio_length_samples = audio_duration_seconds * sample_rate;
+
+        let visual_length_samples = converter.beats_to_samples(clip.length_beats);
+        let clip_length_samples = audio_length_samples.min(visual_length_samples);
+
         let clip_end_samples = clip_start_samples + clip_length_samples;
 
         let overlap_start = buffer_start.max(clip_start_samples);
