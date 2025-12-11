@@ -882,7 +882,7 @@ impl TimelineView {
         }
 
         if response.double_clicked() {
-            app.selected_track = track_id;
+            app.select_track(track_id);
             app.open_midi_clip_in_piano_roll(clip.id);
         }
 

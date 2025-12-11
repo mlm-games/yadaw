@@ -128,7 +128,7 @@ impl TracksPanel {
 
             // Select the track when the header is clicked
             if header_resp.clicked() {
-                app.selected_track = track_id;
+                app.select_track(track_id);
             }
 
             // record the header rect and logical index for DnD
@@ -1027,7 +1027,7 @@ impl TracksPanel {
                     }
                 }
 
-                app.selected_track = drag_id;
+                app.select_track(drag_id);
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
             }
 
@@ -1076,7 +1076,7 @@ impl TracksPanel {
                 };
 
                 if let Some(new_id) = new_id_opt {
-                    app.selected_track = new_id;
+                    app.select_track(new_id);
                     let _ = app.command_tx.send(AudioCommand::UpdateTracks);
                     let _ = app.command_tx.send(AudioCommand::RebuildAllRtChains);
                 }
@@ -1109,7 +1109,7 @@ impl TracksPanel {
                 };
 
                 if let Some(ns) = new_selected {
-                    app.selected_track = ns;
+                    app.select_track(ns);
                 }
                 let _ = app.command_tx.send(AudioCommand::UpdateTracks);
             }
