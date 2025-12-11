@@ -1,0 +1,1 @@
+- show int values with labels as enums too
