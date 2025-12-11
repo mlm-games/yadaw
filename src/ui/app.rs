@@ -1093,11 +1093,29 @@ impl YadawApp {
                 self.push_undo();
                 let mut state = self.state.lock().unwrap();
                 clip.id = state.fresh_id();
-                if let Some(track) = state.tracks.get_mut(&track_id) {
+                let clip_id = clip.id;
+
+                let added = if let Some(track) = state.tracks.get_mut(&track_id) {
                     if !matches!(track.track_type, crate::model::track::TrackType::Midi) {
                         track.audio_clips.push(clip);
+                        true
+                    } else {
+                        false
                     }
+                } else {
+                    false
+                };
+
+                if added {
+                    state.clips_by_id.insert(
+                        clip_id,
+                        crate::project::ClipRef {
+                            track_id,
+                            is_midi: false,
+                        },
+                    );
                 }
+
                 drop(state);
                 let _ = self
                     .command_tx
