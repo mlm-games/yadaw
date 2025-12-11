@@ -8,9 +8,9 @@ use crate::transport::Transport;
 
 pub struct TransportUI {
     pub transport: Option<Transport>,
-    loop_start_input: String,
-    loop_end_input: String,
-    bpm_input: String,
+    pub loop_start_input: String,
+    pub loop_end_input: String,
+    pub bpm_input: String,
     position_display: String,
 }
 

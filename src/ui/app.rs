@@ -632,6 +632,18 @@ impl YadawApp {
             .map(|project| {
                 let mut state = self.state.lock().unwrap();
                 state.load_project(project);
+
+                self.audio_state.bpm.store(state.bpm);
+                self.audio_state.loop_start.store(state.loop_start);
+                self.audio_state.loop_end.store(state.loop_end);
+                self.audio_state
+                    .loop_enabled
+                    .store(state.loop_enabled, Ordering::Relaxed);
+
+                self.transport_ui.bpm_input = format!("{:.1}", state.bpm);
+                self.transport_ui.loop_start_input = format!("{:.1}", state.loop_start);
+                self.transport_ui.loop_end_input = format!("{:.1}", state.loop_end);
+
                 state.ensure_ids();
                 drop(state);
 

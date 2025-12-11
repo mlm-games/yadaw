@@ -5,6 +5,14 @@ use std::path::PathBuf;
 use crate::paths::config_path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransportConfig {
+    pub metronome_enabled: bool,
+    pub click_volume: f32,
+    pub count_in_enabled: bool,
+    pub count_in_bars: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub audio: AudioConfig,
     pub ui: UIConfig,
