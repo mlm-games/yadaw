@@ -147,30 +147,30 @@ mod clap_impl {
                 return (ParamKind::Bool, None, unit);
             }
 
-            // Try enum: small stepped range
-            if range > 0 && range <= 32 {
+            const MAX_ENUM_STEPS: i32 = 256;
+            if range > 0 && range <= MAX_ENUM_STEPS {
                 let mut labels = Vec::with_capacity((range + 1) as usize);
                 let mut all_valid = true;
                 let mut all_numeric = true;
 
-                for i in 0..=range {
-                    let value = min + i as f64;
+                for step in 0..=range {
+                    let value = min + step as f64;
                     let mut buf: [MaybeUninit<u8>; 256] = [MaybeUninit::uninit(); 256];
 
                     match params_ext.value_to_text(plugin, info.id, value, &mut buf) {
                         Ok(bytes) => {
-                            let label = String::from_utf8_lossy(bytes)
+                            let text = String::from_utf8_lossy(bytes)
                                 .trim_end_matches('\0')
                                 .trim()
                                 .to_string();
-                            if label.is_empty() {
+                            if text.is_empty() {
                                 all_valid = false;
                                 break;
                             }
-                            if label.parse::<f64>().is_err() {
+                            if text.parse::<f64>().is_err() {
                                 all_numeric = false;
                             }
-                            labels.push(label);
+                            labels.push(text);
                         }
                         Err(_) => {
                             all_valid = false;
@@ -180,7 +180,7 @@ mod clap_impl {
                 }
 
                 if all_valid && labels.len() == (range + 1) as usize && !all_numeric {
-                    return (ParamKind::Enum, Some(labels), None); // Enums don't need unit
+                    return (ParamKind::Enum, Some(labels), None);
                 }
             }
 

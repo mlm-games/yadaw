@@ -674,9 +674,9 @@ impl TracksPanel {
                         }
                         ParamKind::Enum => {
                             if let Some(labels) = &pinfo.enum_labels {
-                                let idx = ((v - pinfo.min).round() as i32)
-                                    .clamp(0, labels.len() as i32 - 1)
-                                    as usize;
+                                let steps = labels.len() as i32 - 1;
+                                // Map current value to index (assuming 1.0 steps)
+                                let idx = ((v - pinfo.min).round() as i32).clamp(0, steps) as usize;
 
                                 let current_label = labels
                                     .get(idx)
@@ -690,7 +690,7 @@ impl TracksPanel {
                                     plugin_id,
                                 ))
                                 .selected_text(current_label)
-                                .width(120.0)
+                                .width(160.0)
                                 .show_ui(ui, |ui| {
                                     ui.set_enabled(!is_readonly);
                                     let mut changed = false;
@@ -709,7 +709,20 @@ impl TracksPanel {
                                     false
                                 }
                             } else {
-                                false
+                                // Fallback to Int slider if somehow enum_labels are missing
+                                let mut int_val = v.round() as i32;
+                                let min_i = pinfo.min.round() as i32;
+                                let max_i = pinfo.max.round() as i32;
+                                let resp = ui.add_enabled(
+                                    !is_readonly,
+                                    egui::Slider::new(&mut int_val, min_i..=max_i)
+                                        .step_by(1.0)
+                                        .show_value(true),
+                                );
+                                if resp.changed() {
+                                    v = int_val as f32;
+                                }
+                                resp.changed()
                             }
                         }
                         ParamKind::Int => {
