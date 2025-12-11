@@ -86,7 +86,7 @@ impl TrackBuilder {
                 format!("{} {}", DEFAULT_MIDI_TRACK_PREFIX, self.id_hint + 1),
                 TrackType::Midi,
             ),
-            UITrackType::Bus => (format!("Bus {}", self.id_hint + 1), TrackType::Audio),
+            UITrackType::Bus => (format!("Bus {}", self.id_hint + 1), TrackType::Bus),
             UITrackType::Master => ("Master".to_string(), TrackType::Audio),
         };
 
