@@ -1,0 +1,4 @@
+- rm few more warns
+- move undo call for duplicate above paste call
+- cmd shift shortcut handling fix
+- add sensible shortcuts and disable keyboard shortcuts while typing in textfields
