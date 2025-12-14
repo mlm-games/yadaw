@@ -461,18 +461,18 @@ impl TimelineView {
         let bg_color = if idx % 2 == 0 {
             base
         } else {
-            egui::Color32::from_rgba_premultiplied(
-                ((base.r() as f32) * 0.93) as u8,
-                ((base.g() as f32) * 0.93) as u8,
-                ((base.b() as f32) * 0.93) as u8,
-                base.a(),
-            )
+            // Slightly lighter/different tint for alternate rows
+            if vis.dark_mode {
+                base.gamma_multiply(1.2)
+            } else {
+                base.gamma_multiply(0.95)
+            }
         };
 
         painter.rect_filled(rect, 0.0, bg_color);
 
         if let Some((r, g, b)) = track_color {
-            let strip_rect = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
+            let strip_rect = egui::Rect::from_min_size(rect.min, egui::vec2(4.0, rect.height()));
             painter.rect_filled(strip_rect, 0.0, egui::Color32::from_rgb(r, g, b));
         }
 
@@ -481,7 +481,7 @@ impl TimelineView {
             egui::Align2::LEFT_TOP,
             &track.name,
             egui::FontId::default(),
-            egui::Color32::WHITE,
+            vis.text_color().gamma_multiply(0.5),
         );
 
         if matches!(track.track_type, TrackType::Midi) {
@@ -523,29 +523,73 @@ impl TimelineView {
             return;
         }
 
-        // Clip color: clip's own color → track color → default gray
-        let clip_color = clip.color.or(track_color).unwrap_or((80, 80, 90));
-        let (r, g, b) = clip_color;
+        // Color Resolution: Clip -> Track -> Default
+        let default_color = if ui.visuals().dark_mode {
+            (70, 75, 80)
+        } else {
+            (200, 200, 210)
+        };
+        let (r, g, b) = clip.color.or(track_color).unwrap_or(default_color);
+        let base_color = egui::Color32::from_rgb(r, g, b);
 
-        // Draw clip background fill (the primary colored element)
-        painter.rect_filled(
+        // Calculate brightness to determine text/waveform contrast
+        let brightness = r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114;
+        let is_light = brightness > 140.0;
+
+        let fg_color = if is_light {
+            egui::Color32::BLACK.gamma_multiply(0.8)
+        } else {
+            egui::Color32::WHITE.gamma_multiply(0.9)
+        };
+
+        // Fill Background
+        painter.rect_filled(clip_rect, 3.0, base_color);
+
+        draw_waveform(
+            painter,
             clip_rect,
-            2.0,
-            egui::Color32::from_rgba_unmultiplied(r, g, b, 60),
+            clip,
+            self.zoom_x,
+            self.scroll_x,
+            fg_color.gamma_multiply(0.6),
         );
 
-        draw_waveform(painter, clip_rect, clip, self.zoom_x, self.scroll_x);
+        // Audio Looping Indicators (Visual only)
+        if clip.loop_enabled {
+            let src_len_beats =
+                (clip.samples.len() as f64 / clip.sample_rate as f64) * (bpm as f64 / 60.0);
+            if src_len_beats > 0.0 && src_len_beats < clip.length_beats {
+                let reps = (clip.length_beats / src_len_beats).ceil() as i32;
+                for k in 1..reps {
+                    let offset_x = (k as f64 * src_len_beats * self.zoom_x as f64) as f32;
+                    let line_x = clip_rect.left() + offset_x;
+                    if line_x < clip_rect.right() {
+                        painter.line_segment(
+                            [
+                                egui::pos2(line_x, clip_rect.top()),
+                                egui::pos2(line_x, clip_rect.bottom()),
+                            ],
+                            egui::Stroke::new(1.0, fg_color.gamma_multiply(0.3)),
+                        );
+                    }
+                }
+            }
+        }
 
-        // Draw color bar at top of clip
-        let bar_rect = egui::Rect::from_min_size(clip_rect.min, egui::vec2(clip_rect.width(), 3.0));
-        painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(r, g, b));
+        let bar_color = if is_light {
+            base_color.gamma_multiply(0.8)
+        } else {
+            base_color.gamma_multiply(1.3) // lighter for dark clips
+        };
+        let bar_rect = egui::Rect::from_min_size(clip_rect.min, egui::vec2(clip_rect.width(), 4.0));
+        painter.rect_filled(bar_rect, 3.0, bar_color);
 
-        // Clip border
-        painter.rect_stroke(
-            clip_rect,
-            2.0,
-            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(r, g, b, 180)),
-            egui::StrokeKind::Inside,
+        painter.text(
+            clip_rect.left_top() + egui::vec2(4.0, 5.0),
+            egui::Align2::LEFT_TOP,
+            &clip.name,
+            egui::FontId::proportional(12.0),
+            fg_color,
         );
 
         let response = ui.interact(
@@ -555,84 +599,76 @@ impl TimelineView {
         );
 
         let is_selected = app.selected_clips.contains(&clip.id);
-        let is_being_dragged = response.is_pointer_button_down_on();
 
-        if is_selected || is_being_dragged {
-            let stroke_color = if is_being_dragged {
-                egui::Color32::from_rgb(100, 150, 255)
-            } else {
-                egui::Color32::WHITE
-            };
-
+        if is_selected {
             painter.rect_stroke(
                 clip_rect,
-                2.0,
-                egui::Stroke::new(2.0, stroke_color),
+                3.0,
+                egui::Stroke::new(2.0, egui::Color32::WHITE),
+                egui::StrokeKind::Outside,
+            );
+        } else {
+            // Subtle border to define edges against lane
+            painter.rect_stroke(
+                clip_rect,
+                3.0,
+                egui::Stroke::new(1.0, bar_color),
                 egui::StrokeKind::Inside,
             );
         }
 
         self.handle_clip_interaction(response, clip.id, ui, clip_rect, app);
 
-        // Fade handles (rest unchanged from original)
-        let in_beats = clip.fade_in.unwrap_or(0.0);
-        let out_beats = clip.fade_out.unwrap_or(0.0);
-        let in_px = (in_beats as f32 * self.zoom_x).clamp(0.0, clip_rect.width());
-        let out_px = (out_beats as f32 * self.zoom_x).clamp(0.0, clip_rect.width());
+        // 6. Draw Fades (Visual feedback)
+        let in_px =
+            (clip.fade_in.unwrap_or(0.0) as f32 * self.zoom_x).clamp(0.0, clip_rect.width());
+        let out_px =
+            (clip.fade_out.unwrap_or(0.0) as f32 * self.zoom_x).clamp(0.0, clip_rect.width());
 
-        // Fade-in overlay + guide
-        if in_px > 0.5 {
-            let overlay = egui::Rect::from_min_size(
-                clip_rect.left_top(),
-                egui::vec2(in_px, clip_rect.height()),
-            );
-            ui.painter().rect_filled(
-                overlay,
-                0.0,
-                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20),
-            );
-            ui.painter().line_segment(
-                [
-                    egui::pos2(clip_rect.left(), clip_rect.bottom()),
-                    egui::pos2(clip_rect.left() + in_px, clip_rect.top()),
-                ],
-                egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+        if in_px > 1.0 {
+            // Fade-in triangle slope visual
+            let p1 = clip_rect.left_bottom();
+            let p2 = clip_rect.left_top() + egui::vec2(in_px, 0.0);
+            let p3 = clip_rect.left_top();
+
+            // Draw a subtle darkening/masking triangle to represent volume attenuation
+            let mut mesh = egui::Mesh::default();
+            let base = mesh.vertices.len() as u32;
+
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.colored_vertex(p1, egui::Color32::from_black_alpha(0));
+            mesh.colored_vertex(p2, egui::Color32::from_black_alpha(0));
+            mesh.colored_vertex(p3, egui::Color32::from_black_alpha(100)); // Darken top-left
+            painter.add(mesh);
+
+            painter.line_segment(
+                [p1, p2],
+                egui::Stroke::new(1.0, fg_color.gamma_multiply(0.5)),
             );
         }
 
-        // Fade-out overlay + guide
-        if out_px > 0.5 {
-            let overlay = egui::Rect::from_min_size(
-                egui::pos2(clip_rect.right() - out_px, clip_rect.top()),
-                egui::vec2(out_px, clip_rect.height()),
-            );
-            ui.painter().rect_filled(
-                overlay,
-                0.0,
-                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20),
-            );
-            ui.painter().line_segment(
-                [
-                    egui::pos2(clip_rect.right() - out_px, clip_rect.top()),
-                    egui::pos2(clip_rect.right(), clip_rect.bottom()),
-                ],
-                egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+        if out_px > 1.0 {
+            // Fade-out line
+            let p1 = clip_rect.right_top() - egui::vec2(out_px, 0.0);
+            let p2 = clip_rect.right_bottom();
+            painter.line_segment(
+                [p1, p2],
+                egui::Stroke::new(1.0, fg_color.gamma_multiply(0.5)),
             );
         }
 
-        // Fade handles (dots at top corners)
+        // Fade handles
         let dot_r = 5.0;
         let left_dot_center = egui::pos2(clip_rect.left() + in_px, clip_rect.top() + 6.0);
         let right_dot_center = egui::pos2(clip_rect.right() - out_px, clip_rect.top() + 6.0);
 
-        // Left (fade in) dot
         {
             let dot_id = ui.id().with(("fade_in_dot", clip.id));
             let dot_rect = egui::Rect::from_center_size(left_dot_center, egui::vec2(14.0, 14.0));
             let resp = ui.interact(dot_rect, dot_id, egui::Sense::click_and_drag());
-            ui.painter()
-                .circle_filled(left_dot_center, dot_r, egui::Color32::from_gray(220));
             if resp.hovered() || resp.dragged() {
+                ui.painter()
+                    .circle_filled(left_dot_center, dot_r, egui::Color32::from_gray(220));
                 ui.painter().circle_stroke(
                     left_dot_center,
                     dot_r + 2.0,
@@ -654,14 +690,13 @@ impl TimelineView {
             }
         }
 
-        // Right (fade out) dot
         {
             let dot_id = ui.id().with(("fade_out_dot", clip.id));
             let dot_rect = egui::Rect::from_center_size(right_dot_center, egui::vec2(14.0, 14.0));
             let resp = ui.interact(dot_rect, dot_id, egui::Sense::click_and_drag());
-            ui.painter()
-                .circle_filled(right_dot_center, dot_r, egui::Color32::from_gray(220));
             if resp.hovered() || resp.dragged() {
+                ui.painter()
+                    .circle_filled(right_dot_center, dot_r, egui::Color32::from_gray(220));
                 ui.painter().circle_stroke(
                     right_dot_center,
                     dot_r + 2.0,
@@ -746,29 +781,31 @@ impl TimelineView {
             return;
         }
 
-        // Clip color: clip's own color → track color → default blue
-        let (r, g, b) = clip.color.or(track_color).unwrap_or((100, 150, 200));
+        // Color Resolution
+        let default_color = if ui.visuals().dark_mode {
+            (50, 80, 120) // Dark blueish
+        } else {
+            (180, 200, 230) // Light blueish
+        };
+        let (r, g, b) = clip.color.or(track_color).unwrap_or(default_color);
+        let base_color = egui::Color32::from_rgb(r, g, b);
 
-        // Clip fill (the primary colored element)
-        let clip_fill = egui::Color32::from_rgba_premultiplied(r, g, b, 196);
-        painter.rect_filled(clip_rect, 4.0, clip_fill);
+        // Contrast Calculation
+        let brightness = r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114;
+        let is_light = brightness > 140.0;
+        let _fg_color = if is_light {
+            egui::Color32::BLACK.gamma_multiply(0.7)
+        } else {
+            egui::Color32::WHITE.gamma_multiply(0.9)
+        };
+        let note_color = if is_light {
+            egui::Color32::BLACK.gamma_multiply(0.5)
+        } else {
+            egui::Color32::WHITE.gamma_multiply(0.6)
+        };
 
-        // Clip border
-        painter.rect_stroke(
-            clip_rect,
-            4.0,
-            egui::Stroke::new(
-                1.0,
-                egui::Color32::from_rgb(
-                    (r as u16 * 140 / 100).min(255) as u8,
-                    (g as u16 * 140 / 100).min(255) as u8,
-                    (b as u16 * 140 / 100).min(255) as u8,
-                ),
-            ),
-            egui::StrokeKind::Middle,
-        );
+        painter.rect_filled(clip_rect, 4.0, base_color);
 
-        // Resolve notes from Pattern
         let base_notes: Vec<MidiNote> = {
             let state = app.state.lock().unwrap();
             if let Some(pid) = clip.pattern_id {
@@ -815,7 +852,11 @@ impl TimelineView {
                         ],
                         egui::Stroke::new(
                             1.0,
-                            egui::Color32::from_rgba_premultiplied(255, 255, 255, 40),
+                            if is_light {
+                                egui::Color32::from_rgba_premultiplied(0, 0, 0, 40)
+                            } else {
+                                egui::Color32::from_rgba_premultiplied(255, 255, 255, 40)
+                            },
                         ),
                     );
                 }
@@ -826,7 +867,6 @@ impl TimelineView {
             .content_offset_beats
             .rem_euclid(clip.content_len_beats.max(0.000001));
 
-        // Draw mini "piano roll" lines
         for k in first_rep..=last_rep {
             let rep_start = k as f64 * content_len;
             if rep_start >= inst_len {
@@ -860,17 +900,16 @@ impl TimelineView {
                         continue;
                     }
 
-                    // Vertical placement (pitch 0..127 -> bottom..top of clip_rect)
                     let note_y =
                         clip_rect.bottom() - ((note.pitch as f32 / 127.0) * clip_rect.height());
 
                     painter.rect_filled(
                         egui::Rect::from_min_size(
                             egui::pos2(seg_left, note_y - 2.0),
-                            egui::vec2((seg_right - seg_left).max(2.0), 2.0),
+                            egui::vec2((seg_right - seg_left).max(2.0), 3.0),
                         ),
-                        0.0,
-                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 100),
+                        1.0,
+                        note_color,
                     );
                 }
             }
@@ -893,21 +932,25 @@ impl TimelineView {
         );
 
         let is_selected = app.selected_clips.contains(&clip.id);
-        let is_being_dragged = response.is_pointer_button_down_on();
 
-        if is_selected || is_being_dragged {
-            let stroke_color = if is_being_dragged {
-                egui::Color32::from_rgb(100, 150, 255)
+        let stroke_color = if is_selected {
+            egui::Color32::WHITE
+        } else {
+            // Darker/Lighter border of base color
+            if is_light {
+                base_color.gamma_multiply(0.7)
             } else {
-                egui::Color32::WHITE
-            };
-            painter.rect_stroke(
-                clip_rect,
-                4.0,
-                egui::Stroke::new(2.0, stroke_color),
-                egui::StrokeKind::Inside,
-            );
-        }
+                base_color.gamma_multiply(1.3)
+            }
+        };
+        let stroke_width = if is_selected { 2.0 } else { 1.0 };
+
+        painter.rect_stroke(
+            clip_rect,
+            4.0,
+            egui::Stroke::new(stroke_width, stroke_color),
+            egui::StrokeKind::Inside,
+        );
 
         if response.double_clicked() {
             app.select_track(track_id);
@@ -1291,7 +1334,7 @@ impl TimelineView {
                                 clip_ids_and_starts.iter().map(|(cid, _)| *cid).collect();
 
                             // Helper: punch-out (cut-in) overlapped regions on destination track
-                            let mut punch_out = |start: f64, end: f64, is_midi: bool| {
+                            let punch_out = |start: f64, end: f64, is_midi: bool| {
                                 if is_midi {
                                     for c in &dest_clips_midi {
                                         if sel_ids.contains(&c.id) {
@@ -1707,7 +1750,7 @@ impl TimelineView {
                             .unwrap_or(AutomationMode::Read)
                     };
 
-                    let mut mode = current_mode;
+                    let mode = current_mode;
                     // egui::ComboBox::from_id_salt(("auto_mode", track_id, lane_idx as u64))
                     //     .width(90.0)
                     //     .selected_text(match mode {
