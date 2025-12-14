@@ -9,7 +9,6 @@ use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::{BackendKind, ParamKind};
 use crate::model::track::TrackType;
 use crate::plugin::get_control_port_info;
-use crate::project::AppState;
 
 pub struct TracksPanel {
     track_meters: HashMap<u64, LevelMeter>,

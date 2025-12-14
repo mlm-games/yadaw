@@ -4,11 +4,10 @@ use crossbeam_channel::Sender;
 use egui::scroll_area::ScrollSource;
 use egui::{Sense, UiBuilder};
 
-use super::*;
 use crate::audio_state::AudioState;
-use crate::constants::{DEFAULT_MIDI_CLIP_LEN, PIANO_KEY_WIDTH};
+use crate::constants::DEFAULT_MIDI_CLIP_LEN;
 use crate::messages::AudioCommand;
-use crate::model::{MidiClip, MidiNote};
+use crate::model::MidiNote;
 use crate::project::AppState;
 use crate::ui::piano_roll::{PianoRoll, PianoRollAction};
 
@@ -215,8 +214,9 @@ impl PianoRollView {
         let mut mutation_actions = Vec::new();
         for a in actions {
             match a {
-                super::piano_roll::PianoRollAction::PreviewNote(_)
-                | super::piano_roll::PianoRollAction::StopPreview => preview_actions.push(a),
+                PianoRollAction::PreviewNote(_) | PianoRollAction::StopPreview => {
+                    preview_actions.push(a)
+                }
                 _ => mutation_actions.push(a),
             }
         }
@@ -224,18 +224,13 @@ impl PianoRollView {
         // Previews
         for action in preview_actions {
             match action {
-                super::piano_roll::PianoRollAction::PreviewNote(pitch) => {
+                PianoRollAction::PreviewNote(pitch) => {
                     let _ = app
                         .command_tx
-                        .send(crate::messages::AudioCommand::PreviewNote(
-                            app.selected_track,
-                            pitch,
-                        ));
+                        .send(AudioCommand::PreviewNote(app.selected_track, pitch));
                 }
-                super::piano_roll::PianoRollAction::StopPreview => {
-                    let _ = app
-                        .command_tx
-                        .send(crate::messages::AudioCommand::StopPreviewNote);
+                PianoRollAction::StopPreview => {
+                    let _ = app.command_tx.send(AudioCommand::StopPreviewNote);
                 }
                 _ => {}
             }
@@ -252,38 +247,32 @@ impl PianoRollView {
         // Translate UI actions into ID-based commands
         for action in mutation_actions {
             match action {
-                super::piano_roll::PianoRollAction::AddNote(mut note) => {
+                PianoRollAction::AddNote(mut note) => {
                     // New notes may come with id=0; processor will assign
-                    let _ = app
-                        .command_tx
-                        .send(crate::messages::AudioCommand::AddNotesToClip {
-                            clip_id,
-                            notes: vec![note],
-                        });
+                    let _ = app.command_tx.send(AudioCommand::AddNotesToClip {
+                        clip_id,
+                        notes: vec![note],
+                    });
                 }
-                super::piano_roll::PianoRollAction::RemoveNote(idx) => {
+                PianoRollAction::RemoveNote(idx) => {
                     if let Some(id) = id_at_index(idx) {
-                        let _ =
-                            app.command_tx
-                                .send(crate::messages::AudioCommand::RemoveNotesById {
-                                    clip_id,
-                                    note_ids: vec![id],
-                                });
+                        let _ = app.command_tx.send(AudioCommand::RemoveNotesById {
+                            clip_id,
+                            note_ids: vec![id],
+                        });
                     }
                 }
-                super::piano_roll::PianoRollAction::UpdateNote(idx, mut updated) => {
+                PianoRollAction::UpdateNote(idx, mut updated) => {
                     // Use the original note's ID to update the correct pattern entry
                     if let Some(id) = id_at_index(idx) {
                         updated.id = id;
-                        let _ =
-                            app.command_tx
-                                .send(crate::messages::AudioCommand::UpdateNotesById {
-                                    clip_id,
-                                    notes: vec![updated],
-                                });
+                        let _ = app.command_tx.send(AudioCommand::UpdateNotesById {
+                            clip_id,
+                            notes: vec![updated],
+                        });
                     }
                 }
-                super::piano_roll::PianoRollAction::DuplicateNotesAndSelect {
+                PianoRollAction::DuplicateNotesAndSelect {
                     original_notes: _,
                     drag_offset_beats,
                     drag_offset_semitones,
@@ -298,31 +287,27 @@ impl PianoRollView {
                         }
                     }
                     if !ids.is_empty() {
-                        let _ = app.command_tx.send(
-                            crate::messages::AudioCommand::DuplicateNotesWithOffset {
-                                clip_id,
-                                source_note_ids: ids,
-                                delta_beats: drag_offset_beats,
-                                delta_semitones: drag_offset_semitones,
-                            },
-                        );
+                        let _ = app.command_tx.send(AudioCommand::DuplicateNotesWithOffset {
+                            clip_id,
+                            source_note_ids: ids,
+                            delta_beats: drag_offset_beats,
+                            delta_semitones: drag_offset_semitones,
+                        });
                     }
                 }
-                super::piano_roll::PianoRollAction::AddNotes(notes) => {
+                PianoRollAction::AddNotes(notes) => {
                     let _ = app
                         .command_tx
-                        .send(crate::messages::AudioCommand::AddNotesToClip { clip_id, notes });
+                        .send(AudioCommand::AddNotesToClip { clip_id, notes });
                 }
-                super::piano_roll::PianoRollAction::RemoveNotes(indices) => {
+                PianoRollAction::RemoveNotes(indices) => {
                     let ids: Vec<u64> =
                         indices.into_iter().filter_map(|i| id_at_index(i)).collect();
                     if !ids.is_empty() {
-                        let _ =
-                            app.command_tx
-                                .send(crate::messages::AudioCommand::RemoveNotesById {
-                                    clip_id,
-                                    note_ids: ids,
-                                });
+                        let _ = app.command_tx.send(AudioCommand::RemoveNotesById {
+                            clip_id,
+                            note_ids: ids,
+                        });
                     }
                 }
                 // Ignored here: PreviewNote/StopPreview handled above
@@ -644,12 +629,10 @@ impl PianoRollView {
         }
 
         if !pending_updates.is_empty() {
-            let _ = app
-                .command_tx
-                .send(crate::messages::AudioCommand::UpdateNotesById {
-                    clip_id,
-                    notes: pending_updates,
-                });
+            let _ = app.command_tx.send(AudioCommand::UpdateNotesById {
+                clip_id,
+                notes: pending_updates,
+            });
         }
     }
 

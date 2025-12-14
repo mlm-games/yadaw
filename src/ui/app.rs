@@ -1,7 +1,6 @@
-use super::*;
 use crate::audio_state::AudioState;
 use crate::config::Config;
-use crate::constants::{DEFAULT_GRID_SNAP, DEFAULT_MIN_PROJECT_BEATS};
+use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
@@ -13,7 +12,7 @@ use crate::model::plugin_api::UnifiedPluginInfo;
 use crate::model::track::TrackType;
 use crate::model::{AudioClip, MidiNote, Track};
 use crate::paths::{current_theme_path, custom_themes_path, shortcuts_path};
-use crate::performance::{PerformanceMetrics, PerformanceMonitor};
+use crate::performance::PerformanceMonitor;
 use crate::project::{AppState, AppStateSnapshot, ClipLocation};
 use crate::project_manager::ProjectManager;
 
@@ -1207,7 +1206,7 @@ impl YadawApp {
                     let mut state = self.state.lock().unwrap();
                     if let Some(track) = state.tracks.get_mut(&track_id) {
                         if let Some(plugin) = track.plugin_chain.get_mut(plugin_idx) {
-                            for (param_info) in &params {
+                            for param_info in &params {
                                 plugin
                                     .params
                                     .insert(param_info.name.clone(), param_info.current);

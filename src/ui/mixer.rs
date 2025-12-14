@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use super::*;
 use crate::{level_meter::LevelMeter, model::track::TrackType};
 
 pub struct MixerWindow {
