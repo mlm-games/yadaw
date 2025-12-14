@@ -37,7 +37,6 @@ pub mod time_utils;
 pub mod track_manager;
 pub mod transport;
 pub mod ui;
-pub mod waveform;
 
 #[cfg(target_os = "android")]
 use android_activity::WindowManagerFlags;

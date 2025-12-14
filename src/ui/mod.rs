@@ -10,6 +10,7 @@ mod theme;
 mod timeline;
 mod tracks;
 mod transport;
+mod waveform;
 
 pub use app::YadawApp;
 pub use color_picker::ColorPicker;

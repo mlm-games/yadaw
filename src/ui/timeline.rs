@@ -1,14 +1,12 @@
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use super::*;
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
 use crate::model::track::TrackType;
 use crate::model::{AudioClip, AutomationTarget, MidiClip, MidiNote, Track};
 use crate::project::ClipLocation;
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
-use crate::waveform::draw_waveform;
+use crate::ui::waveform::draw_waveform;
 use egui::scroll_area::ScrollSource;
 
 pub struct TimelineView {
