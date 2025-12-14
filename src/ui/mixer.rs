@@ -213,6 +213,20 @@ impl MixerWindow {
     ) {
         ui.allocate_ui(egui::vec2(strip_width, ui.available_height()), |ui| {
             ui.vertical(|ui| {
+
+                 if let Some((r, g, b)) = track.color {
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 4.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(r, g, b));
+                }
+
+                 ui.group(|ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.label(&track.name);
+                });
+                
                 // Channel name
                 ui.group(|ui| {
                     ui.set_min_width(ui.available_width());

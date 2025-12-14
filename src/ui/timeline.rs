@@ -454,9 +454,12 @@ impl TimelineView {
         track_id: u64,
         app: &mut super::app::YadawApp,
     ) {
+        let track_color = track.color;
+
         let vis = ui.visuals();
         let base = vis.extreme_bg_color;
         let idx = app.track_id_to_index(track_id).unwrap_or(0);
+
         let bg_color = if idx % 2 == 0 {
             base
         } else {
@@ -467,10 +470,16 @@ impl TimelineView {
                 base.a(),
             )
         };
+
         painter.rect_filled(rect, 0.0, bg_color);
 
+        if let Some((r, g, b)) = track_color {
+            let strip_rect = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
+            painter.rect_filled(strip_rect, 0.0, egui::Color32::from_rgb(r, g, b));
+        }
+
         painter.text(
-            rect.min + egui::vec2(5.0, 5.0),
+            rect.min + egui::vec2(8.0, 5.0),
             egui::Align2::LEFT_TOP,
             &track.name,
             egui::FontId::default(),
@@ -479,11 +488,11 @@ impl TimelineView {
 
         if matches!(track.track_type, TrackType::Midi) {
             for clip in &track.midi_clips {
-                self.draw_midi_clip(painter, ui, rect, clip, track_id, app);
+                self.draw_midi_clip(painter, ui, rect, clip, track_id, app, track_color);
             }
         } else {
             for clip in &track.audio_clips {
-                self.draw_audio_clip(painter, ui, rect, clip, track_id, app);
+                self.draw_audio_clip(painter, ui, rect, clip, track_id, app, track_color);
             }
         }
     }
@@ -496,6 +505,7 @@ impl TimelineView {
         clip: &AudioClip,
         _track_id: u64,
         app: &mut super::app::YadawApp,
+        track_color: Option<(u8, u8, u8)>,
     ) {
         let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
 
@@ -515,16 +525,30 @@ impl TimelineView {
             return;
         }
 
+        // Clip color: clip's own color → track color → default gray
+        let clip_color = clip.color.or(track_color).unwrap_or((80, 80, 90));
+        let (r, g, b) = clip_color;
+
+        // Draw clip background fill (the primary colored element)
+        painter.rect_filled(
+            clip_rect,
+            2.0,
+            egui::Color32::from_rgba_unmultiplied(r, g, b, 60),
+        );
+
         draw_waveform(painter, clip_rect, clip, self.zoom_x, self.scroll_x);
 
-        if app.selected_clips.contains(&clip.id) {
-            painter.rect_stroke(
-                clip_rect,
-                2.0,
-                egui::Stroke::new(2.0, egui::Color32::WHITE),
-                egui::StrokeKind::Inside,
-            );
-        }
+        // Draw color bar at top of clip
+        let bar_rect = egui::Rect::from_min_size(clip_rect.min, egui::vec2(clip_rect.width(), 3.0));
+        painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(r, g, b));
+
+        // Clip border
+        painter.rect_stroke(
+            clip_rect,
+            2.0,
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(r, g, b, 180)),
+            egui::StrokeKind::Inside,
+        );
 
         let response = ui.interact(
             clip_rect,
@@ -552,6 +576,7 @@ impl TimelineView {
 
         self.handle_clip_interaction(response, clip.id, ui, clip_rect, app);
 
+        // Fade handles (rest unchanged from original)
         let in_beats = clip.fade_in.unwrap_or(0.0);
         let out_beats = clip.fade_out.unwrap_or(0.0);
         let in_px = (in_beats as f32 * self.zoom_x).clamp(0.0, clip_rect.width());
@@ -568,7 +593,6 @@ impl TimelineView {
                 0.0,
                 egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20),
             );
-            // thin guide curve (straight line; engine uses equal-power)
             ui.painter().line_segment(
                 [
                     egui::pos2(clip_rect.left(), clip_rect.bottom()),
@@ -620,7 +644,6 @@ impl TimelineView {
             if resp.dragged() {
                 if let Some(pos) = resp.interact_pointer_pos() {
                     let beat_at_cursor = self.x_to_beat(track_rect, pos.x);
-                    // duration in beats relative to clip start
                     let mut new_len =
                         (beat_at_cursor - clip.start_beat).clamp(0.0, clip.length_beats);
                     let (snapped, _) =
@@ -710,6 +733,7 @@ impl TimelineView {
         clip: &crate::model::clip::MidiClip,
         track_id: u64,
         app: &mut super::app::YadawApp,
+        track_color: Option<(u8, u8, u8)>,
     ) {
         // Compute clip rectangle
         let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
@@ -724,18 +748,25 @@ impl TimelineView {
             return;
         }
 
-        // Background/outline
-        let clip_fill = if let Some((r, g, b)) = clip.color {
-            egui::Color32::from_rgba_premultiplied(r, g, b, 196)
-        } else {
-            egui::Color32::from_rgba_premultiplied(100, 150, 200, 196)
-        };
+        // Clip color: clip's own color → track color → default blue
+        let (r, g, b) = clip.color.or(track_color).unwrap_or((100, 150, 200));
+
+        // Clip fill (the primary colored element)
+        let clip_fill = egui::Color32::from_rgba_premultiplied(r, g, b, 196);
         painter.rect_filled(clip_rect, 4.0, clip_fill);
 
+        // Clip border
         painter.rect_stroke(
             clip_rect,
             4.0,
-            egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgb(
+                    (r as u16 * 140 / 100).min(255) as u8,
+                    (g as u16 * 140 / 100).min(255) as u8,
+                    (b as u16 * 140 / 100).min(255) as u8,
+                ),
+            ),
             egui::StrokeKind::Middle,
         );
 
@@ -753,12 +784,11 @@ impl TimelineView {
             }
         };
 
-        // Content-loop preview (same logic as before, but using base_notes)
+        // Content-loop preview
         let content_len = clip.content_len_beats.max(0.000001);
         let inst_len = clip.length_beats.max(0.0);
         let clip_left = clip_rect.left();
 
-        // Determine the visible pattern window relative to the clip
         let vis_start_rel: f64 =
             ((track_rect.left() - clip_left) as f64 + self.scroll_x as f64) / self.zoom_x as f64;
         let vis_end_rel: f64 =
@@ -857,7 +887,7 @@ impl TimelineView {
             egui::Color32::WHITE,
         );
 
-        // Interaction (selection, drag, resize) — unchanged from your existing code
+        // Interaction
         let response = ui.interact(
             clip_rect,
             ui.id().with(("midi_clip", clip.id)),

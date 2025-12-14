@@ -1,5 +1,6 @@
 mod app;
 mod automation_lane;
+mod color_picker;
 mod dialogs;
 mod menu_bar;
 mod mixer;
@@ -11,10 +12,5 @@ mod tracks;
 mod transport;
 
 pub use app::YadawApp;
+pub use color_picker::ColorPicker;
 pub use theme::{Theme, ThemeManager};
-
-// Re-export commonly used types
-use crate::messages::{AudioCommand, UIUpdate};
-use crossbeam_channel::Sender;
-use eframe::egui;
-use std::sync::{Arc, Mutex};

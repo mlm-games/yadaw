@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use crossbeam_channel::Sender;
 use egui::scroll_area::ScrollSource;
 
 use super::*;

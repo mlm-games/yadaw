@@ -6,7 +6,7 @@ use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
-use crate::messages::PluginParamInfo;
+use crate::messages::{AudioCommand, PluginParamInfo, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::UnifiedPluginInfo;

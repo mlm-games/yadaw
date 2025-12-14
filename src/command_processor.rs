@@ -13,7 +13,7 @@ use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
 use crate::model::plugin_api::BackendKind;
 use crate::model::track::TrackType;
-use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor};
+use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor, TrackGroup};
 use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::{AppState, ClipLocation, ClipRef};
 use crate::time_utils::quick::samples_to_beats;
@@ -978,25 +978,23 @@ fn process_command(
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
-        AudioCommand::CreateGroup(_name, track_ids) => {
-            // Assign a compact new group id (max+1).
+        AudioCommand::CreateGroup(name, track_ids) => {
             let mut st = app_state.lock().unwrap();
-            let next_gid = st
-                .tracks
-                .values()
-                .filter_map(|t| t.group_id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1);
+            let group_id = idgen::next();
+
+            let group = TrackGroup::new(group_id, name);
+            st.groups.insert(group_id, group);
+
             for tid in track_ids {
                 if let Some(t) = st.tracks.get_mut(&tid) {
-                    t.group_id = Some(next_gid);
+                    t.group_id = Some(group_id);
                 }
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::RemoveGroup(group_id) => {
             let mut st = app_state.lock().unwrap();
+            st.groups.remove(&group_id);
             for t in st.tracks.values_mut() {
                 if t.group_id == Some(group_id) {
                     t.group_id = None;
@@ -1006,8 +1004,10 @@ fn process_command(
         }
         AudioCommand::AddTrackToGroup(track_id, group_id) => {
             let mut st = app_state.lock().unwrap();
-            if let Some(t) = st.tracks.get_mut(&track_id) {
-                t.group_id = Some(group_id);
+            if st.groups.contains_key(&group_id) {
+                if let Some(t) = st.tracks.get_mut(&track_id) {
+                    t.group_id = Some(group_id);
+                }
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
@@ -1015,6 +1015,55 @@ fn process_command(
             let mut st = app_state.lock().unwrap();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 t.group_id = None;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetTrackColor(track_id, r, g, b) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                t.color = Some((r, g, b));
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::RenameGroup(group_id, name) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(g) = st.groups.get_mut(&group_id) {
+                g.name = name;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetGroupColor(group_id, r, g, b) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(gr) = st.groups.get_mut(&group_id) {
+                gr.color = (r, g, b);
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetGroupLinkVolume(group_id, link) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(g) = st.groups.get_mut(&group_id) {
+                g.link_volume = link;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetGroupLinkMute(group_id, link) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(g) = st.groups.get_mut(&group_id) {
+                g.link_mute = link;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetGroupLinkSolo(group_id, link) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(g) = st.groups.get_mut(&group_id) {
+                g.link_solo = link;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::ToggleGroupCollapsed(group_id) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(g) = st.groups.get_mut(&group_id) {
+                g.collapsed = !g.collapsed;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }

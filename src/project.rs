@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::clip::MidiPattern;
-use crate::model::{MidiNote, Track};
+use crate::model::{MidiNote, Track, TrackGroup};
 use crate::time_utils::TimeConverter;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -17,6 +17,7 @@ pub struct AppState {
     pub clips_by_id: HashMap<u64, ClipRef>,
     /// Shared MIDI patterns (for alias clips)
     pub patterns: HashMap<u64, MidiPattern>,
+    pub groups: HashMap<u64, TrackGroup>,
 
     pub master_volume: f32,
     pub playing: bool,
@@ -46,6 +47,7 @@ impl Default for AppState {
             track_order: Vec::new(),
             clips_by_id: HashMap::new(),
             patterns: HashMap::new(),
+            groups: HashMap::new(),
             master_volume: 0.8,
             playing: false,
             recording: false,
@@ -68,6 +70,7 @@ pub struct AppStateSnapshot {
     pub track_order: Vec<u64>,
     pub master_volume: f32,
     pub patterns: HashMap<u64, MidiPattern>,
+    pub groups: HashMap<u64, TrackGroup>,
     pub bpm: f32,
     pub loop_start: f64,
     pub loop_end: f64,
@@ -84,6 +87,7 @@ impl AppState {
             tracks: self.tracks.clone(),
             track_order: self.track_order.clone(),
             patterns: self.patterns.clone(),
+            groups: self.groups.clone(),
             bpm: self.bpm,
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
@@ -100,6 +104,7 @@ impl AppState {
         self.tracks = snapshot.tracks;
         self.track_order = snapshot.track_order;
         self.patterns = snapshot.patterns;
+        self.groups = snapshot.groups;
         self.bpm = snapshot.bpm;
         self.time_signature = snapshot.time_signature;
         self.sample_rate = snapshot.sample_rate;
@@ -196,6 +201,11 @@ impl AppState {
             self.patterns.insert(pat.id, pat);
         }
 
+        self.groups.clear();
+        for group in project.groups {
+            self.groups.insert(group.id, group);
+        }
+
         self.bpm = project.bpm;
         self.time_signature = project.time_signature;
         self.sample_rate = project.sample_rate;
@@ -221,6 +231,7 @@ impl AppState {
             name: "Untitled Project".to_string(),
             tracks,
             patterns: self.patterns.values().cloned().collect(),
+            groups: self.groups.values().cloned().collect(),
             bpm: self.bpm,
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
@@ -406,6 +417,14 @@ impl AppState {
         }
         max_id
     }
+
+    pub fn get_group_members(&self, group_id: u64) -> Vec<u64> {
+        self.tracks
+            .iter()
+            .filter(|(_, t)| t.group_id == Some(group_id))
+            .map(|(&id, _)| id)
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -420,6 +439,7 @@ pub struct Project {
     pub name: String,
     pub tracks: Vec<Track>, // For serialization compatibility
     pub patterns: Vec<MidiPattern>,
+    pub groups: Vec<TrackGroup>,
     pub bpm: f32,
     pub time_signature: (i32, i32),
     pub sample_rate: f32,

@@ -168,8 +168,8 @@ pub enum AudioCommand {
     SetSendAmount(u64, usize, f32),
     SetSendPreFader(u64, usize, bool),
     CreateGroup(String, Vec<u64>),
-    RemoveGroup(usize),
-    AddTrackToGroup(u64, usize),
+    RemoveGroup(u64),
+    AddTrackToGroup(u64, u64),
     RemoveTrackFromGroup(u64),
 
     ToggleClipLoop {
@@ -277,6 +277,13 @@ pub enum AudioCommand {
         delta_beats: f64,
         delta_semitones: i32,
     },
+    RenameGroup(u64, String),
+    SetGroupColor(u64, u8, u8, u8),
+    SetGroupLinkVolume(u64, bool),
+    SetGroupLinkMute(u64, bool),
+    SetGroupLinkSolo(u64, bool),
+    ToggleGroupCollapsed(u64),
+    SetTrackColor(u64, u8, u8, u8),
 }
 
 #[derive(Debug, Clone)]

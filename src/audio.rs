@@ -11,7 +11,7 @@ use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::{ChannelStrip, MixerEngine};
 use crate::model::clip::AudioClip;
 use crate::model::plugin_api::{
-    BackendKind, HostConfig, MidiEvent, ParamKey, PluginInstance, ProcessCtx, RtMidiEvent,
+    BackendKind, HostConfig, MidiEvent, ParamKey, ProcessCtx, RtMidiEvent,
 };
 use crate::model::track::TrackType;
 use crate::plugin_facade::HostFacade;
@@ -20,7 +20,6 @@ use crate::time_utils::TimeConverter;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use rtrb::{Consumer, RingBuffer};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;

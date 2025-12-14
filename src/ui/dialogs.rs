@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use egui_file_dialog::FileDialog;
 
@@ -2027,8 +2028,10 @@ impl Default for DialogManager {
 pub struct TrackGroupingDialog {
     closed: bool,
     new_group_name: String,
-    selected_tracks: Vec<usize>,
-    selected_group: Option<usize>,
+    selected_tracks: Vec<u64>,
+    selected_group: Option<u64>,
+    editing_group: Option<u64>,
+    edit_name: String,
 }
 
 impl TrackGroupingDialog {
@@ -2038,6 +2041,8 @@ impl TrackGroupingDialog {
             new_group_name: String::from("New Group"),
             selected_tracks: Vec::new(),
             selected_group: None,
+            editing_group: None,
+            edit_name: String::new(),
         }
     }
 
@@ -2047,36 +2052,100 @@ impl TrackGroupingDialog {
         egui::Window::new("Track Grouping")
             .open(&mut open)
             .resizable(true)
-            .default_size(egui::vec2(420.0, 420.0))
+            .default_size(egui::vec2(500.0, 500.0))
             .show(ctx, |ui| {
-                ui.heading("Groups");
-
-                // Build group list from current tracks
-                let (groups, order, names): (Vec<usize>, Vec<u64>, Vec<String>) = {
+                let (groups, order, track_info): (
+                    Vec<crate::model::group::TrackGroup>,
+                    Vec<u64>,
+                    Vec<(u64, String, Option<u64>)>,
+                ) = {
                     let st = app.state.lock().unwrap();
-                    let mut gids: Vec<usize> = st.tracks.values()
-                        .filter_map(|t| t.group_id)
-                        .collect();
-                    gids.sort_unstable();
-                    gids.dedup();
-
+                    let groups: Vec<_> = st.groups.values().cloned().collect();
                     let order = st.track_order.clone();
-                    let names = order.iter()
-                        .filter_map(|tid| st.tracks.get(tid).map(|t| t.name.clone()))
-                        .collect::<Vec<_>>();
-
-                    (gids, order, names)
+                    let info = order
+                        .iter()
+                        .filter_map(|&tid| {
+                            st.tracks.get(&tid).map(|t| (tid, t.name.clone(), t.group_id))
+                        })
+                        .collect();
+                    (groups, order, info)
                 };
+
+                ui.heading("Groups");
 
                 ui.group(|ui| {
                     ui.label("Existing Groups:");
                     if groups.is_empty() {
                         ui.label(egui::RichText::new("(none)").weak());
                     } else {
-                        for gid in &groups {
-                            let selected = self.selected_group == Some(*gid);
-                            if ui.selectable_label(selected, format!("Group {}", gid)).clicked() {
-                                self.selected_group = Some(*gid);
+                        for group in &groups {
+                            let selected = self.selected_group == Some(group.id);
+                            
+                            ui.horizontal(|ui| {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(16.0, 16.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    rect,
+                                    3.0,
+                                    egui::Color32::from_rgb(group.color.0, group.color.1, group.color.2),
+                                );
+
+                                if self.editing_group == Some(group.id) {
+                                    let response = ui.text_edit_singleline(&mut self.edit_name);
+                                    if response.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                        let _ = app.command_tx.send(
+                                            AudioCommand::RenameGroup(group.id, self.edit_name.clone())
+                                        );
+                                        self.editing_group = None;
+                                    }
+                                } else if ui.selectable_label(selected, &group.name).clicked() {
+                                    self.selected_group = Some(group.id);
+                                }
+
+                                let member_count = track_info.iter().filter(|(_, _, gid)| *gid == Some(group.id)).count();
+                                ui.weak(format!("({} tracks)", member_count));
+
+                                if ui.small_button("✏").on_hover_text("Rename").clicked() {
+                                    self.editing_group = Some(group.id);
+                                    self.edit_name = group.name.clone();
+                                }
+
+                                ui.menu_button("🎨", |ui| {
+                                    if let Some((r, g, b)) = super::color_picker::ColorPicker::palette_grid(ui, group.color) {
+                                        let _ = app.command_tx.send(
+                                            AudioCommand::SetGroupColor(group.id, r, g, b)
+                                        );
+                                        ui.close();
+                                    }
+                                });
+                            });
+
+                            if selected {
+                                ui.indent("group_links", |ui| {
+                                    ui.horizontal(|ui| {
+                                        let mut link_vol = group.link_volume;
+                                        let mut link_mute = group.link_mute;
+                                        let mut link_solo = group.link_solo;
+
+                                        if ui.checkbox(&mut link_vol, "Link Volume").changed() {
+                                            let _ = app.command_tx.send(
+                                                AudioCommand::SetGroupLinkVolume(group.id, link_vol)
+                                            );
+                                        }
+                                        if ui.checkbox(&mut link_mute, "Link Mute").changed() {
+                                            let _ = app.command_tx.send(
+                                                AudioCommand::SetGroupLinkMute(group.id, link_mute)
+                                            );
+                                        }
+                                        if ui.checkbox(&mut link_solo, "Link Solo").changed() {
+                                            let _ = app.command_tx.send(
+                                                AudioCommand::SetGroupLinkSolo(group.id, link_solo)
+                                            );
+                                        }
+                                    });
+                                });
                             }
                         }
                     }
@@ -2105,44 +2174,55 @@ impl TrackGroupingDialog {
                     });
 
                     ui.label("Select tracks:");
-                    let mut selected_tids: Vec<u64> = Vec::new();
 
-                    // Build checkboxes against the current order
-                    for (i, tid) in order.iter().enumerate() {
-                        let mut checked = self.selected_tracks.contains(&i);
-                        if ui.checkbox(&mut checked, &names[i]).changed() {
+                    for (tid, name, current_group) in &track_info {
+                        let mut checked = self.selected_tracks.contains(tid);
+                        let group_label = current_group
+                            .and_then(|gid| groups.iter().find(|g| g.id == gid))
+                            .map(|g| format!(" [{}]", g.name))
+                            .unwrap_or_default();
+
+                        if ui.checkbox(&mut checked, format!("{}{}", name, group_label)).changed() {
                             if checked {
-                                self.selected_tracks.push(i);
+                                self.selected_tracks.push(*tid);
                             } else {
-                                self.selected_tracks.retain(|&idx| idx != i);
+                                self.selected_tracks.retain(|&id| id != *tid);
                             }
-                        }
-                        if checked {
-                            selected_tids.push(*tid);
                         }
                     }
 
                     ui.horizontal(|ui| {
-                        if ui.add_enabled(!selected_tids.is_empty(), egui::Button::new("Create Group")).clicked() {
+                        if ui
+                            .add_enabled(!self.selected_tracks.is_empty(), egui::Button::new("Create Group"))
+                            .clicked()
+                        {
                             let _ = app.command_tx.send(AudioCommand::CreateGroup(
                                 self.new_group_name.clone(),
-                                selected_tids.clone(),
+                                self.selected_tracks.clone(),
                             ));
-                            // reset selection
                             self.selected_tracks.clear();
                         }
 
-                        if ui.add_enabled(self.selected_group.is_some() && !selected_tids.is_empty(), egui::Button::new("Add to Selected Group")).clicked() {
+                        if ui
+                            .add_enabled(
+                                self.selected_group.is_some() && !self.selected_tracks.is_empty(),
+                                egui::Button::new("Add to Selected Group"),
+                            )
+                            .clicked()
+                        {
                             if let Some(gid) = self.selected_group {
-                                for tid in &selected_tids {
+                                for tid in &self.selected_tracks {
                                     let _ = app.command_tx.send(AudioCommand::AddTrackToGroup(*tid, gid));
                                 }
                             }
                             self.selected_tracks.clear();
                         }
 
-                        if ui.add_enabled(!selected_tids.is_empty(), egui::Button::new("Remove from Group")).clicked() {
-                            for tid in &selected_tids {
+                        if ui
+                            .add_enabled(!self.selected_tracks.is_empty(), egui::Button::new("Remove from Group"))
+                            .clicked()
+                        {
+                            for tid in &self.selected_tracks {
                                 let _ = app.command_tx.send(AudioCommand::RemoveTrackFromGroup(*tid));
                             }
                             self.selected_tracks.clear();

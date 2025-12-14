@@ -173,106 +173,147 @@ impl TracksPanel {
         app: &super::app::YadawApp,
         mut on_action: impl FnMut(&'a str),
     ) -> egui::Response {
-        // Query current name and type
-        let (name, is_midi, is_frozen) = {
+        let (name, is_midi, is_frozen, track_color, group_info) = {
             let state = app.state.lock().unwrap();
-            state
-                .tracks
-                .get(&track_id)
-                .map(|t| {
-                    (
-                        t.name.clone(),
-                        matches!(t.track_type, TrackType::Midi),
-                        t.frozen,
-                    )
-                })
-                .unwrap_or_else(|| ("Unknown".to_string(), false, false))
+            let track = state.tracks.get(&track_id);
+            let group = track
+                .and_then(|t| t.group_id)
+                .and_then(|gid| state.groups.get(&gid));
+
+            (
+                track
+                    .map(|t| t.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                track
+                    .map(|t| matches!(t.track_type, TrackType::Midi))
+                    .unwrap_or(false),
+                track.map(|t| t.frozen).unwrap_or(false),
+                track.and_then(|t| t.color),
+                group.map(|g| (g.name.clone(), g.color)),
+            )
         };
 
-        // Draw a framed header
-        let inner = egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                // Selected marker
-                if is_selected {
-                    ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "▶");
-                } else {
-                    ui.label(" ");
-                }
+        // Background tint from track color only (not group)
+        let bg_tint =
+            track_color.map(|(r, g, b)| egui::Color32::from_rgba_unmultiplied(r, g, b, 30));
 
-                // Tiny intensity viewer (uses your existing LevelMeter; non-vertical)
-                if let Some(meter) = self.track_meters.get(&track_id) {
-                    // render compactly
-                    ui.scope(|ui| {
-                        // Shrink spacing to keep header height reasonable
-                        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
-                        ui.add(egui::Separator::default().spacing(4.0));
-                        // Draw in a small reserved space
-                        let (resp, painter) =
-                            ui.allocate_painter(egui::vec2(60.0, 10.0), egui::Sense::hover());
-                        let peak = meter.clone().data.peak_normalized();
-                        let w = (resp.rect.width() * peak).clamp(0.0, resp.rect.width());
-                        painter.rect_filled(
-                            egui::Rect::from_min_size(
-                                resp.rect.left_top(),
-                                egui::vec2(w, resp.rect.height()),
-                            ),
-                            1.0,
-                            egui::Color32::from_rgb(90, 180, 90),
+        let inner = egui::Frame::group(ui.style())
+            .fill(bg_tint.unwrap_or(egui::Color32::TRANSPARENT))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Color strip on left edge (track color only)
+                    if let Some((r, g, b)) = track_color {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(4.0, 24.0), egui::Sense::hover());
+                        ui.painter()
+                            .rect_filled(rect, 0.0, egui::Color32::from_rgb(r, g, b));
+                    }
+
+                    // Selected marker
+                    if is_selected {
+                        ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "▶");
+                    } else {
+                        ui.label(" ");
+                    }
+
+                    // Tiny intensity viewer
+                    if let Some(meter) = self.track_meters.get(&track_id) {
+                        ui.scope(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                            ui.add(egui::Separator::default().spacing(4.0));
+                            let (resp, painter) =
+                                ui.allocate_painter(egui::vec2(60.0, 10.0), egui::Sense::hover());
+                            let peak = meter.clone().data.peak_normalized();
+                            let w = (resp.rect.width() * peak).clamp(0.0, resp.rect.width());
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(
+                                    resp.rect.left_top(),
+                                    egui::vec2(w, resp.rect.height()),
+                                ),
+                                1.0,
+                                egui::Color32::from_rgb(90, 180, 90),
+                            );
+                            painter.rect_stroke(
+                                resp.rect,
+                                1.0,
+                                egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
+                                egui::StrokeKind::Middle,
+                            );
+                        });
+                    }
+
+                    // Group badge
+                    if let Some((group_name, (gr, gg, gb))) = &group_info {
+                        let badge_color = egui::Color32::from_rgb(*gr, *gg, *gb);
+                        ui.label(
+                            egui::RichText::new(format!("[{}]", group_name))
+                                .small()
+                                .color(badge_color),
                         );
-                        painter.rect_stroke(
-                            resp.rect,
-                            1.0,
-                            egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
-                            egui::StrokeKind::Middle,
-                        );
-                    });
-                }
+                    }
 
-                ui.label(name);
-                ui.label(if is_midi { "🎹" } else { "🎵" });
+                    ui.label(name);
+                    ui.label(if is_midi { "🎹" } else { "🎵" });
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button("⚙", |ui| {
-                        ui.label("Track Options");
-                        ui.separator();
-                        if ui.button("Rename…").clicked() {
-                            on_action("rename");
-                            ui.close();
-                        }
-                        if ui.button("Duplicate").clicked() {
-                            on_action("duplicate");
-                            ui.close();
-                        }
-                        if ui.button("Delete").clicked() {
-                            on_action("delete");
-                            ui.close();
-                        }
-                        if ui
-                            .button(if is_frozen { "Unfreeze" } else { "Freeze" })
-                            .clicked()
-                        {
-                            on_action("freeze_toggle");
-                            ui.close();
-                        }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("⚙", |ui| {
+                            ui.label("Track Options");
+                            ui.separator();
+                            if ui.button("Rename…").clicked() {
+                                on_action("rename");
+                                ui.close();
+                            }
+                            if ui.button("Duplicate").clicked() {
+                                on_action("duplicate");
+                                ui.close();
+                            }
+                            if ui.button("Delete").clicked() {
+                                on_action("delete");
+                                ui.close();
+                            }
+                            if ui
+                                .button(if is_frozen { "Unfreeze" } else { "Freeze" })
+                                .clicked()
+                            {
+                                on_action("freeze_toggle");
+                                ui.close();
+                            }
+
+                            ui.separator();
+
+                            // Color picker submenu
+                            ui.menu_button("Set Color", |ui| {
+                                let current = track_color.unwrap_or((100, 150, 200));
+                                if let Some((r, g, b)) = ColorPicker::palette_grid(ui, current) {
+                                    let _ = app.command_tx.send(
+                                        crate::messages::AudioCommand::SetTrackColor(
+                                            track_id, r, g, b,
+                                        ),
+                                    );
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if ui.button("Clear Color").clicked() {
+                                    // TODO: add ClearTrackColor command
+                                    ui.close();
+                                }
+                            });
+                        });
                     });
                 });
             });
-        });
 
         let rect = inner.response.rect;
         let id = ui.id().with(("track_header", track_id));
 
-        // Reserve a right edge area so it stays clickable
         let reserved_w = 48.0;
         let drag_rect = egui::Rect::from_min_max(
             rect.min,
             egui::pos2((rect.right() - reserved_w).max(rect.left()), rect.bottom()),
         );
 
-        // Drag only on the left area
         let drag_resp = ui.interact(drag_rect, id, egui::Sense::click_and_drag());
 
-        // highlight around header
         if is_selected {
             ui.painter().rect_stroke(
                 rect.shrink(1.0),

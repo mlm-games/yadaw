@@ -1,9 +1,13 @@
+use std::sync::{Arc, Mutex};
+
+use crossbeam_channel::Sender;
 use egui::scroll_area::ScrollSource;
 use egui::{Sense, UiBuilder};
 
 use super::*;
 use crate::audio_state::AudioState;
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, PIANO_KEY_WIDTH};
+use crate::messages::AudioCommand;
 use crate::model::{MidiClip, MidiNote};
 use crate::project::AppState;
 use crate::ui::piano_roll::{PianoRoll, PianoRollAction};

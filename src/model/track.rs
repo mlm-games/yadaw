@@ -39,7 +39,7 @@ pub struct Track {
     pub plugin_chain: Vec<PluginDescriptor>,
     pub automation_lanes: Vec<AutomationLane>,
     pub sends: Vec<Send>,
-    pub group_id: Option<usize>, // index for now (groups are UI-only)
+    pub group_id: Option<u64>,
     pub color: Option<(u8, u8, u8)>,
     pub height: f32,
     pub minimized: bool,
