@@ -6,11 +6,6 @@ on:
       version_name:
         description: 'Version name (e.g., 0.2.9)'
         required: true
-      increment_pkgrel:
-        description: 'Increment pkgrel (for same version updates)'
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   update-aur:
@@ -41,39 +36,18 @@ jobs:
           echo "x64_hash=$X64_HASH"   >> "$GITHUB_OUTPUT"
           echo "arm64_hash=$ARM64_HASH" >> "$GITHUB_OUTPUT"
 
-      - name: Get current pkgrel from AUR
-        id: current_pkgrel
-        shell: bash
-        run: |
-          set -euo pipefail
-          CURRENT_PKGREL=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=yadaw-bin" | grep "^pkgrel=" | cut -d= -f2 || echo "0")
-          echo "current_pkgrel=$CURRENT_PKGREL" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
-
-      - name: Determine pkgrel
-        id: pkgrel
-        shell: bash
-        run: |
-          if [[ "${{ inputs.increment_pkgrel }}" == "true" ]]; then
-            CURRENT=${{ steps.current_pkgrel.outputs.current_pkgrel }}
-            NEW_PKGREL=$((CURRENT + 1))
-            echo "pkgrel=$NEW_PKGREL" >> "$GITHUB_OUTPUT"
-          else
-            echo "pkgrel=1" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Create PKGBUILD
         shell: bash
         run: |
+          set -euo pipefail
           ver="${{ inputs.version_name }}"
-          tag="${{ inputs.version_name }}"
           mkdir -p aur-package
           cat > aur-package/PKGBUILD <<'EOF'
           # Maintainer: MLM-stuff <gfxoxinzh@mozmail.com>
           pkgname=yadaw-bin
           _pkgname=yadaw
           pkgver={{VER}}
-          pkgrel={{PKGREL}}
+          pkgrel=1
           pkgdesc="Yet Another mini-DAW - a lightweight sfx tool in pure Rust (binary)"
           arch=('x86_64' 'aarch64')
           url="https://github.com/mlm-games/yadaw"
@@ -124,18 +98,17 @@ jobs:
           }
           EOF
 
-          # Inject values
           sed -i "s/{{VER}}/${ver}/g" aur-package/PKGBUILD
-          sed -i "s/{{PKGREL}}/${{ steps.pkgrel.outputs.pkgrel }}/g" aur-package/PKGBUILD
           sed -i "s/{{X64_HASH}}/${{ steps.checksums.outputs.x64_hash }}/g" aur-package/PKGBUILD
           sed -i "s/{{ARM64_HASH}}/${{ steps.checksums.outputs.arm64_hash }}/g" aur-package/PKGBUILD
 
       - name: Publish to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@master
+        uses: mlm-games/aur-deploy-action@master
         with:
           pkgname: yadaw-bin
           pkgbuild: aur-package/PKGBUILD
+          auto_pkgrel: 'true'
           commit_username: MLM-stuff
           commit_email: gfxoxinzh@mozmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to ${{ inputs.version_name }}-${{ steps.pkgrel.outputs.pkgrel }}"
+          commit_message: "Update to ${{ inputs.version_name }}"
