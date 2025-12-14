@@ -1,5 +1,5 @@
 use super::actions::AppAction;
-use egui::{Key, KeyboardShortcut, Modifiers};
+use egui::{Key, Modifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,44 +21,47 @@ pub struct ModifierSet {
 
 impl From<Modifiers> for ModifierSet {
     fn from(m: Modifiers) -> Self {
-        Self {
-            ctrl: m.ctrl,
-            shift: m.shift,
-            alt: m.alt,
-            command: m.command,
-        }
-    }
-}
-
-impl From<ModifierSet> for Modifiers {
-    fn from(m: ModifierSet) -> Self {
-        let mut mods = Modifiers::NONE;
-
         #[cfg(target_os = "macos")]
         {
-            if m.command {
-                mods = mods | Modifiers::COMMAND;
-            }
-            if m.ctrl {
-                mods = mods | Modifiers::CTRL;
+            Self {
+                ctrl: m.ctrl,
+                shift: m.shift,
+                alt: m.alt,
+                command: m.command,
             }
         }
 
         #[cfg(not(target_os = "macos"))]
         {
-            // Treat "command" as "ctrl"
-            if m.ctrl || m.command {
-                mods = mods | Modifiers::CTRL | Modifiers::COMMAND;
+            Self {
+                ctrl: m.ctrl || m.command,
+                shift: m.shift,
+                alt: m.alt,
+                command: false,
             }
         }
+    }
+}
 
-        if m.shift {
-            mods = mods | Modifiers::SHIFT;
+impl ModifierSet {
+    /// Check if this modifier set matches pressed modifiers exactly
+    pub fn matches_pressed(&self, pressed: &Modifiers) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.ctrl == pressed.ctrl
+                && self.shift == pressed.shift
+                && self.alt == pressed.alt
+                && self.command == pressed.command
         }
-        if m.alt {
-            mods = mods | Modifiers::ALT;
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // On non-Mac: our "command" means Ctrl key
+            let expected_ctrl = self.ctrl || self.command;
+            let pressed_ctrl = pressed.ctrl || pressed.command;
+
+            expected_ctrl == pressed_ctrl && self.shift == pressed.shift && self.alt == pressed.alt
         }
-        mods
     }
 }
 
@@ -306,24 +309,31 @@ impl TryFrom<Key> for KeyCode {
 }
 
 impl Keybind {
-    pub fn to_egui(&self) -> KeyboardShortcut {
-        KeyboardShortcut::new(self.modifiers.into(), self.key.into())
+    /// Check if current modifiers exactly match this keybind's required modifiers
+    pub fn modifiers_match(&self, pressed: &Modifiers) -> bool {
+        self.modifiers.matches_pressed(pressed)
     }
 
     /// Format for display ("Ctrl+Shift+S")
-    pub fn to_string(&self) -> String {
+    pub fn display_string(&self) -> String {
         let mut parts = Vec::new();
 
         #[cfg(target_os = "macos")]
-        let cmd_key = "Cmd";
-        #[cfg(not(target_os = "macos"))]
-        let cmd_key = "Ctrl";
-
-        if self.modifiers.command {
-            parts.push(cmd_key);
+        {
+            if self.modifiers.command {
+                parts.push("Cmd");
+            }
+            if self.modifiers.ctrl {
+                parts.push("Ctrl");
+            }
         }
-        if self.modifiers.ctrl && !cfg!(target_os = "macos") {
-            parts.push("Ctrl");
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Show "Ctrl" if either ctrl or command is set (they're equivalent)
+            if self.modifiers.ctrl || self.modifiers.command {
+                parts.push("Ctrl");
+            }
         }
         if self.modifiers.shift {
             parts.push("Shift");
@@ -332,10 +342,223 @@ impl Keybind {
             parts.push("Alt");
         }
 
-        let key_str = format!("{:?}", self.key);
-        parts.push(&key_str);
+        parts.push(self.key_display_name());
 
         parts.join("+")
+    }
+
+    fn key_display_name(&self) -> &'static str {
+        match self.key {
+            KeyCode::A => "A",
+            KeyCode::B => "B",
+            KeyCode::C => "C",
+            KeyCode::D => "D",
+            KeyCode::E => "E",
+            KeyCode::F => "F",
+            KeyCode::G => "G",
+            KeyCode::H => "H",
+            KeyCode::I => "I",
+            KeyCode::J => "J",
+            KeyCode::K => "K",
+            KeyCode::L => "L",
+            KeyCode::M => "M",
+            KeyCode::N => "N",
+            KeyCode::O => "O",
+            KeyCode::P => "P",
+            KeyCode::Q => "Q",
+            KeyCode::R => "R",
+            KeyCode::S => "S",
+            KeyCode::T => "T",
+            KeyCode::U => "U",
+            KeyCode::V => "V",
+            KeyCode::W => "W",
+            KeyCode::X => "X",
+            KeyCode::Y => "Y",
+            KeyCode::Z => "Z",
+            KeyCode::Num0 => "0",
+            KeyCode::Num1 => "1",
+            KeyCode::Num2 => "2",
+            KeyCode::Num3 => "3",
+            KeyCode::Num4 => "4",
+            KeyCode::Num5 => "5",
+            KeyCode::Num6 => "6",
+            KeyCode::Num7 => "7",
+            KeyCode::Num8 => "8",
+            KeyCode::Num9 => "9",
+            KeyCode::Space => "Space",
+            KeyCode::Enter => "Enter",
+            KeyCode::Escape => "Esc",
+            KeyCode::Backspace => "Backspace",
+            KeyCode::Delete => "Delete",
+            KeyCode::Tab => "Tab",
+            KeyCode::ArrowUp => "↑",
+            KeyCode::ArrowDown => "↓",
+            KeyCode::ArrowLeft => "←",
+            KeyCode::ArrowRight => "→",
+            KeyCode::Home => "Home",
+            KeyCode::End => "End",
+            KeyCode::PageUp => "PgUp",
+            KeyCode::PageDown => "PgDn",
+            KeyCode::F1 => "F1",
+            KeyCode::F2 => "F2",
+            KeyCode::F3 => "F3",
+            KeyCode::F4 => "F4",
+            KeyCode::F5 => "F5",
+            KeyCode::F6 => "F6",
+            KeyCode::F7 => "F7",
+            KeyCode::F8 => "F8",
+            KeyCode::F9 => "F9",
+            KeyCode::F10 => "F10",
+            KeyCode::F11 => "F11",
+            KeyCode::F12 => "F12",
+            KeyCode::Minus => "-",
+            KeyCode::Equals => "=",
+            KeyCode::Comma => ",",
+            KeyCode::Period => ".",
+            KeyCode::Semicolon => ";",
+            KeyCode::OpenBracket => "[",
+            KeyCode::CloseBracket => "]",
+        }
+    }
+
+    pub fn none(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet::NONE,
+            key,
+        }
+    }
+
+    pub fn cmd(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet::CMD,
+            key,
+        }
+    }
+
+    pub fn shift(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet::SHIFT,
+            key,
+        }
+    }
+
+    pub fn alt(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet::ALT,
+            key,
+        }
+    }
+
+    pub fn cmd_shift(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet::CMD_SHIFT,
+            key,
+        }
+    }
+
+    pub fn cmd_alt(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet::CMD_ALT,
+            key,
+        }
+    }
+
+    pub fn alt_shift(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet::ALT_SHIFT,
+            key,
+        }
+    }
+}
+
+impl ModifierSet {
+    pub const NONE: Self = Self {
+        ctrl: false,
+        shift: false,
+        alt: false,
+        command: false,
+    };
+
+    // Use ctrl on non-Mac, command on Mac
+    #[cfg(target_os = "macos")]
+    pub const CMD: Self = Self {
+        ctrl: false,
+        shift: false,
+        alt: false,
+        command: true,
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    pub const CMD: Self = Self {
+        ctrl: true,
+        shift: false,
+        alt: false,
+        command: false,
+    };
+
+    pub const SHIFT: Self = Self {
+        ctrl: false,
+        shift: true,
+        alt: false,
+        command: false,
+    };
+
+    pub const ALT: Self = Self {
+        ctrl: false,
+        shift: false,
+        alt: true,
+        command: false,
+    };
+
+    #[cfg(target_os = "macos")]
+    pub const CMD_SHIFT: Self = Self {
+        ctrl: false,
+        shift: true,
+        alt: false,
+        command: true,
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    pub const CMD_SHIFT: Self = Self {
+        ctrl: true,
+        shift: true,
+        alt: false,
+        command: false,
+    };
+
+    #[cfg(target_os = "macos")]
+    pub const CMD_ALT: Self = Self {
+        ctrl: false,
+        shift: false,
+        alt: true,
+        command: true,
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    pub const CMD_ALT: Self = Self {
+        ctrl: true,
+        shift: false,
+        alt: true,
+        command: false,
+    };
+
+    pub const ALT_SHIFT: Self = Self {
+        ctrl: false,
+        shift: true,
+        alt: true,
+        command: false,
+    };
+}
+
+impl Default for ModifierSet {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl std::fmt::Display for Keybind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display_string())
     }
 }
 
@@ -509,107 +732,5 @@ impl ShortcutRegistry {
                 self.keybind_to_action.insert(bind, action);
             }
         }
-    }
-}
-
-impl Keybind {
-    pub fn none(key: KeyCode) -> Self {
-        Self {
-            modifiers: ModifierSet::NONE,
-            key,
-        }
-    }
-
-    pub fn cmd(key: KeyCode) -> Self {
-        Self {
-            modifiers: ModifierSet::COMMAND,
-            key,
-        }
-    }
-
-    pub fn shift(key: KeyCode) -> Self {
-        Self {
-            modifiers: ModifierSet::SHIFT,
-            key,
-        }
-    }
-
-    pub fn alt(key: KeyCode) -> Self {
-        Self {
-            modifiers: ModifierSet::ALT,
-            key,
-        }
-    }
-
-    pub fn cmd_shift(key: KeyCode) -> Self {
-        Self {
-            modifiers: ModifierSet {
-                command: true,
-                shift: true,
-                ..Default::default()
-            },
-            key,
-        }
-    }
-
-    pub fn cmd_alt(key: KeyCode) -> Self {
-        Self {
-            modifiers: ModifierSet {
-                command: true,
-                alt: true,
-                ..Default::default()
-            },
-            key,
-        }
-    }
-
-    pub fn alt_shift(key: KeyCode) -> Self {
-        Self {
-            modifiers: ModifierSet {
-                alt: true,
-                shift: true,
-                ..Default::default()
-            },
-            key,
-        }
-    }
-}
-
-impl ModifierSet {
-    pub const NONE: Self = Self {
-        ctrl: false,
-        shift: false,
-        alt: false,
-        command: false,
-    };
-    pub const COMMAND: Self = Self {
-        ctrl: false,
-        shift: false,
-        alt: false,
-        command: true,
-    };
-    pub const SHIFT: Self = Self {
-        ctrl: false,
-        shift: true,
-        alt: false,
-        command: false,
-    };
-    pub const ALT: Self = Self {
-        ctrl: false,
-        shift: false,
-        alt: true,
-        command: false,
-    };
-}
-
-impl Default for ModifierSet {
-    fn default() -> Self {
-        Self::NONE
-    }
-}
-
-impl std::fmt::Display for Keybind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
     }
 }

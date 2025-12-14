@@ -6,7 +6,7 @@ use actions::{ActionContext, AppAction};
 use gestures::{GestureAction, GestureRecognizer};
 use shortcuts::ShortcutRegistry;
 
-use egui::Context;
+use egui::{Context, Key};
 
 pub struct InputManager {
     shortcuts: ShortcutRegistry,
@@ -43,14 +43,14 @@ impl InputManager {
     pub fn poll_actions(&mut self, ctx: &Context) -> Vec<AppAction> {
         // Don't process shortcuts when text input has focus (dialogs, BPM field, etc.)
         if ctx.wants_keyboard_input() {
-            // Only allow Escape to cancel/close
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
                 return vec![AppAction::Escape];
             }
             return vec![];
         }
 
         let mut actions = Vec::new();
+        let modifiers = ctx.input(|i| i.modifiers);
 
         // Keyboard shortcuts
         for (&action, bindings) in &self.shortcuts.bindings {
@@ -62,7 +62,16 @@ impl InputManager {
             }
 
             for bind in bindings {
-                if ctx.input_mut(|i| i.consume_shortcut(&bind.to_egui())) {
+                let key: Key = bind.key.into();
+
+                // Check if key was pressed this frame
+                let key_pressed = ctx.input(|i| i.key_pressed(key));
+                if !key_pressed {
+                    continue;
+                }
+
+                // Check modifiers match exactly
+                if bind.modifiers_match(&modifiers) {
                     actions.push(action);
                     break;
                 }
