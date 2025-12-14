@@ -1,0 +1,4 @@
+- make color handling depend on theme (later integrate theme into track colors maybe...)
+- mv waveform to ui folder
+- grouping related tracks and basic color coding
+- Update aur-upload.yml
