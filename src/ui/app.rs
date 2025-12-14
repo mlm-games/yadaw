@@ -1377,20 +1377,18 @@ impl YadawApp {
 
             Duplicate => {
                 if self.is_selected_track_midi() {
-                    // Duplicate notes (handled via copy+paste)
                     if let Some(clipboard) = self
                         .piano_roll_view
                         .copy_selected_notes(&self.state, self.selected_track)
                     {
+                        self.push_undo();
                         self.piano_roll_view.paste_notes(
                             &self.audio_state,
                             &self.command_tx,
                             &clipboard,
                         );
-                        self.push_undo();
                     }
                 } else {
-                    // Duplicate track
                     self.duplicate_selected_track();
                 }
             }

@@ -11,6 +11,7 @@ use crate::{
         clip::{AudioClip, MidiClip},
         plugin_api::{BackendKind, ParamKind},
     },
+    project::AppStateSnapshot,
 };
 
 /// Serializable param type tag for message passing
@@ -261,7 +262,7 @@ pub enum AudioCommand {
     },
     AddNotesToClip {
         clip_id: u64,
-        notes: Vec<crate::model::clip::MidiNote>, // id may be 0; command will assign
+        notes: Vec<MidiNote>, // id may be 0; command will assign
     },
     RemoveNotesById {
         clip_id: u64,
@@ -269,7 +270,7 @@ pub enum AudioCommand {
     },
     UpdateNotesById {
         clip_id: u64,
-        notes: Vec<crate::model::clip::MidiNote>, // same ids updated in place
+        notes: Vec<MidiNote>, // same ids updated in place
     },
     DuplicateNotesWithOffset {
         clip_id: u64,
@@ -293,7 +294,7 @@ pub enum UIUpdate {
     RecordingFinished(u64, AudioClip),     // Track ID
     RecordingLevel(f32),
     MasterLevel(f32, f32),
-    PushUndo(crate::project::AppStateSnapshot),
+    PushUndo(AppStateSnapshot),
 
     PerformanceMetric {
         cpu_usage: f32,
