@@ -127,6 +127,13 @@ pub enum KeyCode {
     F10,
     F11,
     F12,
+    Minus,
+    Equals,
+    Comma,
+    Period,
+    Semicolon,
+    OpenBracket,
+    CloseBracket,
 }
 
 impl From<KeyCode> for Key {
@@ -200,6 +207,14 @@ impl From<KeyCode> for Key {
             KeyCode::F10 => K::F10,
             KeyCode::F11 => K::F11,
             KeyCode::F12 => K::F12,
+
+            KeyCode::Minus => K::Minus,
+            KeyCode::Equals => K::Equals,
+            KeyCode::Comma => K::Comma,
+            KeyCode::Period => K::Period,
+            KeyCode::Semicolon => K::Semicolon,
+            KeyCode::OpenBracket => K::OpenBracket,
+            KeyCode::CloseBracket => K::CloseBracket,
         }
     }
 }
@@ -276,6 +291,15 @@ impl TryFrom<Key> for KeyCode {
             K::F10 => KeyCode::F10,
             K::F11 => KeyCode::F11,
             K::F12 => KeyCode::F12,
+
+            K::Minus => KeyCode::Minus,
+            K::Equals => KeyCode::Equals,
+            K::Comma => KeyCode::Comma,
+            K::Period => KeyCode::Period,
+            K::Semicolon => KeyCode::Semicolon,
+            K::OpenBracket => KeyCode::OpenBracket,
+            K::CloseBracket => KeyCode::CloseBracket,
+
             _ => return Err(()),
         })
     }
@@ -308,7 +332,6 @@ impl Keybind {
             parts.push("Alt");
         }
 
-        // FIX: Create a longer-lived String for the key name
         let key_str = format!("{:?}", self.key);
         parts.push(&key_str);
 
@@ -344,60 +367,81 @@ impl ShortcutRegistry {
         use AppAction::*;
         use KeyCode::*;
 
-        // Transport (no modifiers - global hotkeys)
         reg.bind(PlayPause, Keybind::none(Space));
-        reg.bind(Stop, Keybind::none(KeyCode::S));
+        reg.bind(Stop, Keybind::none(Enter));
+        reg.bind(Stop, Keybind::none(Period));
+        reg.bind(Record, Keybind::none(R));
         reg.bind(GoToStart, Keybind::none(Home));
+        reg.bind(Rewind, Keybind::none(J));
+        reg.bind(FastForward, Keybind::none(L));
+        reg.bind(Rewind, Keybind::none(Comma));
+        reg.bind(FastForward, Keybind::none(K));
 
-        // Edit (Cmd/Ctrl)
         reg.bind(Undo, Keybind::cmd(Z));
         reg.bind(Redo, Keybind::cmd_shift(Z));
         #[cfg(not(target_os = "macos"))]
-        {
-            reg.bind(
-                Redo,
-                Keybind {
-                    modifiers: ModifierSet {
-                        command: true,
-                        ..Default::default()
-                    },
-                    key: Y,
-                },
-            );
-        }
+        reg.bind(Redo, Keybind::cmd(Y));
         reg.bind(Cut, Keybind::cmd(X));
         reg.bind(Copy, Keybind::cmd(C));
         reg.bind(Paste, Keybind::cmd(V));
-        reg.bind(SelectAll, Keybind::cmd(A));
         reg.bind(AppAction::Delete, Keybind::none(KeyCode::Delete));
+        reg.bind(AppAction::Delete, Keybind::none(Backspace));
+        reg.bind(SelectAll, Keybind::cmd(A));
+        reg.bind(DeselectAll, Keybind::cmd_shift(A));
+        reg.bind(Duplicate, Keybind::cmd(D));
 
-        // File
         reg.bind(NewProject, Keybind::cmd(N));
         reg.bind(OpenProject, Keybind::cmd(O));
         reg.bind(SaveProject, Keybind::cmd(S));
         reg.bind(SaveProjectAs, Keybind::cmd_shift(S));
+        reg.bind(ImportAudio, Keybind::cmd(I));
+        reg.bind(ExportAudio, Keybind::cmd_shift(E));
 
-        // View
+        reg.bind(ZoomIn, Keybind::cmd(Equals));
+        reg.bind(ZoomOut, Keybind::cmd(Minus));
+        reg.bind(ZoomToFit, Keybind::none(Z));
+        reg.bind(ZoomToFit, Keybind::cmd(Num0));
         reg.bind(ToggleMixer, Keybind::cmd(M));
+        reg.bind(TogglePianoRoll, Keybind::none(P));
+        reg.bind(TogglePianoRoll, Keybind::cmd(P));
+        reg.bind(ToggleTimeline, Keybind::none(Tab));
+        reg.bind(ToggleTimeline, Keybind::none(F5));
+
         reg.bind(ToggleLoop, Keybind::none(L));
         reg.bind(SetLoopToSelection, Keybind::cmd(L));
         reg.bind(ClearLoop, Keybind::shift(L));
 
-        // Piano Roll Navigation
         reg.bind(NudgeLeft, Keybind::none(ArrowLeft));
         reg.bind(NudgeRight, Keybind::none(ArrowRight));
         reg.bind(NudgeLeftFine, Keybind::alt(ArrowLeft));
         reg.bind(NudgeRightFine, Keybind::alt(ArrowRight));
         reg.bind(NudgeLeftCoarse, Keybind::shift(ArrowLeft));
         reg.bind(NudgeRightCoarse, Keybind::shift(ArrowRight));
-
         reg.bind(TransposeUp, Keybind::none(ArrowUp));
         reg.bind(TransposeDown, Keybind::none(ArrowDown));
         reg.bind(TransposeOctaveUp, Keybind::shift(ArrowUp));
         reg.bind(TransposeOctaveDown, Keybind::shift(ArrowDown));
-
         reg.bind(VelocityUp, Keybind::cmd(ArrowUp));
         reg.bind(VelocityDown, Keybind::cmd(ArrowDown));
+        reg.bind(VelocityUp, Keybind::alt(ArrowUp));
+        reg.bind(VelocityDown, Keybind::alt(ArrowDown));
+
+        reg.bind(SplitAtPlayhead, Keybind::cmd(E));
+        reg.bind(SplitAtPlayhead, Keybind::none(B));
+        reg.bind(SplitAtPlayhead, Keybind::none(S));
+        reg.bind(Normalize, Keybind::cmd_shift(N));
+        reg.bind(Reverse, Keybind::cmd_shift(R));
+        reg.bind(FadeIn, Keybind::none(F));
+        reg.bind(FadeIn, Keybind::cmd(F));
+        reg.bind(FadeOut, Keybind::shift(F));
+        reg.bind(FadeOut, Keybind::none(G));
+
+        reg.bind(QuantizeDialog, Keybind::none(Q));
+        reg.bind(QuantizeDialog, Keybind::cmd(Q));
+        reg.bind(TransposeDialog, Keybind::none(T));
+        reg.bind(TransposeDialog, Keybind::cmd(T));
+        reg.bind(HumanizeDialog, Keybind::none(H));
+        reg.bind(HumanizeDialog, Keybind::cmd(H));
 
         reg.bind(AppAction::Escape, Keybind::none(KeyCode::Escape));
 
@@ -501,6 +545,28 @@ impl Keybind {
         Self {
             modifiers: ModifierSet {
                 command: true,
+                shift: true,
+                ..Default::default()
+            },
+            key,
+        }
+    }
+
+    pub fn cmd_alt(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet {
+                command: true,
+                alt: true,
+                ..Default::default()
+            },
+            key,
+        }
+    }
+
+    pub fn alt_shift(key: KeyCode) -> Self {
+        Self {
+            modifiers: ModifierSet {
+                alt: true,
                 shift: true,
                 ..Default::default()
             },

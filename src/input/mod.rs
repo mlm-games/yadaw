@@ -41,6 +41,15 @@ impl InputManager {
 
     /// Process input and return triggered actions
     pub fn poll_actions(&mut self, ctx: &Context) -> Vec<AppAction> {
+        // Don't process shortcuts when text input has focus (dialogs, BPM field, etc.)
+        if ctx.wants_keyboard_input() {
+            // Only allow Escape to cancel/close
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                return vec![AppAction::Escape];
+            }
+            return vec![];
+        }
+
         let mut actions = Vec::new();
 
         // Keyboard shortcuts
@@ -55,12 +64,12 @@ impl InputManager {
             for bind in bindings {
                 if ctx.input_mut(|i| i.consume_shortcut(&bind.to_egui())) {
                     actions.push(action);
-                    break; // Only trigger once per action
+                    break;
                 }
             }
         }
 
-        // Touch gestures (map to actions contextually)
+        // Touch gestures
         for gesture in self.gestures.process(ctx) {
             match gesture {
                 GestureAction::DoubleTap { .. } => {
