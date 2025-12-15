@@ -322,7 +322,10 @@ pub enum UIUpdate {
     Warning(String),
     Info(String),
 
-    ReservedNoteIds(Vec<u64>),
+    ReservedNoteIds {
+        clip_id: u64,
+        note_ids: Vec<u64>,
+    },
 
     PluginParamsDiscovered {
         track_id: u64,

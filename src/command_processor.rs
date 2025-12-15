@@ -1278,10 +1278,14 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::PasteNotes { clip_id, mut notes } => {
+            let mut new_ids = Vec::with_capacity(notes.len());
+
             for n in &mut notes {
                 if n.id == 0 {
                     n.id = idgen::next();
                 }
+                new_ids.push(n.id);
+
                 if !n.duration.is_finite() || n.duration <= 0.0 {
                     n.duration = 1e-6;
                 }
@@ -1289,11 +1293,20 @@ fn process_command(
                     n.start = 0.0;
                 }
             }
+
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.extend(notes);
                 pat.notes
                     .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
             });
+
+            if !new_ids.is_empty() {
+                let _ = ui_tx.send(UIUpdate::ReservedNoteIds {
+                    clip_id,
+                    note_ids: new_ids,
+                });
+            }
+
             let st = app_state.lock().unwrap();
             send_graph_snapshot(&st, snapshot_tx);
         }
@@ -1514,8 +1527,12 @@ fn process_command(
             });
 
             if !new_ids.is_empty() {
-                let _ = ui_tx.send(UIUpdate::ReservedNoteIds(new_ids));
+                let _ = ui_tx.send(UIUpdate::ReservedNoteIds {
+                    clip_id,
+                    note_ids: new_ids,
+                });
             }
+
             let st = app_state.lock().unwrap();
             send_graph_snapshot(&st, snapshot_tx);
         }

@@ -1215,7 +1215,28 @@ impl YadawApp {
                     }
                 }
             }
-            _ => {}
+            UIUpdate::ReservedNoteIds { clip_id, note_ids } => {
+                if self.piano_roll_view.selected_clip == Some(clip_id) {
+                    self.piano_roll_view.piano_roll.selected_note_ids = note_ids;
+                    self.piano_roll_view
+                        .piano_roll
+                        .temp_selected_indices
+                        .clear();
+                }
+            }
+            UIUpdate::TrackAdded(_) => {} // TODO: remove or migr. Which is better
+            UIUpdate::TrackRemoved(_) => {}
+            UIUpdate::TrackUpdated(_) => {}
+            UIUpdate::ClipAdded(_) => {}
+            UIUpdate::ClipRemoved(_) => {}
+            UIUpdate::ClipUpdated(_) => {}
+            UIUpdate::AutomationUpdated(_, _) => {}
+            UIUpdate::PluginAdded(_, _) => {}
+            UIUpdate::PluginRemoved(_, _) => {}
+            UIUpdate::PluginUpdated(_, _) => {}
+            UIUpdate::Error(_) => {}
+            UIUpdate::Warning(_) => {}
+            UIUpdate::Info(_) => {}
         }
     }
 
