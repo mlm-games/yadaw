@@ -9,7 +9,6 @@ use crate::model::clip::{MidiClip, MidiNote};
 use crate::model::track::{Track, TrackType};
 use crossbeam_channel::Sender;
 use eframe::egui;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UITrackType {

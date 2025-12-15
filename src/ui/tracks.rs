@@ -732,13 +732,16 @@ impl TracksPanel {
                                 .selected_text(current_label)
                                 .width(160.0)
                                 .show_ui(ui, |ui| {
-                                    ui.set_enabled(!is_readonly);
                                     let mut changed = false;
-                                    for (i, label) in labels.iter().enumerate() {
-                                        if ui.selectable_value(&mut new_idx, i, label).changed() {
-                                            changed = true;
+
+                                    ui.add_enabled_ui(!is_readonly, |ui| {
+                                        for (i, label) in labels.iter().enumerate() {
+                                            if ui.selectable_value(&mut new_idx, i, label).changed()
+                                            {
+                                                changed = true;
+                                            }
                                         }
-                                    }
+                                    });
                                     changed
                                 });
 

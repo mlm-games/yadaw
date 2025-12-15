@@ -279,6 +279,7 @@ impl PianoRollView {
                 } => {
                     // Use the current selection by id (preferred). If empty, derive from temp indices.
                     let mut ids = self.piano_roll.selected_note_ids.clone();
+                    // let source_note_ids: Vec<u64> = original_notes.iter().map(|n| n.id).filter(|&id| id != 0).collect();
                     if ids.is_empty() {
                         for i in &self.piano_roll.temp_selected_indices {
                             if let Some(id) = id_at_index(*i) {

@@ -1720,7 +1720,7 @@ impl TimelineView {
             let header_bg = egui::Color32::from_gray(30);
             ui.painter().rect_filled(header_rect, 0.0, header_bg);
 
-            ui.allocate_ui_at_rect(header_rect, |ui| {
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(header_rect), |ui| {
                 ui.set_clip_rect(header_rect);
                 ui.horizontal(|ui| {
                     // Clear “this lane belongs to this track + param”

@@ -1,7 +1,7 @@
 use std::vec;
 
 use crate::{
-    constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_NOTE_LENGTH_BEATS, PIANO_KEY_WIDTH},
+    constants::{DEFAULT_NOTE_LENGTH_BEATS, PIANO_KEY_WIDTH},
     model::{MidiClip, MidiNote},
 };
 use eframe::egui;
@@ -49,7 +49,6 @@ enum InteractionState {
     ResizingNotes {
         note_indices: Vec<usize>,
         edge: ResizeEdge,
-        start_pos: egui::Pos2,
         current_delta_beats: f64,
     },
     SelectionBox {
@@ -159,7 +158,6 @@ impl PianoRoll {
                     self.interaction_state = InteractionState::ResizingNotes {
                         note_indices: indices_to_resize,
                         edge,
-                        start_pos: pos,
                         current_delta_beats: 0.0,
                     };
                     return actions;
@@ -792,6 +790,14 @@ impl PianoRoll {
                     egui::Stroke::new(1.0, color),
                 );
             }
+        }
+
+        let end_x = rect.min.x + (pattern_length as f32 * self.zoom_x - self.scroll_x);
+        if end_x >= rect.min.x && end_x <= rect.max.x {
+            painter.line_segment(
+                [egui::pos2(end_x, rect.min.y), egui::pos2(end_x, rect.max.y)],
+                egui::Stroke::new(2.0, egui::Color32::from_gray(80)),
+            );
         }
     }
 

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::clip::MidiPattern;
-use crate::model::{MidiNote, Track, TrackGroup};
+use crate::model::{Track, TrackGroup};
 use crate::time_utils::TimeConverter;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

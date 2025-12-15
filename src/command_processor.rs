@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::audio_export::AudioExporter;
-use crate::audio_state::{AudioGraphSnapshot, AudioState, MidiNoteSnapshot, RealtimeCommand};
+use crate::audio_state::{AudioGraphSnapshot, AudioState, RealtimeCommand};
 use crate::edit_actions::EditProcessor;
 use crate::idgen;
 use crate::messages::{AudioCommand, UIUpdate};
@@ -40,18 +40,6 @@ pub fn run_command_processor(
             &midi_input_handler,
         );
     }
-}
-
-fn notes_to_snapshot(notes: &[crate::model::MidiNote]) -> Vec<MidiNoteSnapshot> {
-    notes
-        .iter()
-        .map(|n| MidiNoteSnapshot {
-            pitch: n.pitch,
-            velocity: n.velocity,
-            start: n.start,
-            duration: n.duration,
-        })
-        .collect()
 }
 
 fn process_command(
@@ -425,7 +413,7 @@ fn process_command(
                 let _ = ui_tx.send(UIUpdate::PushUndo(snapshot));
             }
 
-            let (uri, plugin_id, params_to_update) = {
+            let (_uri, plugin_id, params_to_update) = {
                 let mut state = app_state.lock().unwrap();
                 let (uri, plugin_id) = if let Some(track) = state.tracks.get_mut(&track_id) {
                     if plugin_idx < track.plugin_chain.len() {
@@ -1732,7 +1720,7 @@ fn process_command(
             }
 
             // Resolve source notes (pattern-aware)
-            let (notes, use_pattern) = {
+            let (notes, _use_pattern) = {
                 let st = app_state.lock().unwrap();
                 if let Some(pid) = clip.pattern_id {
                     let base = st
