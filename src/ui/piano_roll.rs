@@ -37,7 +37,7 @@ impl Default for PianoRoll {
 }
 
 #[derive(Clone)]
-pub enum InteractionState {
+enum InteractionState {
     Idle,
     DraggingNotes {
         note_indices: Vec<usize>,
@@ -871,6 +871,7 @@ impl PianoRoll {
     }
 }
 
+#[allow(dead_code)] // AddNotes/RemoveNotes are planned for batching edits
 #[derive(Debug)]
 pub enum PianoRollAction {
     AddNote(MidiNote),

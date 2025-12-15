@@ -8,7 +8,7 @@ use crate::constants::{
 };
 use crate::messages::{PluginParamInfo, UIUpdate};
 use crate::midi_utils::generate_sine_for_note;
-use crate::mixer::{ChannelStrip, MixerEngine};
+use crate::mixer::ChannelStrip;
 use crate::model::clip::AudioClip;
 use crate::model::plugin_api::{
     BackendKind, HostConfig, MidiEvent, ParamKey, ProcessCtx, RtMidiEvent,
@@ -58,7 +58,6 @@ pub struct AudioEngine {
     preview_note: Option<PreviewNote>,
     sample_rate: f64,
     updates: Sender<UIUpdate>,
-    mixer: MixerEngine,
     channel_strips: HashMap<u64, ChannelStrip>,
     xrun_count: u64,
     paused_last: bool,
@@ -66,7 +65,6 @@ pub struct AudioEngine {
 }
 
 struct TrackProcessor {
-    track_id: u64,
     plugins: HashMap<u64, PluginProcessorUnified>, // plugin_id -> plugin
     plugin_order: Vec<u64>,                        // Rendering order
 
@@ -87,9 +85,8 @@ struct TrackProcessor {
 }
 
 impl TrackProcessor {
-    fn new(track_id: u64) -> Self {
+    fn new() -> Self {
         let mut s = Self {
-            track_id,
             plugins: HashMap::new(),
             plugin_order: Vec::new(),
             input_buffers: Vec::new(),
@@ -120,7 +117,6 @@ impl TrackProcessor {
 }
 
 struct PluginProcessorUnified {
-    plugin_id: u64,
     rt_instance_id: Option<(usize, u64)>,
     backend: BackendKind,
     uri: String,
@@ -192,7 +188,6 @@ pub fn run_audio_thread(
         preview_note: None,
         sample_rate,
         updates: updates.clone(),
-        mixer: MixerEngine::new(),
         channel_strips: HashMap::new(),
         xrun_count: 0,
         paused_last: false,
@@ -201,7 +196,6 @@ pub fn run_audio_thread(
 
     // Start recording input thread
     let recording_producer = Arc::new(parking_lot::Mutex::new(recording_producer));
-    let audio_state_clone = audio_state.clone();
     let updates_clone = updates.clone();
 
     std::thread::spawn(move || {
@@ -468,7 +462,6 @@ impl AudioEngine {
             preview_note: None,
             sample_rate: export_sample_rate as f64,
             updates: dummy_tx,
-            mixer: MixerEngine::new(),
             channel_strips: HashMap::new(),
             xrun_count: 0,
             paused_last: false,
@@ -490,7 +483,7 @@ impl AudioEngine {
             let track_id = track_snapshot.track_id;
 
             // Create a processor for the track
-            let mut proc = TrackProcessor::new(track_id);
+            let mut proc = TrackProcessor::new();
 
             // Instantiate this track's entire plugin chain
             for plugin_snapshot in &track_snapshot.plugin_chain {
@@ -533,7 +526,6 @@ impl AudioEngine {
                             };
 
                         let plugin_processor = PluginProcessorUnified {
-                            plugin_id,
                             rt_instance_id: Some(handle),
                             backend: plugin_snapshot.backend,
                             uri: plugin_snapshot.uri.clone(),
@@ -551,7 +543,6 @@ impl AudioEngine {
                         );
                         // Create a disabled placeholder to avoid breaking the chain
                         let placeholder = PluginProcessorUnified {
-                            plugin_id,
                             rt_instance_id: None,
                             backend: plugin_snapshot.backend,
                             uri: plugin_snapshot.uri.clone(),
@@ -645,7 +636,7 @@ impl AudioEngine {
                 let proc = self
                     .track_processors
                     .entry(track_id)
-                    .or_insert_with(|| TrackProcessor::new(track_id));
+                    .or_insert_with(|| TrackProcessor::new());
 
                 match self.host_facade.instantiate(backend, &uri) {
                     Ok(inst) => {
@@ -682,7 +673,6 @@ impl AudioEngine {
                             .insert(handle, PluginCell(Arc::new(parking_lot::Mutex::new(inst))));
 
                         let plugin = PluginProcessorUnified {
-                            plugin_id,
                             rt_instance_id: Some(handle),
                             backend,
                             uri: uri.clone(),
@@ -1196,25 +1186,6 @@ impl AudioEngine {
 
     fn midi_panic(&mut self) {
         // Build All Notes Off + All Sound Off for channels 0..15
-        let panic_events: Vec<MidiEvent> = (0..16)
-            .flat_map(|ch| {
-                vec![
-                    MidiEvent {
-                        status: 0xB0 | ch,
-                        data1: 123,
-                        data2: 0,
-                        time_frames: 0,
-                    },
-                    MidiEvent {
-                        status: 0xB0 | ch,
-                        data1: 120,
-                        data2: 0,
-                        time_frames: 0,
-                    },
-                ]
-            })
-            .collect();
-
         for proc in self.track_processors.values_mut() {
             for ppu in proc.plugins.values_mut() {
                 if let Some(handle) = ppu.rt_instance_id {
@@ -1278,7 +1249,7 @@ impl AudioEngine {
 
             self.track_processors
                 .entry(track_id)
-                .or_insert_with(|| TrackProcessor::new(track_id));
+                .or_insert_with(|| TrackProcessor::new());
 
             // Update the corresponding channel strip.
             let strip = self.channel_strips.entry(track_id).or_default();
@@ -1302,7 +1273,7 @@ impl AudioEngine {
         let proc = self
             .track_processors
             .entry(track_id)
-            .or_insert_with(|| TrackProcessor::new(track_id));
+            .or_insert_with(|| TrackProcessor::new());
 
         proc.plugins.clear();
         proc.plugin_order.clear();
@@ -1377,7 +1348,6 @@ impl AudioEngine {
                     );
 
                     let pp = PluginProcessorUnified {
-                        plugin_id: pdesc.plugin_id,
                         rt_instance_id: Some(handle),
                         backend: pdesc.backend,
                         uri: pdesc.uri.clone(),
@@ -1397,7 +1367,6 @@ impl AudioEngine {
                     let _ = self.updates.try_send(UIUpdate::Error(msg));
 
                     let pp = PluginProcessorUnified {
-                        plugin_id: pdesc.plugin_id,
                         rt_instance_id: None,
                         backend: pdesc.backend,
                         uri: pdesc.uri.clone(),
@@ -1428,7 +1397,7 @@ impl AudioEngine {
 
         // 1) Build MIDI event list up front with short borrows of the processor
         let mut all_midi_events: Vec<MidiEvent> = Vec::new();
-        let (transport_jump, last_end) = {
+        let (transport_jump, _last_end) = {
             let contiguous = if let Some(proc) = self.track_processors.get(&track_id) {
                 (proc.last_block_end_samples - block_start_samples).abs() <= f64::EPSILON
             } else {
@@ -1479,12 +1448,6 @@ impl AudioEngine {
                 }
             }
 
-            // Build events from clips while updating processor.plugin_active_notes / pending_note_offs
-            {
-                if let Some(proc) = self.track_processors.get(&track_id) {
-                    // We must modify these, so borrow mutably only for the loop below
-                }
-            }
             // Do the mutation in a dedicated scope
             {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
@@ -1540,7 +1503,7 @@ impl AudioEngine {
 
         for plugin_id in plugin_order {
             // Stage-per-plugin data from processor: handle, bypass, param updates, input copies, uri
-            let (maybe_handle, backend, param_map, uri, updates, in_l, in_r) = {
+            let (maybe_handle, _backend, _param_map, uri, updates, in_l, in_r) = {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     let ppu = match proc.plugins.get(&plugin_id) {
                         Some(p) => p,
@@ -1685,6 +1648,7 @@ impl AudioEngine {
     }
 }
 
+#[allow(dead_code)] // later centralize strip + automation gain logic
 #[inline]
 fn effective_gains(track: &TrackSnapshot, processor: &TrackProcessor) -> (f32, f32) {
     let vol = if processor.automated_volume.is_finite() {
@@ -2135,6 +2099,7 @@ fn apply_automation_smooth(
     }
 }
 
+#[allow(dead_code)]
 fn debug_print_midi_events(uri: &str, events: &[(u8, u8, u8, i64)]) {
     if !DEBUG_PLUGIN_AUDIO {
         return;
@@ -2155,7 +2120,7 @@ fn debug_print_midi_events(uri: &str, events: &[(u8, u8, u8, i64)]) {
     );
 }
 
-// Compute and print output peaks per plugin run
+#[allow(dead_code)] // Compute and print output peaks per plugin run
 fn debug_print_output_peak(uri: &str, left: &[f32], right: &[f32]) {
     if !DEBUG_PLUGIN_AUDIO {
         return;

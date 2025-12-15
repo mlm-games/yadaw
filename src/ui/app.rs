@@ -113,6 +113,7 @@ pub enum FileDialogPurpose {
     SaveLayout,
 }
 
+#[allow(dead_code)] // reserved for touch gesture state (not wired yet)
 struct TouchState {
     last_touch_pos: Option<egui::Pos2>,
     pinch_distance: Option<f32>,
