@@ -1931,25 +1931,24 @@ fn build_block_midi_events(
 
                 let s_q = quantize_beat(s_raw, clip);
                 let e_q_full = quantize_beat(e_raw_full, clip).max(s_q + 1e-6);
-                let e_q_clamped = quantize_beat(e_raw_clamped, clip).max(s_q + 1e-6);
+                let e_q = quantize_beat(e_raw_clamped, clip).max(s_q + 1e-6);
 
                 let start_frame = conv.beats_to_samples(s_q - block_start_beat).round() as i64;
                 if (0..frames as i64).contains(&start_frame) {
                     events.push((0x90, pitch, vel, start_frame));
-                    if e_q_full > block_end_beat {
-                        pending_note_offs.push((0 /*ch*/, pitch, e_q_full));
+                    if e_q > block_end_beat {
+                        pending_note_offs.push((0 /*ch*/, pitch, e_q));
                     }
                 }
-                let end_frame_full =
-                    conv.beats_to_samples(e_q_full - block_start_beat).round() as i64;
-                if (0..frames as i64).contains(&end_frame_full) {
-                    events.push((0x80, pitch, 0, end_frame_full));
+                let end_frame = conv.beats_to_samples(e_q - block_start_beat).round() as i64;
+                if (0..frames as i64).contains(&end_frame) {
+                    events.push((0x80, pitch, 0, end_frame));
                 }
                 if transport_jump && s_q < block_start_beat && e_q_full > block_start_beat {
                     events.push((0x90, pitch, vel, 0));
                     // beyond this block
-                    if e_q_full > block_end_beat {
-                        pending_note_offs.push((0 /*ch*/, pitch, e_q_full));
+                    if e_q > block_end_beat {
+                        pending_note_offs.push((0 /*ch*/, pitch, e_q));
                     }
                 }
             }
