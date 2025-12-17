@@ -1,0 +1,5 @@
+- Update release.yml
+- fix notes hanging past clip end
+- fix more warns (and draw end_of_pattern line)
+- rm few warns
+- fix duplication not selecting the new notes
