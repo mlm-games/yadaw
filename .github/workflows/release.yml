@@ -450,9 +450,9 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'aur-upload.yml',
-              ref: 'main',
+              ref: 'master',
               inputs: {
-                version_name: '${{ inputs.version_tag }}'
+                version_name: '${{ needs.prepare-version.outputs.version_name }}'
               }
             });
-            core.info('Triggered AUR upload for ${{ inputs.version_tag }}');
+            core.info('Triggered AUR upload for ${{ needs.prepare-version.outputs.version_name }}');
