@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: release-bin-${{ github.ref }}
@@ -439,3 +440,19 @@ jobs:
             dist/**/*.zip
             dist/**/*.apk
             dist/SHA256SUMS.txt
+
+      - name: Dispatch aur-upload.yml
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'aur-upload.yml',
+              ref: 'main',
+              inputs: {
+                version_name: '${{ inputs.version_tag }}'
+              }
+            });
+            core.info('Triggered AUR upload for ${{ inputs.version_tag }}');
