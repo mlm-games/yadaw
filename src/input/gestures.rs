@@ -31,7 +31,7 @@ pub struct GestureRecognizer {
 
 #[derive(Clone, Copy)]
 struct TouchPoint {
-    id: u64,
+    id: u64, // later
     pos: Pos2,
 }
 
