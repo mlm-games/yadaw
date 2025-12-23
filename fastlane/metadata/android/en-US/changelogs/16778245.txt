@@ -1,0 +1,2 @@
+- add 2 screenshots
+- Update release.yml to fix aur upload
