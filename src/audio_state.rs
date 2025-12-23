@@ -195,6 +195,12 @@ pub enum RealtimeCommand {
         track_id: u64,
         chain: Vec<PluginDescriptorSnapshot>,
     },
+    MidiMessage {
+        track_id: u64,
+        status: u8,
+        data1: u8,
+        data2: u8,
+    },
 }
 
 #[derive(Debug, Clone)]

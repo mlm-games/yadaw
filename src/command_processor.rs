@@ -185,10 +185,41 @@ fn process_command(
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::MidiInput(raw_message) => {
+            let status = raw_message.message[0];
+            let data1 = raw_message.message[1];
+            let data2 = raw_message.message[2];
+
+            let target_track_id = {
+                let st = app_state.lock().unwrap();
+                st.tracks
+                    .values()
+                    .find(|t| {
+                        matches!(t.track_type, TrackType::Midi) && t.midi_input_port.is_some()
+                    })
+                    .map(|t| t.id)
+                    .or_else(|| {
+                        st.tracks
+                            .values()
+                            .find(|t| matches!(t.track_type, TrackType::Midi) && t.armed)
+                            .map(|t| t.id)
+                    })
+                    .or_else(|| {
+                        st.tracks
+                            .values()
+                            .find(|t| matches!(t.track_type, TrackType::Midi))
+                            .map(|t| t.id)
+                    })
+            };
+
+            if let Some(track_id) = target_track_id {
+                let _ = realtime_tx.send(RealtimeCommand::MidiMessage {
+                    track_id,
+                    status,
+                    data1,
+                    data2,
+                });
+            }
             if let Some(rec) = midi_recording_state {
-                let status = raw_message.message[0];
-                let data1 = raw_message.message[1];
-                let data2 = raw_message.message[2];
                 let channel = status & 0x0F;
                 let message_type = status & 0xF0;
 

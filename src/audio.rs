@@ -62,6 +62,8 @@ pub struct AudioEngine {
     xrun_count: u64,
     paused_last: bool,
     host_facade: HostFacade,
+
+    free_running_samples: f64,
 }
 
 struct TrackProcessor {
@@ -82,6 +84,7 @@ struct TrackProcessor {
     plugin_active_notes: Vec<(u8, u8)>,
     automation_sample_buffers: HashMap<String, Vec<f32>>,
     pending_note_offs: Vec<(u8 /*ch*/, u8 /*key*/, f64 /*abs_beat*/)>,
+    rt_midi_events: Vec<RtMidiEvent>,
 }
 
 impl TrackProcessor {
@@ -102,6 +105,7 @@ impl TrackProcessor {
             plugin_active_notes: Vec::new(),
             automation_sample_buffers: HashMap::new(),
             pending_note_offs: Vec::new(),
+            rt_midi_events: Vec::new(),
         };
         s.ensure_channels(2);
         s
@@ -192,6 +196,7 @@ pub fn run_audio_thread(
         xrun_count: 0,
         paused_last: false,
         host_facade,
+        free_running_samples: 0.0,
     };
 
     // Start recording input thread
@@ -466,6 +471,7 @@ impl AudioEngine {
             xrun_count: 0,
             paused_last: false,
             host_facade,
+            free_running_samples: 0.0,
         };
 
         engine.full_sync_for_offline_setup(initial_tracks);
@@ -738,7 +744,52 @@ impl AudioEngine {
                     }
                 }
             }
+            RealtimeCommand::MidiMessage {
+                track_id,
+                status,
+                data1,
+                data2,
+            } => {
+                let proc = self
+                    .track_processors
+                    .entry(track_id)
+                    .or_insert_with(|| TrackProcessor::new());
 
+                // Feed plugins (first active plugin will receive these)
+                proc.rt_midi_events.push(RtMidiEvent {
+                    status,
+                    data1,
+                    data2,
+                    time_frames: 0,
+                });
+
+                // Also drive the built-in sine fallback for "no plugin synth" cases:
+                let msg = status & 0xF0;
+                let ch = status & 0x0F;
+
+                match msg {
+                    0x90 if data2 > 0 => {
+                        // Note on
+                        if !proc.active_notes.iter().any(|n| n.pitch == data1) {
+                            proc.active_notes.push(ActiveMidiNote {
+                                pitch: data1,
+                                velocity: data2,
+                                start_sample: self.free_running_samples,
+                            });
+                        }
+                        if !proc.plugin_active_notes.contains(&(ch, data1)) {
+                            proc.plugin_active_notes.push((ch, data1));
+                        }
+                    }
+                    0x80 | 0x90 => {
+                        // Note off (or note on with vel=0)
+                        proc.active_notes.retain(|n| n.pitch != data1);
+                        proc.plugin_active_notes
+                            .retain(|&(c, k)| c != ch || k != data1);
+                    }
+                    _ => {}
+                }
+            }
             RealtimeCommand::UpdateTracks(new_tracks) => {
                 self.full_sync_for_offline_setup(&new_tracks);
             }
@@ -945,6 +996,7 @@ impl AudioEngine {
                     loop_start_beats,
                     loop_end_beats,
                     plugin_time_ms_accum,
+                    true,
                 );
 
                 // Mix to master, with per-sample automation fallback (re-borrow briefly)
@@ -1084,6 +1136,7 @@ impl AudioEngine {
                     loop_start_beats,
                     loop_end_beats,
                     plugin_time_ms_accum,
+                    true,
                 );
 
                 // Mix bus to master (re-borrow briefly)
@@ -1392,64 +1445,56 @@ impl AudioEngine {
         loop_start_beats: f64,
         loop_end_beats: f64,
         plugin_time_ms_accum: &mut f32,
+        include_clip_events: bool,
     ) {
         use std::panic::AssertUnwindSafe;
+        let mut all_midi_events: Vec<RtMidiEvent> = Vec::new();
 
-        // 1) Build MIDI event list up front with short borrows of the processor
-        let mut all_midi_events: Vec<MidiEvent> = Vec::new();
-        let (transport_jump, _last_end) = {
-            let contiguous = if let Some(proc) = self.track_processors.get(&track_id) {
-                (proc.last_block_end_samples - block_start_samples).abs() <= f64::EPSILON
+        // Compute transport_jump for note-off handling
+        let transport_jump = {
+            if let Some(proc) = self.track_processors.get(&track_id) {
+                (proc.last_block_end_samples - block_start_samples).abs() > f64::EPSILON
             } else {
-                true
-            };
-            (!contiguous, block_start_samples + num_frames as f64)
+                false
+            }
         };
 
         if matches!(track.track_type, TrackType::Midi) {
-            let conv = TimeConverter::new(sample_rate as f32, bpm);
-            let block_start_beat = conv.samples_to_beats(block_start_samples);
-            let block_end_beat = conv.samples_to_beats(block_start_samples + num_frames as f64);
-
-            // Pending note-offs and active notes live in TrackProcessor; update them in a tiny scope
-            {
-                if let Some(proc) = self.track_processors.get(&track_id) {
-                    // If there was a jump, send note-offs at T=0 for all active plugin notes
-                    if transport_jump && !proc.plugin_active_notes.is_empty() {
-                        for &(ch, key) in &proc.plugin_active_notes {
-                            all_midi_events.push(MidiEvent {
-                                status: 0x80 | ch,
-                                data1: key,
-                                data2: 0,
-                                time_frames: 0,
-                            });
-                        }
-                    }
-                }
+            // Always drain realtime MIDI events (keyboard input)
+            if let Some(proc) = self.track_processors.get_mut(&track_id) {
+                all_midi_events.extend(proc.rt_midi_events.drain(..));
             }
 
-            // Emit pending note-offs that land in this block, and keep the rest
-            {
+            // Only include clip-driven events when playing
+            if include_clip_events {
+                // Handle pending note-offs from previous blocks
+                let conv = TimeConverter::new(sample_rate as f32, bpm);
+                let block_start_beat = conv.samples_to_beats(block_start_samples);
+                let block_end_beat = conv.samples_to_beats(block_start_samples + num_frames as f64);
+
+                // Emit pending note-offs that land in this block
                 if let Some(proc) = self.track_processors.get(&track_id) {
-                    let mut extra: Vec<MidiEvent> = Vec::new();
                     for &(ch, key, abs_beat) in &proc.pending_note_offs {
                         if abs_beat >= block_start_beat && abs_beat < block_end_beat {
                             let tf =
                                 conv.beats_to_samples(abs_beat - block_start_beat).round() as i64;
-                            extra.push(MidiEvent {
-                                status: 0x80 | (ch as u8),
+                            all_midi_events.push(RtMidiEvent {
+                                status: 0x80 | ch,
                                 data1: key,
                                 data2: 0,
                                 time_frames: tf,
                             });
                         }
                     }
-                    all_midi_events.extend(extra);
                 }
-            }
 
-            // Do the mutation in a dedicated scope
-            {
+                // Remove emitted pending note-offs
+                if let Some(proc) = self.track_processors.get_mut(&track_id) {
+                    proc.pending_note_offs
+                        .retain(|&(_, _, abs_beat)| abs_beat >= block_end_beat);
+                }
+
+                // Build clip MIDI events
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     for clip in &track.midi_clips {
                         let clip_events = build_block_midi_events(
@@ -1465,8 +1510,9 @@ impl AudioEngine {
                             &mut proc.plugin_active_notes,
                             &mut proc.pending_note_offs,
                         );
+
                         all_midi_events.extend(clip_events.into_iter().map(|(st, d1, d2, t)| {
-                            MidiEvent {
+                            RtMidiEvent {
                                 status: st,
                                 data1: d1,
                                 data2: d2,
