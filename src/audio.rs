@@ -160,7 +160,7 @@ pub fn run_audio_thread(
     let host = cpal::default_host();
     let device = host.default_output_device().expect("No output device");
     let config = device.default_output_config().expect("No default config");
-    let sample_rate = config.sample_rate().0 as f64;
+    let sample_rate = config.sample_rate() as f64;
     let channels = config.channels() as usize;
 
     audio_state.sample_rate.store(sample_rate as f32);
