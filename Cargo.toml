@@ -86,7 +86,7 @@ package = "com.yadaw.app"
 label = "YADAW"
 uses-permission = ["android.permission.RECORD_AUDIO"]
 build_targets = ["aarch64-linux-android"]
-resources = "src/experiments/res"
+resources = "others/packaging/res"
 
 [package.metadata.android.application]
 icon = "@drawable/ic_launcher_monochrome"
