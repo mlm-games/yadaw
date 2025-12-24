@@ -1,0 +1,2 @@
+- update cpal to 0.17
+- add midi instrument playback while not recording
