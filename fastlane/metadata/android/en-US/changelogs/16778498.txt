@@ -1,0 +1,2 @@
+- increase max enum size, and use scrollbar for the enum combobox
+- move icons and others files to appropriate locs
