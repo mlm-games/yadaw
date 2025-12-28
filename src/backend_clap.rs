@@ -147,7 +147,7 @@ mod clap_impl {
                 return (ParamKind::Bool, None, unit);
             }
 
-            const MAX_ENUM_STEPS: i32 = 256;
+            const MAX_ENUM_STEPS: i32 = 1024;
             if range > 0 && range <= MAX_ENUM_STEPS {
                 let mut labels = Vec::with_capacity((range + 1) as usize);
                 let mut all_valid = true;

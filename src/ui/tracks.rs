@@ -715,7 +715,6 @@ impl TracksPanel {
                         ParamKind::Enum => {
                             if let Some(labels) = &pinfo.enum_labels {
                                 let steps = labels.len() as i32 - 1;
-                                // Map current value to index (assuming 1.0 steps)
                                 let idx = ((v - pinfo.min).round() as i32).clamp(0, steps) as usize;
 
                                 let current_label = labels
@@ -724,33 +723,37 @@ impl TracksPanel {
                                     .unwrap_or_else(|| format!("{}", idx));
 
                                 let mut new_idx = idx;
-                                let resp = egui::ComboBox::from_id_salt((
-                                    &pinfo.name,
-                                    track_id,
-                                    plugin_id,
-                                ))
-                                .selected_text(current_label)
-                                .width(160.0)
-                                .show_ui(ui, |ui| {
-                                    let mut changed = false;
+                                let mut changed = false; // Move outside
 
-                                    ui.add_enabled_ui(!is_readonly, |ui| {
-                                        for (i, label) in labels.iter().enumerate() {
-                                            if ui.selectable_value(&mut new_idx, i, label).changed()
-                                            {
-                                                changed = true;
-                                            }
-                                        }
+                                egui::ComboBox::from_id_salt((&pinfo.name, track_id, plugin_id))
+                                    .selected_text(current_label)
+                                    .width(160.0)
+                                    .show_ui(ui, |ui| {
+                                        egui::ScrollArea::vertical().max_height(300.0).show(
+                                            ui,
+                                            |ui| {
+                                                ui.add_enabled_ui(!is_readonly, |ui| {
+                                                    for (i, label) in labels.iter().enumerate() {
+                                                        if ui
+                                                            .selectable_value(
+                                                                &mut new_idx,
+                                                                i,
+                                                                label,
+                                                            )
+                                                            .changed()
+                                                        {
+                                                            changed = true;
+                                                        }
+                                                    }
+                                                });
+                                            },
+                                        );
                                     });
-                                    changed
-                                });
 
-                                if resp.inner.unwrap_or(false) {
+                                if changed {
                                     v = pinfo.min + new_idx as f32;
-                                    true
-                                } else {
-                                    false
                                 }
+                                changed
                             } else {
                                 // Fallback to Int slider if somehow enum_labels are missing
                                 let mut int_val = v.round() as i32;
