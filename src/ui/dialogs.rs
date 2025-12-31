@@ -1787,20 +1787,24 @@ impl ImportAudioDialog {
             let bpm = app.audio_state.bpm.load();
 
             for path_buf in picked_paths {
-
                 let processing_path_result: Result<std::path::PathBuf, anyhow::Error> = {
                     #[cfg(target_os = "android")]
                     {
                         if let Some(uri_str) = path_buf.to_str() {
                             if uri_str.starts_with("content://") {
-                                let file_name = path_buf.file_name().unwrap_or_else(|| std::ffi::OsStr::new("imported_audio")).to_string_lossy();
+                                let file_name = path_buf
+                                    .file_name()
+                                    .unwrap_or_else(|| std::ffi::OsStr::new("imported_audio"))
+                                    .to_string_lossy();
                                 let dest_name = format!(
                                     "import_{}_{}",
                                     chrono::Local::now().format("%H%M%S"),
                                     file_name
                                 );
-                                crate::android_saf::copy_from_content_uri_to_internal(uri_str, &dest_name)
-                                    .map_err(anyhow::Error::from)
+                                crate::android_saf::copy_from_content_uri_to_internal(
+                                    uri_str, &dest_name,
+                                )
+                                .map_err(anyhow::Error::from)
                             } else {
                                 Ok(path_buf)
                             }
@@ -1836,49 +1840,9 @@ impl ImportAudioDialog {
             .to_lowercase();
 
         if ext == "mid" || ext == "midi" {
-            let is_midi_track = {
-                let state = app.state.lock().unwrap();
-                state.tracks.get(&app.selected_track).map(|t| t.track_type == TrackType::Midi).unwrap_or(false)
-            };
-
-            if !is_midi_track {
-                app.dialogs.show_warning("Cannot import MIDI into an audio track. Select a MIDI track first.");
-                return;
-            }
-
-            match crate::midi_import::import_midi_file(path, bpm as f32) {
-                Ok(clip) => {
-                    let mut state = app.state.lock().unwrap();
-                    if let Some(track) = state.tracks.get_mut(&app.selected_track) {
-                        track.midi_clips.push(clip);
-                        state.ensure_ids();
-                    }
-                }
-                Err(e) => {
-                    app.dialogs.show_error(&format!("Failed to import MIDI {}: {}", path.display(), e));
-                }
-            }
+            app.open_file_from_path(path);
         } else {
-            let is_audio_track = {
-                let state = app.state.lock().unwrap();
-                state.tracks.get(&app.selected_track).map(|t| !matches!(t.track_type, TrackType::Midi)).unwrap_or(false)
-            };
-
-            if !is_audio_track {
-                app.dialogs.show_warning("Cannot import audio into a MIDI track. Select an audio track first.");
-                return;
-            }
-
-            crate::audio_import::import_audio_file(path, bpm as f32)
-                .map_err(|e| crate::error::common::audio_import_failed(path, e))
-                .map(|clip| {
-                    let mut state = app.state.lock().unwrap();
-                    if let Some(track) = state.tracks.get_mut(&app.selected_track) {
-                        track.audio_clips.push(clip);
-                        state.ensure_ids();
-                    }
-                })
-                .notify_user(&mut app.dialogs);
+            app.open_file_from_path(path);
         }
     }
 

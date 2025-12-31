@@ -1773,16 +1773,46 @@ impl YadawApp {
                 self.push_undo();
                 let mut state = self.state.lock().unwrap();
 
-                // Assign IDs
                 clip.id = state.fresh_id();
+
                 for note in &mut clip.notes {
-                    note.id = state.fresh_id();
+                    if note.id == 0 {
+                        note.id = state.fresh_id();
+                    }
+                    // Sanitize note data
+                    if !note.duration.is_finite() || note.duration <= 0.0 {
+                        note.duration = 1e-6;
+                    }
+                    if !note.start.is_finite() || note.start < 0.0 {
+                        note.start = 0.0;
+                    }
                 }
 
+                let pattern_id = state.fresh_id();
+                let pattern = crate::model::clip::MidiPattern {
+                    id: pattern_id,
+                    notes: std::mem::take(&mut clip.notes), // Move notes to pattern
+                };
+                state.patterns.insert(pattern_id, pattern);
+
+                // Link clip to pattern
+                clip.pattern_id = Some(pattern_id);
+                clip.notes.clear(); // Pattern is now the source of truth
+
                 if let Some(track) = state.tracks.get_mut(&track_id) {
-                    track.midi_clips.push(clip);
-                    state.ensure_ids();
+                    track.midi_clips.push(clip.clone());
+
+                    // Register in clips_by_id
+                    state.clips_by_id.insert(
+                        clip.id,
+                        crate::project::ClipRef {
+                            track_id,
+                            is_midi: true,
+                        },
+                    );
                 }
+
+                state.ensure_ids();
                 drop(state);
 
                 let _ = self.command_tx.send(AudioCommand::UpdateTracks);
