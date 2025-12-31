@@ -1,0 +1,1 @@
+- Try adding midi file opening support (for linux)
