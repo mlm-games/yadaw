@@ -2,12 +2,11 @@
 Version=1.0
 Type=Application
 Name=Yadaw
-GenericName=Yadaw
 Comment=Mini DAW for sound design and prototyping.
 Exec=yadaw %F
 Icon=io.github.mlm_games.yadaw
 Terminal=false
 Categories=Audio;AudioVideo;Music;
-MimeType=audio/midi;audio/x-wav;audio/x-flac;audio/mpeg;
+MimeType=audio/midi;audio/x-midi;application/x-midi;audio/x-wav;audio/wav;audio/flac;audio/mpeg;audio/ogg;
 StartupWMClass=Yadaw
 StartupNotify=true

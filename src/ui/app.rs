@@ -1700,6 +1700,173 @@ impl YadawApp {
     pub fn invalidate_clap_params_for_track(&mut self, track_id: u64) {
         self.clap_param_meta.retain(|(tid, _), _| *tid != track_id);
     }
+
+    /// Opens a file based on its extension, called when app is launched with a file argument
+    pub fn open_file_from_path(&mut self, path: &Path) {
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase());
+
+        log::info!("Opening file from path: {:?} (ext: {:?})", path, extension);
+
+        match extension.as_deref() {
+            Some("mid") | Some("midi") => {
+                self.import_midi_file_to_new_track(path);
+            }
+            Some("yadaw") => {
+                self.load_project_from_path(path);
+            }
+            Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a") | Some("aac") => {
+                self.import_audio_file_to_new_track(path);
+            }
+            _ => {
+                log::warn!("Unknown file type: {:?}", path);
+                self.dialogs.show_warning(&format!(
+                    "Cannot open file: unknown type '{}'",
+                    extension.unwrap_or_default()
+                ));
+            }
+        }
+    }
+
+    /// Import a MIDI file, creating a new MIDI track if needed
+    fn import_midi_file_to_new_track(&mut self, path: &Path) {
+        // Ensure we have a MIDI track selected, or create one
+        let midi_track_id = {
+            let state = self.state.lock().unwrap();
+
+            // Check if selected track is MIDI
+            if state
+                .tracks
+                .get(&self.selected_track)
+                .map(|t| matches!(t.track_type, TrackType::Midi))
+                .unwrap_or(false)
+            {
+                Some(self.selected_track)
+            } else {
+                // Find first MIDI track
+                state
+                    .tracks
+                    .iter()
+                    .find(|(_, t)| matches!(t.track_type, TrackType::Midi))
+                    .map(|(id, _)| *id)
+            }
+        };
+
+        let track_id = match midi_track_id {
+            Some(id) => id,
+            None => {
+                // Create a new MIDI track
+                self.add_midi_track();
+                self.selected_track
+            }
+        };
+
+        // Select the track
+        self.select_track(track_id);
+
+        // Import the MIDI file
+        let bpm = self.audio_state.bpm.load();
+        match crate::midi_import::import_midi_file(path, bpm) {
+            Ok(mut clip) => {
+                self.push_undo();
+                let mut state = self.state.lock().unwrap();
+
+                // Assign IDs
+                clip.id = state.fresh_id();
+                for note in &mut clip.notes {
+                    note.id = state.fresh_id();
+                }
+
+                if let Some(track) = state.tracks.get_mut(&track_id) {
+                    track.midi_clips.push(clip);
+                    state.ensure_ids();
+                }
+                drop(state);
+
+                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+                self.dialogs.show_success(&format!(
+                    "Imported MIDI file: {}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ));
+            }
+            Err(e) => {
+                self.dialogs.show_error(&format!(
+                    "Failed to import MIDI file '{}': {}",
+                    path.display(),
+                    e
+                ));
+            }
+        }
+    }
+
+    /// Import an audio file, creating a new audio track if needed
+    fn import_audio_file_to_new_track(&mut self, path: &Path) {
+        // Ensure we have an audio track selected, or create one
+        let audio_track_id = {
+            let state = self.state.lock().unwrap();
+
+            // Check if selected track is audio (not MIDI)
+            if state
+                .tracks
+                .get(&self.selected_track)
+                .map(|t| !matches!(t.track_type, TrackType::Midi))
+                .unwrap_or(false)
+            {
+                Some(self.selected_track)
+            } else {
+                // Find first audio track
+                state
+                    .tracks
+                    .iter()
+                    .find(|(_, t)| !matches!(t.track_type, TrackType::Midi))
+                    .map(|(id, _)| *id)
+            }
+        };
+
+        let track_id = match audio_track_id {
+            Some(id) => id,
+            None => {
+                // Create a new audio track
+                self.add_audio_track();
+                self.selected_track
+            }
+        };
+
+        // Select the track
+        self.select_track(track_id);
+
+        // Import the audio file
+        let bpm = self.audio_state.bpm.load();
+        match crate::audio_import::import_audio_file(path, bpm) {
+            Ok(mut clip) => {
+                self.push_undo();
+                let mut state = self.state.lock().unwrap();
+
+                clip.id = state.fresh_id();
+
+                if let Some(track) = state.tracks.get_mut(&track_id) {
+                    track.audio_clips.push(clip);
+                    state.ensure_ids();
+                }
+                drop(state);
+
+                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+                self.dialogs.show_success(&format!(
+                    "Imported audio file: {}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ));
+            }
+            Err(e) => {
+                self.dialogs.show_error(&format!(
+                    "Failed to import audio file '{}': {}",
+                    path.display(),
+                    e
+                ));
+            }
+        }
+    }
 }
 
 impl eframe::App for YadawApp {

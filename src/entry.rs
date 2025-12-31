@@ -23,6 +23,15 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("Starting YADAW...");
 
+    let file_to_open: Option<String> = std::env::args().nth(1).and_then(|arg| {
+        let path = std::path::Path::new(&arg);
+        if path.exists() && path.is_file() {
+            Some(arg)
+        } else {
+            None
+        }
+    });
+
     // Load configuration
     let config = Config::load().unwrap_or_default();
 
@@ -106,12 +115,14 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
+    let initial_file = file_to_open.clone();
+
     eframe::run_native(
         "YADAW - Yet Another DAW",
         native_options,
         Box::new(move |_cc| {
             let ui_midi_handler = midi_input_handler.clone();
-            Ok(Box::new(ui::YadawApp::new(
+            let mut app = ui::YadawApp::new(
                 app_state.clone(),
                 audio_state.clone(),
                 command_tx.clone(),
@@ -119,7 +130,14 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 available_plugins,
                 config,
                 ui_midi_handler,
-            )))
+            );
+
+            // Open file if provided
+            if let Some(ref path) = initial_file {
+                app.open_file_from_path(std::path::Path::new(path));
+            }
+
+            Ok(Box::new(app))
         }),
     )?;
 
