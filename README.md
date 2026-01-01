@@ -4,6 +4,8 @@ A basic daw for sound effects (works on Android too, but not as functional). Is 
 
 Current intention is to not add too much code for outdated parts, and to keep it minimal; helps refactoring later on, might implement a plugin system like blender if needed (for example, midi controller lanes feature could be implemented as a plugin, etc..)
 
+<img src="others/assets/demo.gif" align="center">
+
 ### Build from source
 #### Desktop
 - Just run using `cargo run` for windows, mac or linux (windows needs to be compiled manually for now, maybe donation only in future? Need some sort of revenue ig).
