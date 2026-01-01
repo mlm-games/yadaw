@@ -4,7 +4,7 @@ version: '9.9.9' # Will be auto-updated
 summary: Rust-powered, plugin-first multiplatform DAW
 description: |
   A small and lightweight DAW for sound design and prototyping. CLAP/LV2 hosting, 
-  runs on desktop and Android. Made using Rust + egui. Fully OSS (AGPL).
+  runs on desktop and Android. Made using Rust + egui. Fully OSS (AGPLv3).
 
 grade: stable
 confinement: strict
