@@ -1,0 +1,6 @@
+- Update release.yml
+- Create LICENSE
+- add the updated desktop and metainfo.xml files
+- Update README with a gif
+- more screenshots and icon (keep the old icon for display)
+- use the import_file fn in import dialog
