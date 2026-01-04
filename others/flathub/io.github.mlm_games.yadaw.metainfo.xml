@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.mlm_games.yadaw</id>
+
+  <name>YADAW</name>
+  <summary>Lightweight Mini-DAW for sound design and prototyping</summary>
+
+  <developer id="io.github.mlm_games">
+    <name>MLM Games</name>
+  </developer>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      Yadaw is a small, fast, and
+      lightweight DAW built with Rust and egui. It mainly depends on external plugins,
+      and has no inbuilt plugins of its own to keep the itself light.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>LV2 and CLAP plugin hosting for effects and instruments</li>
+      <li>Multi-track audio recording and editing</li>
+      <li>MIDI input support with piano roll editor</li>
+      <li>Waveform visualization (simple) and audio import/export</li>
+      <li>Automation lanes for precise parameter control</li>
+      <li>Project management with save/load functionality</li>
+      <li>Low latency audio engine powered by cpal (no jack)</li>
+      <li>Cross-platform: Linux, Windows, macOS, and Android</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.mlm_games.yadaw.desktop</launchable>
+
+  <url type="homepage">https://github.com/mlm-games/yadaw</url>
+  <url type="bugtracker">https://github.com/mlm-games/yadaw/issues</url>
+  <url type="vcs-browser">https://github.com/mlm-games/yadaw</url>
+  <url type="donation">https://github.com/sponsors/mlm-games</url>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#4a90d9</color>
+    <color type="primary" scheme_preference="dark">#1c4a7e</color>
+  </branding>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main UI</caption>
+      <image>https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/tvScreenshots/4.png</image>
+    </screenshot>
+    <screenshot type="default">
+      <caption>Overloaded</caption>
+      <image>https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/tvScreenshots/1.png</image>
+    </screenshot>
+    <screenshot type="default">
+      <caption>Piano roll</caption>
+      <image>https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/tvScreenshots/2.png</image>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.5.3" date="2026-01-05">
+      <description>
+        <ul>
+          <li>Initial flathub release</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+
+  <supports>
+    <control>touch</control>
+  </supports>
+
+  <provides>
+    <binary>yadaw</binary>
+    <mediatype>audio/midi</mediatype>
+    <mediatype>audio/x-midi</mediatype>
+    <mediatype>audio/wav</mediatype>
+    <mediatype>audio/x-wav</mediatype>
+    <mediatype>audio/flac</mediatype>
+    <mediatype>audio/mpeg</mediatype>
+    <mediatype>audio/ogg</mediatype>
+  </provides>
+
+  <keywords>
+    <keyword>audio</keyword>
+    <keyword>music</keyword>
+    <keyword>DAW</keyword>
+    <keyword>MIDI</keyword>
+    <keyword>LV2</keyword>
+    <keyword>CLAP</keyword>
+    <keyword>sequencer</keyword>
+  </keywords>
+</component>

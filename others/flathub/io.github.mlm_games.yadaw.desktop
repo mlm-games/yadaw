@@ -1,12 +1,13 @@
 [Desktop Entry]
-Version=1.0
 Type=Application
+Version=1.5
 Name=Yadaw
-Comment=Mini DAW for sound design and prototyping.
+Comment=Lightweight mini-DAW for sound design and prototyping with LV2/CLAP plugin support
+Categories=AudioVideo;Audio;Music;Sequencer;Midi;
+Keywords=audio;music;daw;midi;lv2;clap;plugin;sequencer;sound;
 Exec=yadaw %F
 Icon=io.github.mlm_games.yadaw
 Terminal=false
-Categories=Audio;AudioVideo;Music;
-MimeType=audio/midi;audio/x-midi;application/x-midi;audio/x-wav;audio/wav;audio/flac;audio/mpeg;audio/ogg;
-StartupWMClass=Yadaw
 StartupNotify=true
+StartupWMClass=yadaw
+MimeType=audio/midi;audio/x-midi;audio/wav;audio/x-wav;audio/flac;audio/mpeg;audio/ogg;
