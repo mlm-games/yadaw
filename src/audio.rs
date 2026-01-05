@@ -168,6 +168,7 @@ pub fn run_audio_thread(
     let host_cfg = HostConfig {
         sample_rate,
         max_block: MAX_BUFFER_SIZE,
+        plugin_scan_paths: Vec::new(), // Same as previous
     };
     let host_facade = HostFacade::new(host_cfg).expect("HostFacade init failed");
 
@@ -438,6 +439,7 @@ impl AudioEngine {
         let host_cfg = HostConfig {
             sample_rate: export_sample_rate as f64,
             max_block: MAX_BUFFER_SIZE,
+            plugin_scan_paths: Vec::new(), // Not used anyway
         };
         let host_facade = HostFacade::new(host_cfg)?;
 

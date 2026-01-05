@@ -122,7 +122,25 @@ impl Config {
     fn default_plugin_paths() -> Vec<PathBuf> {
         let mut paths = Vec::new();
 
-        // Common LV2 paths on Linux
+        // for Flatpak envs mainly
+        if let Ok(path_str) = std::env::var("CLAP_PATH") {
+            for path in path_str.split(':') {
+                let p = PathBuf::from(path);
+                if p.exists() {
+                    paths.push(p);
+                }
+            }
+        }
+
+        if let Ok(path_str) = std::env::var("LV2_PATH") {
+            for path in path_str.split(':') {
+                let p = PathBuf::from(path);
+                if p.exists() {
+                    paths.push(p);
+                }
+            }
+        }
+
         if let Ok(home) = std::env::var("HOME") {
             paths.push(PathBuf::from(format!("{}/.lv2", home)));
             paths.push(PathBuf::from(format!("{}/.clap", home)));
@@ -131,6 +149,9 @@ impl Config {
         paths.push(PathBuf::from("/usr/local/lib/lv2"));
         paths.push(PathBuf::from("/usr/lib/clap"));
         paths.push(PathBuf::from("/usr/local/lib/clap"));
+
+        paths.sort();
+        paths.dedup();
 
         paths
     }

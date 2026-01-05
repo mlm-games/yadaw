@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +29,7 @@ pub type RtMidiEvent = MidiEvent;
 pub struct HostConfig {
     pub sample_rate: f64,
     pub max_block: usize,
+    pub plugin_scan_paths: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

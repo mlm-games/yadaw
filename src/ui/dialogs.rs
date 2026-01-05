@@ -1650,16 +1650,25 @@ pub struct PluginManagerDialog {
 impl PluginManagerDialog {
     pub fn new() -> Self {
         let browse_fd = FileDialog::new().title("Select Plugin Directory");
+        
+        let scan_paths = crate::config::Config::load()
+            .map(|c| c.paths.plugin_scan_paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect())
+            .unwrap_or_else(|_| {
+                // Fallback to default paths if config load fails
+                crate::config::Config::default()
+                    .paths
+                    .plugin_scan_paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect()
+            });
+        
         Self {
             closed: false,
-            scan_paths: vec![
-                "~/.lv2".to_string(),
-                "/usr/lib/lv2".to_string(),
-                "/usr/local/lib/lv2".to_string(),
-                "~/.clap".to_string(),
-                "/usr/lib/clap".to_string(),
-                "/usr/local/lib/clap".to_string(),
-            ],
+            scan_paths,
             new_path: String::new(),
             browse_fd,
             browse_opened: false,
@@ -1713,9 +1722,21 @@ impl PluginManagerDialog {
                 ui.separator();
 
                 if ui.button("Scan for Plugins").clicked() {
+                    if let Ok(mut config) = crate::config::Config::load() {
+                        config.paths.plugin_scan_paths = self.scan_paths
+                            .iter()
+                            .map(|s| std::path::PathBuf::from(s))
+                            .collect();
+                        let _ = config.save();
+                    }
+                    
                     let host_cfg = HostConfig {
                         sample_rate: app.audio_state.sample_rate.load() as f64,
                         max_block: crate::constants::MAX_BUFFER_SIZE,
+                        plugin_scan_paths: self.scan_paths
+                            .iter()
+                            .map(|s| std::path::PathBuf::from(s))
+                            .collect(),
                     };
                     match crate::plugin_facade::HostFacade::new(host_cfg).and_then(|f| f.scan()) {
                         Ok(list) => {

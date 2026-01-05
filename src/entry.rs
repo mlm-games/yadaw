@@ -56,6 +56,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let host_cfg = HostConfig {
         sample_rate: audio_state.sample_rate.load() as f64, // or device_rate if you queried CPAL first
         max_block: constants::MAX_BUFFER_SIZE,
+        plugin_scan_paths: config.paths.plugin_scan_paths.clone(),
     };
     let ui_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
     let available_plugins = ui_facade.scan().unwrap_or_default();
@@ -182,6 +183,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     let host_cfg = HostConfig {
         sample_rate: audio_state.sample_rate.load() as f64, // or device_rate if you queried CPAL first
         max_block: constants::MAX_BUFFER_SIZE,
+        plugin_scan_paths: config.paths.plugin_scan_paths.clone(),
     };
     let ui_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
     let available_plugins = ui_facade.scan().unwrap_or_default();

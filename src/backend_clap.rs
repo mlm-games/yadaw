@@ -41,18 +41,6 @@ mod clap_impl {
             Ok(Self { cfg, host_info })
         }
 
-        fn scan_dirs() -> Vec<PathBuf> {
-            let mut v = Vec::new();
-            let local = crate::paths::plugins_dir();
-            v.push(local);
-            if let Ok(home) = std::env::var("HOME") {
-                v.push(PathBuf::from(format!("{home}/.clap")));
-            }
-            v.push(PathBuf::from("/usr/lib/clap"));
-            v.push(PathBuf::from("/usr/local/lib/clap"));
-            v
-        }
-
         fn enumerate_bundle(path: &Path, out: &mut Vec<UnifiedPluginInfo>) {
             let mut libs = Vec::new();
             if path.is_file() {
@@ -338,11 +326,11 @@ mod clap_impl {
 
         fn scan(&self) -> Result<Vec<UnifiedPluginInfo>> {
             let mut out = Vec::new();
-            for dir in Self::scan_dirs() {
+            for dir in &self.cfg.plugin_scan_paths {
                 if !dir.exists() {
                     continue;
                 }
-                if let Ok(rd) = std::fs::read_dir(&dir) {
+                if let Ok(rd) = std::fs::read_dir(dir) {
                     for e in rd.flatten() {
                         let p = e.path();
                         if p.is_dir() || p.extension().and_then(|e| e.to_str()) == Some("clap") {
