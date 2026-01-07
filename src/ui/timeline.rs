@@ -153,7 +153,7 @@ impl TimelineView {
                     if ui.button("−").clicked() {
                         self.zoom_x = (self.zoom_x * 0.8).max(10.0);
                     }
-                    if ui.button("╋").clicked() {
+                    if ui.button("+").clicked() {
                         self.zoom_x = (self.zoom_x * 1.25).min(500.0);
                     }
                     ui.label(format!("{:.0}px/beat", self.zoom_x));

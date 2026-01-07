@@ -53,9 +53,9 @@ impl TracksPanel {
         ui.horizontal(|ui| {
             ui.heading("Tracks");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.toggle_value(&mut self.show_mixer_strip, "🎚")
+                ui.toggle_value(&mut self.show_mixer_strip, "☰")
                     .on_hover_text("Show/Hide Mixer Strip");
-                ui.toggle_value(&mut self.show_automation_buttons, "🎛")
+                ui.toggle_value(&mut self.show_automation_buttons, "〰")
                     .on_hover_text("Show/Hide Automation");
                 ui.toggle_value(&mut self.show_inputs, "🔣")
                     .on_hover_text("Show/Hide Input Options");
@@ -532,20 +532,20 @@ impl TracksPanel {
                                 bypass_local,
                             ));
                         }
-                        if ui.small_button("✕ (Remove)").clicked() {
+                        if ui.small_button("⊗").clicked() {
                             plugin_to_remove = Some(plugin_id);
                         }
-                        if plugin_idx > 0 && ui.small_button("▲ (Up)").clicked() {
+                        if plugin_idx > 0 && ui.small_button("⏶").clicked() {
                             move_action = Some((plugin_idx, plugin_idx - 1));
                         }
-                        if plugin_idx < chain_len - 1 && ui.small_button("▼ (Down)").clicked() {
+                        if plugin_idx < chain_len - 1 && ui.small_button("⏷").clicked() {
                             move_action = Some((plugin_idx, plugin_idx + 1));
                         }
                     });
 
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.menu_button("Presets ▾", |ui| {
+                        ui.menu_button("Presets 📁", |ui| {
                             if ui.button("Save Snapshot").clicked() {
                                 let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
                                 let preset_name = format!("Snapshot_{}", ts);
@@ -844,7 +844,7 @@ impl TracksPanel {
                     }
 
                     if pinfo.is_automatable {
-                        ui.weak("◉").on_hover_text("Automatable");
+                        ui.weak("⚡").on_hover_text("Automatable");
                     }
                 });
             };

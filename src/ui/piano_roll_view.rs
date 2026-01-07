@@ -500,7 +500,7 @@ impl PianoRollView {
                         self.piano_roll.zoom_x = (self.piano_roll.zoom_x * 0.8).max(10.0);
                         self.piano_roll.zoom_y = (self.piano_roll.zoom_y * 0.9).max(10.0);
                     }
-                    if ui.button("╋").clicked() {
+                    if ui.button("+").clicked() {
                         self.piano_roll.zoom_x = (self.piano_roll.zoom_x * 1.25).min(500.0);
                         self.piano_roll.zoom_y = (self.piano_roll.zoom_y * 1.1).min(50.0);
                     }

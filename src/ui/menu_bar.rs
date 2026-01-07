@@ -513,10 +513,10 @@ impl MenuBar {
 
     fn help_menu(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         ui.menu_button("Help", |ui| {
-            if ui.button("User Manual").clicked() {
-                // Open user manual
-                ui.close();
-            }
+            // if ui.button("User Manual").clicked() {
+            //     // TODO: Open user manual
+            //     ui.close();
+            // }
 
             if ui.button("Keyboard Shortcuts").clicked() {
                 app.dialogs.show_shortcuts_editor();
@@ -540,11 +540,10 @@ impl MenuBar {
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.heading("YADAW");
+                        ui.heading("Yadaw");
                         ui.label("Yet Another DAW");
-                        ui.label("Version 0.1.0");
                         ui.separator();
-                        ui.label("A practice DAW implementation in Rust");
+                        ui.label("A trial at a daw that doesn't crash often");
                         ui.hyperlink("https://github.com/mlm-games/yadaw");
                     });
                 });
