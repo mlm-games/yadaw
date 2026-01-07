@@ -1,0 +1,1 @@
+- use the limited set of symbols that display everywhere, and hide the help manual
