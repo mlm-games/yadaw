@@ -16,7 +16,7 @@
     <p>
       Yadaw is a small, fast, and
       lightweight DAW built with Rust and egui. It mainly depends on external plugins,
-      and has no inbuilt plugins of its own to keep the itself light.
+      and has no inbuilt plugins of its own to keep the base light.
     </p>
     <p>Features:</p>
     <ul>
