@@ -1,0 +1,2 @@
+- change icon (png) og does fail most checks in flathub
+- Update io.github.mlm_games.yadaw.metainfo.xml
