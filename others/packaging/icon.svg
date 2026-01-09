@@ -8,6 +8,9 @@
    id="svg6"
    sodipodi:docname="icon.svg"
    inkscape:version="1.4.3 (0d15f75, 2025-12-25)"
+   inkscape:export-filename="icon.png"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns="http://www.w3.org/2000/svg"
@@ -101,7 +104,8 @@
      fill-opacity="0.3"
      stroke="#3f3f46"
      stroke-width="1"
-     id="rect5" />
+     id="rect5"
+     style="display:inline" />
   <path
      d="M 22.027735,60.449923 C 32.027735,60.449923 38,40 48,40 c 10,0 10,48 20,48 10,0 10,-38 20,-38 10,0 11.972265,17.94453 17.97227,17.94453"
      stroke="url(#neon-juice)"
@@ -112,7 +116,7 @@
      id="path5"
      sodipodi:nodetypes="csssc"
      style="stroke:url(#neon-juice)"
-     transform="matrix(1,0,0,-1,0,128)" />
+     transform="matrix(0.82356735,0,0,-0.82356735,11.291691,116.70831)" />
   <circle
      cx="44"
      cy="94"
