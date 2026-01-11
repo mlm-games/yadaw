@@ -8,7 +8,7 @@ Current intention is to not add too much code for outdated parts, and to keep it
 
 ### Build from source
 #### Desktop
-- Just run using `cargo run` for windows, mac or linux (windows needs to be compiled manually for now, maybe donation only in future? Need some sort of revenue ig).
+- Just run using `cargo run` for windows, mac or linux, and install any missing libs (mostly pkgconfig, lv2 headers & livi components, windows doesn't have a release build, and needs to be compiled manually for now, maybe donation only in future? Need some sort of revenue ig).
 #### Android
 - Follow the instructions in the third_party folder's md.
 - Plugins should be compiled beforehand for android (tested vitsel-clap and works well on android)
