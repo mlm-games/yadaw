@@ -20,6 +20,14 @@ Current intention is to not add too much code for outdated parts, and to keep it
 - No VST support (LV2 and CLAP only).
 - No MP3/FLAC export (WAV only).
 
+### Get-started via a video
+
+
+
+https://github.com/user-attachments/assets/4843c131-f972-49ce-92e3-96b08c483fff
+
+
+
 
 ### License 
 
