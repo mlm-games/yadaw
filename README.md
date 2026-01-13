@@ -34,7 +34,7 @@ Refer the [quick start](quick_start.md) readme
 https://github.com/user-attachments/assets/4843c131-f972-49ce-92e3-96b08c483fff
 
 
-
+The video uses VSCO2 pack's instruments via [samplo](https://github.com/mlm-games/samplo-clap), and plays the midi file from [here](https://www.ninsheetmusic.org/download/mid/5282) ([ninsheetmusic](https://www.ninsheetmusic.org/))
 
 ### License 
 
