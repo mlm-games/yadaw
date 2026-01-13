@@ -20,6 +20,13 @@ Current intention is to not add too much code for outdated parts, and to keep it
 - No VST support (LV2 and CLAP only).
 - No MP3/FLAC export (WAV only).
 
+
+## Quick start
+
+Refer the [quick start](quick_start.md) readme 
+
+(or)
+
 ### Get-started via a video
 
 
