@@ -36,6 +36,13 @@ https://github.com/user-attachments/assets/4843c131-f972-49ce-92e3-96b08c483fff
 
 The video uses VSCO2 pack's instruments via [samplo](https://github.com/mlm-games/samplo-clap), and plays the midi file from [here](https://www.ninsheetmusic.org/download/mid/5282) ([ninsheetmusic](https://www.ninsheetmusic.org/))
 
+## Version Trackers
+
+| Platform    | Version |
+|-------------|---------|
+| AUR         | [![AUR Version](https://img.shields.io/aur/version/mages-bin)](https://aur.archlinux.org/packages/yadaw-bin) |
+| Flathub    | [![Flathub Version](https://img.shields.io/flathub/v/io.github.mlm_games.yadaw)](https://flathub.org/apps/io.github.mlm_games.yadaw) |
+
 ### License 
 
 [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.en.html)
