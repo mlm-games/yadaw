@@ -131,7 +131,7 @@ impl MenuBar {
 
             ui.separator();
 
-            let notes_active =
+            let _notes_active =
                 matches!(app.active_edit_target, super::app::ActiveEditTarget::Notes)
                     && app.is_selected_track_midi();
 
@@ -570,13 +570,13 @@ fn draw_preferences_static(ui: &mut egui::Ui, config: &crate::config::Config) {
         // Categories list
         ui.vertical(|ui| {
             ui.set_min_width(150.0);
-            ui.selectable_label(true, "Audio"); // TODO for later
-            ui.selectable_label(false, "MIDI");
-            ui.selectable_label(false, "Appearance");
-            ui.selectable_label(false, "Shortcuts");
-            ui.selectable_label(false, "Behavior");
-            ui.selectable_label(false, "Plugins");
-            ui.selectable_label(false, "File Paths");
+            let _ = ui.selectable_label(true, "Audio"); // TODO for later
+            let _ = ui.selectable_label(false, "MIDI");
+            let _ = ui.selectable_label(false, "Appearance");
+            let _ = ui.selectable_label(false, "Shortcuts");
+            let _ = ui.selectable_label(false, "Behavior");
+            let _ = ui.selectable_label(false, "Plugins");
+            let _ = ui.selectable_label(false, "File Paths");
         });
 
         ui.separator();

@@ -300,7 +300,7 @@ impl MixerWindow {
                         ui.label("Sends");
 
                         // Fetch live sends
-                        let (mut sends, is_midi) = {
+                        let (mut sends, _is_midi) = {
                             let st = app.state.lock().unwrap();
                             let t = st.tracks.get(&track_id);
                             let sends = t.map(|tt| tt.sends.clone()).unwrap_or_default();

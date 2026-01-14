@@ -11,7 +11,7 @@ use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::ChannelStrip;
 use crate::model::clip::AudioClip;
 use crate::model::plugin_api::{
-    BackendKind, HostConfig, MidiEvent, ParamKey, ProcessCtx, RtMidiEvent,
+    BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEvent,
 };
 use crate::model::track::TrackType;
 use crate::plugin_facade::HostFacade;

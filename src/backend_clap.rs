@@ -4,7 +4,7 @@ mod clap_impl {
     use clack_host::utils::Cookie;
     use std::collections::HashMap;
     use std::mem::MaybeUninit;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
     use clack_host::prelude::*;
@@ -193,7 +193,7 @@ mod clap_impl {
 
             // Find where the number ends and unit begins
             // e.g., "5.00 ms" -> find position after "5.00"
-            let value_str = format!("{:.2}", value);
+            let _value_str = format!("{:.2}", value);
 
             // Try to find common patterns
             if let Some(pos) = text.find(|c: char| c.is_alphabetic() || c == '%' || c == '×') {

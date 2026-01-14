@@ -1054,7 +1054,7 @@ impl TracksPanel {
             let to = self.dnd_drop_target_idx.unwrap_or(from);
 
             // Resolve track ids by order
-            let (ids, len) = {
+            let (_ids, len) = {
                 let st = app.state.lock().unwrap();
                 (st.track_order.clone(), st.track_order.len())
             };

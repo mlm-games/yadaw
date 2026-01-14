@@ -157,7 +157,7 @@ impl GestureRecognizer {
         let centroid = self.compute_centroid();
         let distance = (self.touch_points[0].pos - self.touch_points[1].pos).length();
 
-        if let (Some(last_c), Some(last_d)) = (self.last_centroid, self.last_distance) {
+        if let (Some(_last_c), Some(last_d)) = (self.last_centroid, self.last_distance) {
             let scale = (distance / last_d).clamp(0.5, 2.0);
 
             if (scale - 1.0).abs() > self.config.pinch_min_scale_change {

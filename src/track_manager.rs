@@ -341,7 +341,7 @@ pub fn mute_track(tracks: &HashMap<u64, Track>, track_id: u64, command_tx: &Send
     }
 }
 
-pub fn arm_track_exclusive(tracks: &mut HashMap<u64, Track>, track_order: &[u64], track_id: u64) {
+pub fn arm_track_exclusive(tracks: &mut HashMap<u64, Track>, _track_order: &[u64], track_id: u64) {
     // Disarm all
     for track in tracks.values_mut() {
         track.armed = false;

@@ -502,7 +502,7 @@ impl YadawApp {
         }
 
         let new_ids: Vec<u64> = {
-            let mut state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap();
             (0..required_ids).map(|_| state.fresh_id()).collect()
         };
         let mut id_iter = new_ids.into_iter();

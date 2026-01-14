@@ -4,7 +4,7 @@ use std::sync::Arc;
 use egui_file_dialog::FileDialog;
 
 use super::*;
-use crate::error::{ResultExt, UserNotification, common};
+use crate::error::UserNotification;
 use crate::input::actions::{ActionContext, AppAction};
 use crate::input::InputManager;
 use crate::messages::{AudioCommand, ExportState};
@@ -906,7 +906,7 @@ impl TimeStretchDialog {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
+    pub fn show(&mut self, ctx: &egui::Context, _app: &mut super::app::YadawApp) {
         let mut open = true;
 
         egui::Window::new("Time Stretch")
@@ -1853,7 +1853,7 @@ impl ImportAudioDialog {
         }
     }
 
-    fn import_file(&self, path: &Path, app: &mut YadawApp, bpm: f64) {
+    fn import_file(&self, path: &Path, app: &mut YadawApp, _bpm: f64) {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -2039,7 +2039,7 @@ impl TrackGroupingDialog {
             .resizable(true)
             .default_size(egui::vec2(500.0, 500.0))
             .show(ctx, |ui| {
-                let (groups, order, track_info): (
+                let (groups, _order, track_info): (
                     Vec<crate::model::group::TrackGroup>,
                     Vec<u64>,
                     Vec<(u64, String, Option<u64>)>,

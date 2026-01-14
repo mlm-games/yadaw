@@ -147,7 +147,7 @@ pub fn categorize_plugin(p: &impl PluginCategorizationInfo) -> Vec<String> {
         categories.push("Effects".to_string());
     }
     let name = p.name().to_lowercase();
-    let uri = p.uri().to_lowercase();
+    let _uri = p.uri().to_lowercase();
 
     if name.contains("compressor") || name.contains("limiter") || name.contains("gate") {
         categories.push("Dynamics".to_string());

@@ -247,7 +247,7 @@ impl PianoRollView {
         // Translate UI actions into ID-based commands
         for action in mutation_actions {
             match action {
-                PianoRollAction::AddNote(mut note) => {
+                PianoRollAction::AddNote(note) => {
                     // New notes may come with id=0; processor will assign
                     let _ = app.command_tx.send(AudioCommand::AddNotesToClip {
                         clip_id,
@@ -328,7 +328,7 @@ impl PianoRollView {
 
                     ui.label("MIDI Clip:");
 
-                    let (clip_names, selected_text, create_clip_data, can_delete) = {
+                    let (_clip_names, _selected_text, _create_clip_data, can_delete) = {
                         let state = app.state.lock().unwrap();
                         if let Some(track) = state.tracks.get(&app.selected_track) {
                             let clip_names: Vec<String> =
@@ -527,7 +527,7 @@ impl PianoRollView {
         };
 
         // Resolve notes (pattern-first) and length once (read-only)
-        let (notes, clip_len) = {
+        let (notes, _clip_len) = {
             let st = app.state.lock().unwrap();
             match st
                 .tracks
@@ -565,7 +565,7 @@ impl PianoRollView {
         }
 
         // Utility: map screen x back to beats
-        let beat_from_x = |x: f32| -> f64 {
+        let _beat_from_x = |x: f32| -> f64 {
             ((x - (lane_rect.left() + crate::constants::PIANO_KEY_WIDTH)) as f64
                 + self.piano_roll.scroll_x as f64)
                 / self.piano_roll.zoom_x as f64
@@ -574,7 +574,7 @@ impl PianoRollView {
         // Build UpdateNotesById payload lazily (to avoid frequent sends)
         let mut pending_updates: Vec<crate::model::clip::MidiNote> = Vec::new();
 
-        for (i, note) in notes.iter().enumerate() {
+        for (_i, note) in notes.iter().enumerate() {
             // Compute bar rect for this note
             let x =
                 grid_left + (note.start as f32 * self.piano_roll.zoom_x - self.piano_roll.scroll_x);
@@ -615,7 +615,7 @@ impl PianoRollView {
 
             if resp.dragged() {
                 if let Some(pos) = resp.interact_pointer_pos() {
-                    let mut new_vel = ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
+                    let new_vel = ((lane_rect.bottom() - pos.y) / lane_rect.height() * 127.0)
                         .round()
                         .clamp(1.0, 127.0) as u8;
 

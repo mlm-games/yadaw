@@ -29,7 +29,7 @@ impl TransportUI {
         }
     }
 
-    pub fn toggle_playback(&mut self, command_tx: &Sender<AudioCommand>) {
+    pub fn toggle_playback(&mut self, _command_tx: &Sender<AudioCommand>) {
         if let Some(transport) = &self.transport {
             transport.toggle_playback();
         }
@@ -78,13 +78,13 @@ impl TransportUI {
                             .map(|t| t.is_recording())
                             .unwrap_or(false);
 
-                        let record_color = if is_recording {
+                        let _record_color = if is_recording {
                             egui::Color32::RED
                         } else {
                             ui.style().visuals.text_color()
                         };
 
-                        let is_recording = app.is_recording_ui;
+                        let _is_recording = app.is_recording_ui;
                         let is_recording_active = app.audio_state.recording.load(Ordering::Relaxed);
 
                         let record_button = egui::Button::new("⏺").fill(if is_recording_active {
