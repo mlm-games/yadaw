@@ -40,7 +40,7 @@ The video uses VSCO2 pack's instruments via [samplo](https://github.com/mlm-game
 
 | Platform    | Version |
 |-------------|---------|
-| AUR         | [![AUR Version](https://img.shields.io/aur/version/mages-bin)](https://aur.archlinux.org/packages/yadaw-bin) |
+| AUR         | [![AUR Version](https://img.shields.io/aur/version/yadaw-bin)](https://aur.archlinux.org/packages/yadaw-bin) |
 | Flathub    | [![Flathub Version](https://img.shields.io/flathub/v/io.github.mlm_games.yadaw)](https://flathub.org/apps/io.github.mlm_games.yadaw) |
 
 ### License 
