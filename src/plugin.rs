@@ -138,39 +138,218 @@ pub fn classify_plugin_uri(uri: &str) -> Option<PluginKind> {
     })
 }
 
-/// Categorizes plugin (based on name for effect subtypes)
+/// Categorizes plugin based on URI, name, and port configuration
 pub fn categorize_plugin(p: &impl PluginCategorizationInfo) -> Vec<String> {
     let mut categories = vec!["All".to_string()];
-    if p.is_instrument() || (p.has_midi() && p.audio_outputs() > 0 && p.audio_inputs() == 0) {
-        categories.push("Instruments".to_string());
-    } else if p.audio_inputs() > 0 && p.audio_outputs() > 0 {
-        categories.push("Effects".to_string());
-    }
-    let name = p.name().to_lowercase();
-    let _uri = p.uri().to_lowercase();
 
-    if name.contains("compressor") || name.contains("limiter") || name.contains("gate") {
-        categories.push("Dynamics".to_string());
+    let name = p.name().to_lowercase();
+    let uri = p.uri().to_lowercase();
+
+    // Primary classification by I/O
+    let is_instrument =
+        p.is_instrument() || (p.has_midi() && p.audio_outputs() > 0 && p.audio_inputs() == 0);
+    let is_effect = p.audio_inputs() > 0 && p.audio_outputs() > 0;
+    let is_midi_fx = p.has_midi() && p.audio_inputs() == 0 && p.audio_outputs() == 0;
+    let is_analyzer = p.audio_inputs() > 0 && p.audio_outputs() == 0;
+    let is_generator = !p.has_midi() && p.audio_inputs() == 0 && p.audio_outputs() > 0;
+
+    if is_instrument {
+        categories.push("Instruments".to_string());
+
+        // Instrument subtypes
+        if matches_any(&name, &uri, &["synth", "synthesizer", "oscill"]) {
+            categories.push("Synths".to_string());
+        }
+        if matches_any(&name, &uri, &["sampler", "sample", "drum", "percussion"]) {
+            categories.push("Samplers".to_string());
+        }
+        if matches_any(&name, &uri, &["piano", "keys", "organ", "rhodes", "wurli"]) {
+            categories.push("Keys".to_string());
+        }
+        if matches_any(&name, &uri, &["bass"]) && !name.contains("bassoon") {
+            categories.push("Bass".to_string());
+        }
+        if matches_any(&name, &uri, &["string", "violin", "cello", "viola"]) {
+            categories.push("Strings".to_string());
+        }
+        if matches_any(&name, &uri, &["pad", "ambient", "atmosphere"]) {
+            categories.push("Pads".to_string());
+        }
     }
-    if name.contains("eq") || name.contains("equalizer") || name.contains("filter") {
-        categories.push("EQ".to_string());
+
+    if is_effect {
+        categories.push("Effects".to_string());
+
+        // Dynamics
+        if matches_any(
+            &name,
+            &uri,
+            &[
+                "compressor",
+                "comp",
+                "limiter",
+                "gate",
+                "expander",
+                "transient",
+                "dynamics",
+            ],
+        ) {
+            categories.push("Dynamics".to_string());
+        }
+
+        // EQ & Filters
+        if matches_any(
+            &name,
+            &uri,
+            &["eq", "equalizer", "equaliser", "parametric", "graphic"],
+        ) && !name.contains("frequency")
+        // Avoid false positives
+        {
+            categories.push("EQ".to_string());
+        }
+        if matches_any(
+            &name,
+            &uri,
+            &[
+                "filter", "lowpass", "highpass", "bandpass", "notch", "shelf",
+            ],
+        ) {
+            categories.push("Filter".to_string());
+        }
+
+        // Time-based
+        if matches_any(
+            &name,
+            &uri,
+            &[
+                "reverb",
+                "room",
+                "hall",
+                "plate",
+                "spring",
+                "convolution",
+                "ambien",
+            ],
+        ) {
+            categories.push("Reverb".to_string());
+        }
+        if matches_any(&name, &uri, &["delay", "echo", "tape"]) && !name.contains("envelope") {
+            categories.push("Delay".to_string());
+        }
+
+        // Modulation
+        if matches_any(
+            &name,
+            &uri,
+            &[
+                "chorus", "flanger", "phaser", "tremolo", "vibrato", "rotary", "leslie", "ensemble",
+            ],
+        ) {
+            categories.push("Modulation".to_string());
+        }
+
+        // Distortion/Saturation
+        if matches_any(
+            &name,
+            &uri,
+            &[
+                "distortion",
+                "overdrive",
+                "saturation",
+                "fuzz",
+                "amp",
+                "cabinet",
+                "cab",
+                "tube",
+                "valve",
+                "clipper",
+                "waveshap",
+            ],
+        ) {
+            categories.push("Distortion".to_string());
+        }
+
+        // Pitch
+        if matches_any(
+            &name,
+            &uri,
+            &["pitch", "autotune", "harmonizer", "octaver", "shifter"],
+        ) {
+            categories.push("Pitch".to_string());
+        }
+
+        // Stereo/Imaging
+        if matches_any(
+            &name,
+            &uri,
+            &[
+                "stereo", "widener", "imager", "pan", "mid-side", "m/s", "spatial",
+            ],
+        ) {
+            categories.push("Imaging".to_string());
+        }
     }
-    if name.contains("reverb") || name.contains("room") || name.contains("hall") {
-        categories.push("Reverb".to_string());
+
+    if is_midi_fx {
+        categories.push("MIDI Effects".to_string());
+
+        if matches_any(&name, &uri, &["arpeggio", "arp"]) {
+            categories.push("Arpeggiator".to_string());
+        }
+        if matches_any(&name, &uri, &["chord"]) {
+            categories.push("Chord".to_string());
+        }
     }
-    if name.contains("delay") || name.contains("echo") {
-        categories.push("Delay".to_string());
-    }
-    if name.contains("chorus") || name.contains("flanger") || name.contains("phaser") {
-        categories.push("Modulation".to_string());
-    }
-    if name.contains("distortion") || name.contains("overdrive") || name.contains("saturation") {
-        categories.push("Distortion".to_string());
-    }
-    if name.contains("utility") || name.contains("meter") || name.contains("analyzer") {
+
+    // Utility (can be effect or standalone)
+    if matches_any(
+        &name,
+        &uri,
+        &[
+            "utility", "gain", "volume", "meter", "analyzer", "analyser", "spectrum", "scope",
+            "tuner", "monitor",
+        ],
+    ) {
         categories.push("Utility".to_string());
     }
+
+    if is_analyzer {
+        categories.push("Analyzer".to_string());
+    }
+
+    if is_generator {
+        categories.push("Generator".to_string());
+    }
+
+    // Check LV2 categories in URI
+    if uri.contains("/lv2/") {
+        if uri.contains("instrument") {
+            if !categories.contains(&"Instruments".to_string()) {
+                categories.push("Instruments".to_string());
+            }
+        }
+        if uri.contains("delay") && !categories.contains(&"Delay".to_string()) {
+            categories.push("Delay".to_string());
+        }
+        if uri.contains("reverb") && !categories.contains(&"Reverb".to_string()) {
+            categories.push("Reverb".to_string());
+        }
+        if uri.contains("dynamics") && !categories.contains(&"Dynamics".to_string()) {
+            categories.push("Dynamics".to_string());
+        }
+        if uri.contains("filter") && !categories.contains(&"Filter".to_string()) {
+            categories.push("Filter".to_string());
+        }
+        if uri.contains("distortion") && !categories.contains(&"Distortion".to_string()) {
+            categories.push("Distortion".to_string());
+        }
+    }
+
     categories
+}
+
+fn matches_any(name: &str, uri: &str, patterns: &[&str]) -> bool {
+    patterns.iter().any(|p| name.contains(p) || uri.contains(p))
 }
 
 pub fn get_control_port_info(uri: &str, symbol: &str) -> Option<ControlPortInfo> {

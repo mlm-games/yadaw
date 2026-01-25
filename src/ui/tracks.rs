@@ -9,6 +9,7 @@ use crate::model::automation::AutomationTarget;
 use crate::model::plugin_api::{BackendKind, ParamKind};
 use crate::model::track::TrackType;
 use crate::plugin::get_control_port_info;
+use crate::ui::eq_visualizer::{EqInteraction, EqVisualizer};
 
 pub struct TracksPanel {
     track_meters: HashMap<u64, LevelMeter>,
@@ -22,6 +23,7 @@ pub struct TracksPanel {
     dnd_drop_target_idx: Option<usize>,
     dnd_row_rects: Vec<(u64, egui::Rect, usize)>,
     dnd_pointer_offset: egui::Vec2,
+    eq_visualizers: HashMap<(u64, usize), EqVisualizer>,
 }
 
 impl TracksPanel {
@@ -38,6 +40,7 @@ impl TracksPanel {
             dnd_drop_target_idx: None,
             dnd_row_rects: Vec::new(),
             dnd_pointer_offset: egui::Vec2::ZERO,
+            eq_visualizers: HashMap::new(),
         }
     }
 
@@ -665,7 +668,7 @@ impl TracksPanel {
     }
 
     fn draw_clap_params(
-        &self,
+        &mut self,
         ui: &mut egui::Ui,
         app: &super::app::YadawApp,
         track_id: u64,
@@ -674,11 +677,8 @@ impl TracksPanel {
         params: &HashMap<String, f32>,
     ) {
         if let Some(meta_list) = app.clap_param_meta.get(&(track_id, plugin_idx)) {
-            let mut meta: Vec<PluginParamInfo> = meta_list
-                .iter()
-                .filter(|p| !p.is_hidden) // Skip hidden params
-                .cloned()
-                .collect();
+            let mut meta: Vec<PluginParamInfo> =
+                meta_list.iter().filter(|p| !p.is_hidden).cloned().collect();
 
             meta.sort_by(|a, b| {
                 let ga = a.group.as_deref().unwrap_or("");
@@ -689,6 +689,160 @@ impl TracksPanel {
                 }
             });
 
+            // Detect if this is an EQ plugin by checking for frequency + band/eq params
+            let is_eq = meta.iter().any(|p| {
+                let n = p.name.to_lowercase();
+                (n.contains("freq") || n.contains("frequency"))
+                    && (n.contains("band")
+                        || n.contains("eq")
+                        || n.contains("low")
+                        || n.contains("high")
+                        || n.contains("mid"))
+            });
+
+            // Show EQ visualizer if detected
+            if is_eq {
+                let viz = self
+                    .eq_visualizers
+                    .entry((track_id, plugin_idx))
+                    .or_insert_with(EqVisualizer::default);
+
+                // Build param pairs for visualizer
+                let param_pairs: Vec<_> = params.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                viz.update_from_params(&param_pairs);
+
+                // Draw visualizer
+                ui.add_space(4.0);
+                if let Some(interaction) =
+                    viz.show(ui, egui::vec2(ui.available_width().min(400.0), 160.0))
+                {
+                    match interaction {
+                        EqInteraction::BandChanged {
+                            band_index,
+                            freq,
+                            gain,
+                            q,
+                        } => {
+                            // Find matching params and send updates
+                            // Try multiple band number formats
+                            let band_patterns = [
+                                format!("band {}", band_index + 1),
+                                format!("band{}", band_index + 1),
+                                format!("band_{}", band_index + 1),
+                                format!("{}", band_index + 1),
+                                // Also try 0-indexed
+                                format!("band {}", band_index),
+                                format!("band{}", band_index),
+                            ];
+
+                            for p in &meta {
+                                let lower = p.name.to_lowercase();
+
+                                // Check if this param belongs to the target band
+                                let matches_band =
+                                    band_patterns.iter().any(|pattern| lower.contains(pattern))
+                                        || {
+                                            // Also try: param name ends with the band number
+                                            let digits: String = lower
+                                                .chars()
+                                                .rev()
+                                                .take_while(|c| c.is_ascii_digit())
+                                                .collect::<String>()
+                                                .chars()
+                                                .rev()
+                                                .collect();
+                                            digits.parse::<usize>().ok() == Some(band_index + 1)
+                                                || digits.parse::<usize>().ok() == Some(band_index)
+                                        };
+
+                                if !matches_band {
+                                    continue;
+                                }
+
+                                // Update frequency
+                                if lower.contains("freq")
+                                    || lower.contains("frequency")
+                                    || lower.contains("hz")
+                                {
+                                    // Clamp to param range
+                                    let clamped_freq = freq.clamp(p.min, p.max);
+                                    let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                        track_id,
+                                        plugin_id,
+                                        p.name.clone(),
+                                        clamped_freq,
+                                    ));
+                                }
+                                // Update gain
+                                else if lower.contains("gain")
+                                    || lower.contains("level")
+                                    || lower.contains("db")
+                                {
+                                    let clamped_gain = gain.clamp(p.min, p.max);
+                                    let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                        track_id,
+                                        plugin_id,
+                                        p.name.clone(),
+                                        clamped_gain,
+                                    ));
+                                }
+                                // Update Q
+                                else if lower.contains("q")
+                                    || lower.contains("bandwidth")
+                                    || lower.contains("bw")
+                                    || lower.contains("resonance")
+                                {
+                                    let clamped_q = q.clamp(p.min, p.max);
+                                    let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                        track_id,
+                                        plugin_id,
+                                        p.name.clone(),
+                                        clamped_q,
+                                    ));
+                                }
+                            }
+                        }
+                        EqInteraction::BandAdded { band_index, freq } => {
+                            // For plugins with fixed bands, we can't really add new bands
+                            // Instead, find the closest unused/zeroed band and set its frequency
+                            // Or just log this for now
+                            log::debug!(
+                                "EQ band add requested: index={}, freq={:.1}Hz (plugin may not support dynamic bands)",
+                                band_index,
+                                freq
+                            );
+
+                            // Try to find a band that's currently at 0 gain and enable it
+                            let band_patterns = [
+                                format!("band {}", band_index + 1),
+                                format!("band{}", band_index + 1),
+                            ];
+
+                            for p in &meta {
+                                let lower = p.name.to_lowercase();
+                                let matches_band =
+                                    band_patterns.iter().any(|pattern| lower.contains(pattern));
+
+                                if matches_band
+                                    && (lower.contains("freq") || lower.contains("frequency"))
+                                {
+                                    let clamped_freq = freq.clamp(p.min, p.max);
+                                    let _ = app.command_tx.send(AudioCommand::SetPluginParam(
+                                        track_id,
+                                        plugin_id,
+                                        p.name.clone(),
+                                        clamped_freq,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                ui.add_space(4.0);
+                ui.separator();
+            }
+
+            // Draw param closure (unchanged)
             let draw_param = |ui: &mut egui::Ui,
                               pinfo: &PluginParamInfo,
                               params: &HashMap<String, f32>,
@@ -696,7 +850,6 @@ impl TracksPanel {
                               plugin_id: u64,
                               app: &super::app::YadawApp| {
                 let mut v = params.get(&pinfo.name).copied().unwrap_or(pinfo.current);
-
                 let is_readonly = pinfo.is_readonly;
 
                 ui.horizontal(|ui| {
@@ -723,7 +876,7 @@ impl TracksPanel {
                                     .unwrap_or_else(|| format!("{}", idx));
 
                                 let mut new_idx = idx;
-                                let mut changed = false; // Move outside
+                                let mut changed = false;
 
                                 egui::ComboBox::from_id_salt((&pinfo.name, track_id, plugin_id))
                                     .selected_text(current_label)
@@ -755,7 +908,6 @@ impl TracksPanel {
                                 }
                                 changed
                             } else {
-                                // Fallback to Int slider if somehow enum_labels are missing
                                 let mut int_val = v.round() as i32;
                                 let min_i = pinfo.min.round() as i32;
                                 let max_i = pinfo.max.round() as i32;
@@ -789,7 +941,7 @@ impl TracksPanel {
                         ParamKind::Float => {
                             let resp = ui.add_enabled(
                                 !is_readonly,
-                                egui::Slider::new(&mut v, pinfo.min..=pinfo.max).show_value(false), // We'll show formatted value
+                                egui::Slider::new(&mut v, pinfo.min..=pinfo.max).show_value(false),
                             );
 
                             if let Some(ref unit) = pinfo.unit {
@@ -821,7 +973,6 @@ impl TracksPanel {
                         }
                     }
 
-                    // Reset button - only if not readonly
                     if !is_readonly {
                         let default_text = if let Some(ref unit) = pinfo.unit {
                             format!("{:.2}{}", pinfo.default, unit)
@@ -844,7 +995,7 @@ impl TracksPanel {
                     }
 
                     if pinfo.is_automatable {
-                        ui.weak("⚡").on_hover_text("Automatable");
+                        ui.weak("◉").on_hover_text("Automatable");
                     }
                 });
             };
@@ -854,7 +1005,6 @@ impl TracksPanel {
             while i < meta.len() {
                 let group = meta[i].group.clone();
                 if let Some(ref grp) = group {
-                    // contiguous run of same group
                     let start = i;
                     while i < meta.len() && meta[i].group.as_deref() == Some(grp.as_str()) {
                         i += 1;
@@ -868,7 +1018,6 @@ impl TracksPanel {
                             }
                         });
                 } else {
-                    // ungrouped, draw directly
                     let pinfo = &meta[i];
                     draw_param(ui, pinfo, params, track_id, plugin_id, app);
                     i += 1;

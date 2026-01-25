@@ -2,6 +2,7 @@ mod app;
 mod automation_lane;
 mod color_picker;
 mod dialogs;
+mod eq_visualizer;
 mod menu_bar;
 mod mixer;
 mod piano_roll;
