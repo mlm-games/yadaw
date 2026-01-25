@@ -1,0 +1,9 @@
+- bump major ver + cargo update
+- replace current ctrl + D behavior to duplicate to next beat (like most other daws)
+- make midi import seperate content to tracks as intended.
+- Update README.md
+- Reduce warns
+- Update README.md
+- link readme to quick start manual
+- Add a get-started video
+- maybe some other day
