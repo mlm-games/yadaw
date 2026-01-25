@@ -1,6 +1,6 @@
 [package]
 name = "yadaw"
-version = "0.5.8"
+version = "0.6.0"
 edition = "2024"
 
 [[bin]]
@@ -38,7 +38,7 @@ parking_lot = "0.12"
 rand = "0.9.2"
 midir = "0.11.1"
 midly = "0.5"
-lru = "0.16.2"
+lru = "0.16"
 rayon = "1.11.0"
 num_cpus = "1.17.0"
 
