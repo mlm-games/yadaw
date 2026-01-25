@@ -8,9 +8,10 @@ use crate::input::actions::{ActionContext, AppAction};
 use crate::messages::{AudioCommand, PluginParamInfo, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
-use crate::model::plugin_api::UnifiedPluginInfo;
+use crate::model::clip::MidiPattern;
+use crate::model::plugin_api::{BackendKind, UnifiedPluginInfo};
 use crate::model::track::TrackType;
-use crate::model::{AudioClip, MidiNote, Track};
+use crate::model::{AudioClip, MidiClip, MidiNote, PluginDescriptor, Track};
 use crate::paths::{current_theme_path, custom_themes_path, shortcuts_path};
 use crate::performance::PerformanceMonitor;
 use crate::project::{AppState, AppStateSnapshot, ClipLocation};
@@ -72,7 +73,7 @@ pub struct YadawApp {
     // Other state
     pub(super) project_path: Option<String>,
     pub(super) clipboard: Option<Vec<AudioClip>>,
-    pub(super) midi_clipboard: Option<Vec<crate::model::clip::MidiClip>>,
+    pub(super) midi_clipboard: Option<Vec<MidiClip>>,
     pub(super) show_performance: bool,
     pub(super) performance_monitor: PerformanceMonitor,
     pub(super) track_manager: TrackManager,
@@ -1730,95 +1731,123 @@ impl YadawApp {
         }
     }
 
-    /// Import a MIDI file, creating a new MIDI track if needed
+    /// Import a MIDI file, creating new MIDI tracks for each track in the file
     fn import_midi_file_to_new_track(&mut self, path: &Path) {
-        // Ensure we have a MIDI track selected, or create one
-        let midi_track_id = {
-            let state = self.state.lock().unwrap();
-
-            // Check if selected track is MIDI
-            if state
-                .tracks
-                .get(&self.selected_track)
-                .map(|t| matches!(t.track_type, TrackType::Midi))
-                .unwrap_or(false)
-            {
-                Some(self.selected_track)
-            } else {
-                // Find first MIDI track
-                state
-                    .tracks
-                    .iter()
-                    .find(|(_, t)| matches!(t.track_type, TrackType::Midi))
-                    .map(|(id, _)| *id)
-            }
-        };
-
-        let track_id = match midi_track_id {
-            Some(id) => id,
-            None => {
-                // Create a new MIDI track
-                self.add_midi_track();
-                self.selected_track
-            }
-        };
-
-        // Select the track
-        self.select_track(track_id);
-
-        // Import the MIDI file
         let bpm = self.audio_state.bpm.load();
+
         match crate::midi_import::import_midi_file(path, bpm) {
-            Ok(mut clip) => {
-                self.push_undo();
-                let mut state = self.state.lock().unwrap();
-
-                clip.id = state.fresh_id();
-
-                for note in &mut clip.notes {
-                    if note.id == 0 {
-                        note.id = state.fresh_id();
-                    }
-                    // Sanitize note data
-                    if !note.duration.is_finite() || note.duration <= 0.0 {
-                        note.duration = 1e-6;
-                    }
-                    if !note.start.is_finite() || note.start < 0.0 {
-                        note.start = 0.0;
-                    }
+            Ok(imported_tracks) => {
+                if imported_tracks.is_empty() {
+                    self.dialogs
+                        .show_message("No valid MIDI tracks found in file");
+                    return;
                 }
 
-                let pattern_id = state.fresh_id();
-                let pattern = crate::model::clip::MidiPattern {
-                    id: pattern_id,
-                    notes: std::mem::take(&mut clip.notes), // Move notes to pattern
-                };
-                state.patterns.insert(pattern_id, pattern);
+                self.push_undo();
+                let mut state = self.state.lock().unwrap();
+                let mut first_new_track_id = None;
 
-                // Link clip to pattern
-                clip.pattern_id = Some(pattern_id);
-                clip.notes.clear(); // Pattern is now the source of truth
+                let track_count = imported_tracks.len();
+                for imported in imported_tracks {
+                    let track_id = state.fresh_id();
+                    let mut track = self
+                        .track_manager
+                        .create_track(UITrackType::Midi, Some(imported.name));
 
-                if let Some(track) = state.tracks.get_mut(&track_id) {
-                    track.midi_clips.push(clip.clone());
+                    // Remove the default "Pattern 1" that is automatically created for new MIDI tracks
+                    track.midi_clips.clear();
 
-                    // Register in clips_by_id
-                    state.clips_by_id.insert(
-                        clip.id,
-                        crate::project::ClipRef {
-                            track_id,
-                            is_midi: true,
-                        },
-                    );
+                    track.id = track_id;
+
+                    state.track_order.push(track_id);
+                    state.tracks.insert(track_id, track);
+
+                    if first_new_track_id.is_none() {
+                        first_new_track_id = Some(track_id);
+                    }
+
+                    // Create clip for this track
+                    let mut notes = imported.notes;
+                    if !notes.is_empty() {
+                        let clip_id = state.fresh_id();
+
+                        for note in &mut notes {
+                            if note.id == 0 {
+                                note.id = state.fresh_id();
+                            }
+                            if !note.duration.is_finite() || note.duration <= 0.0 {
+                                note.duration = 1e-6;
+                            }
+                            if !note.start.is_finite() || note.start < 0.0 {
+                                note.start = 0.0;
+                            }
+                        }
+
+                        let length_beats = notes
+                            .iter()
+                            .map(|n| n.start + n.duration)
+                            .fold(0.0f64, f64::max)
+                            .max(0.000001);
+
+                        let pattern_id = state.fresh_id();
+                        let pattern = MidiPattern {
+                            id: pattern_id,
+                            notes: notes.clone(),
+                        };
+                        state.patterns.insert(pattern_id, pattern);
+
+                        let clip = MidiClip {
+                            id: clip_id,
+                            name: "Imported Clip".to_string(),
+                            start_beat: 0.0,
+                            length_beats,
+                            notes: Vec::new(),
+                            color: Some((100, (track_id * 50) as u8 % 255, 200)),
+                            velocity_offset: 0,
+                            transpose: 0,
+                            loop_enabled: false,
+                            content_len_beats: length_beats,
+                            pattern_id: Some(pattern_id),
+                            quantize_grid: 0.25,
+                            quantize_strength: 1.0,
+                            quantize_enabled: false,
+                            muted: false,
+                            locked: false,
+                            groove: None,
+                            swing: 0.0,
+                            humanize: 0.0,
+                            content_offset_beats: 0.0,
+                        };
+
+                        if let Some(track) = state.tracks.get_mut(&track_id) {
+                            track.midi_clips.push(clip);
+                            state.clips_by_id.insert(
+                                clip_id,
+                                crate::project::ClipRef {
+                                    track_id,
+                                    is_midi: true,
+                                },
+                            );
+                        }
+                    }
                 }
 
                 state.ensure_ids();
                 drop(state);
 
+                if let Some(tid) = first_new_track_id {
+                    self.select_track(tid);
+                }
+
                 let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+
+                let suffix = "";
                 self.dialogs.show_success(&format!(
-                    "Imported MIDI file: {}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
+                    "Imported {} track{} from {}{}",
+                    track_count,
+                    if track_count == 1 { "" } else { "s" },
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    suffix
                 ));
             }
             Err(e) => {

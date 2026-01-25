@@ -5,14 +5,14 @@ use egui_file_dialog::FileDialog;
 
 use super::*;
 use crate::error::UserNotification;
-use crate::input::actions::{ActionContext, AppAction};
 use crate::input::InputManager;
+use crate::input::actions::{ActionContext, AppAction};
+use crate::input::shortcuts::{KeyCode, Keybind};
 use crate::messages::{AudioCommand, ExportState};
 use crate::model::plugin_api::{BackendKind, HostConfig};
 use crate::model::track::TrackType;
 use crate::plugin::categorize_plugin;
 use crate::ui::theme;
-use crate::input::shortcuts::{Keybind, KeyCode};
 
 macro_rules! simple_dialog {
     ($name:ident, $title:expr, $content:expr) => {
@@ -405,7 +405,7 @@ impl DialogManager {
         }
 
         if let Some(editor) = &mut self.shortcuts_editor {
-            editor.ui(ctx, &mut app.input_manager);           
+            editor.ui(ctx, &mut app.input_manager);
             if !editor.open {
                 self.shortcuts_editor = None;
             }
@@ -557,7 +557,7 @@ pub struct PluginBrowserDialog {
     closed: bool,
     search_text: String,
     selected_category: String,
-    selected_plugin: Option<String>, 
+    selected_plugin: Option<String>,
     available_categories: Vec<String>,
 }
 
@@ -1186,12 +1186,12 @@ impl ShortcutsEditorDialog {
             export_opened: false,
         }
     }
-    
+
     pub fn ui(&mut self, ctx: &egui::Context, input_mgr: &mut InputManager) {
         if !self.open {
             return;
         }
-        
+
         let mut open = self.open;
         egui::Window::new("Keyboard Shortcuts")
             .open(&mut open)
@@ -1200,7 +1200,7 @@ impl ShortcutsEditorDialog {
             .show(ctx, |ui| {
                 self.draw_content(ui, input_mgr);
             });
-        
+
         self.open = open;
 
         if self.import_opened {
@@ -1222,9 +1222,8 @@ impl ShortcutsEditorDialog {
                 self.export_opened = false;
             }
         }
-
     }
-    
+
     fn draw_content(&mut self, ui: &mut egui::Ui, input_mgr: &mut InputManager) {
         // Toolbar
         ui.horizontal(|ui| {
@@ -1240,32 +1239,51 @@ impl ShortcutsEditorDialog {
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.filter_context, None, "All Contexts");
-                    ui.selectable_value(&mut self.filter_context, Some(ActionContext::Global), "Global");
-                    ui.selectable_value(&mut self.filter_context, Some(ActionContext::PianoRoll), "Piano Roll");
-                    ui.selectable_value(&mut self.filter_context, Some(ActionContext::Timeline), "Timeline");
-                    ui.selectable_value(&mut self.filter_context, Some(ActionContext::Mixer), "Mixer");
+                    ui.selectable_value(
+                        &mut self.filter_context,
+                        Some(ActionContext::Global),
+                        "Global",
+                    );
+                    ui.selectable_value(
+                        &mut self.filter_context,
+                        Some(ActionContext::PianoRoll),
+                        "Piano Roll",
+                    );
+                    ui.selectable_value(
+                        &mut self.filter_context,
+                        Some(ActionContext::Timeline),
+                        "Timeline",
+                    );
+                    ui.selectable_value(
+                        &mut self.filter_context,
+                        Some(ActionContext::Mixer),
+                        "Mixer",
+                    );
                 });
-            
+
             ui.separator();
             ui.label("Search:");
             ui.text_edit_singleline(&mut self.search_query);
         });
-        
+
         ui.separator();
-        
+
         // Actions list
         egui::ScrollArea::vertical().show(ui, |ui| {
             // Group by category
-            let mut categories: std::collections::HashMap<&str, Vec<AppAction>> = std::collections::HashMap::new();
-            
+            let mut categories: std::collections::HashMap<&str, Vec<AppAction>> =
+                std::collections::HashMap::new();
+
             for &action in AppAction::all() {
                 // Filter by context
                 if let Some(filter_ctx) = self.filter_context {
-                    if !action.contexts().contains(&filter_ctx) && !action.contexts().contains(&ActionContext::Global) {
+                    if !action.contexts().contains(&filter_ctx)
+                        && !action.contexts().contains(&ActionContext::Global)
+                    {
                         continue;
                     }
                 }
-                
+
                 // Filter by search
                 if !self.search_query.is_empty() {
                     let query = self.search_query.to_lowercase();
@@ -1273,16 +1291,19 @@ impl ShortcutsEditorDialog {
                         continue;
                     }
                 }
-                
-                categories.entry(action.category()).or_default().push(action);
+
+                categories
+                    .entry(action.category())
+                    .or_default()
+                    .push(action);
             }
-            
+
             let mut sorted_categories: Vec<_> = categories.into_iter().collect();
             sorted_categories.sort_by_key(|(cat, _)| *cat);
-            
+
             for (category, mut actions) in sorted_categories {
                 actions.sort_by_key(|a| a.name());
-                
+
                 ui.collapsing(category, |ui| {
                     for action in actions {
                         self.draw_action_row(ui, action, input_mgr);
@@ -1290,15 +1311,15 @@ impl ShortcutsEditorDialog {
                 });
             }
         });
-        
+
         ui.separator();
-        
+
         // Footer buttons
         ui.horizontal(|ui| {
             if ui.button("Reset to Defaults").clicked() {
                 *input_mgr.shortcuts_mut() = crate::input::shortcuts::ShortcutRegistry::default();
             }
-            
+
             if ui.button("Import...").clicked() {
                 self.import_fd.pick_file();
                 self.import_opened = true;
@@ -1307,7 +1328,7 @@ impl ShortcutsEditorDialog {
                 self.export_fd.save_file();
                 self.export_opened = true;
             }
-            
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Close").clicked() {
                     self.open = false;
@@ -1316,55 +1337,71 @@ impl ShortcutsEditorDialog {
             });
         });
     }
-    
-    fn draw_action_row(&mut self, ui: &mut egui::Ui, action: AppAction, input_mgr: &mut InputManager) {
+
+    fn draw_action_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        action: AppAction,
+        input_mgr: &mut InputManager,
+    ) {
         ui.horizontal(|ui| {
             ui.set_min_width(ui.available_width());
-            
+
             // Action name
             ui.label(action.name());
-            
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Add binding button
                 if ui.small_button("➕").on_hover_text("Add Keybind").clicked() {
                     self.capturing = Some(action);
                     self.capture_buffer = None;
                 }
-                
+
                 // Show existing bindings
                 let bindings = input_mgr.shortcuts().get_bindings(action).to_vec();
-                
+
                 for (i, bind) in bindings.iter().enumerate().rev() {
                     // Remove button
                     if ui.small_button("✕").on_hover_text("Remove").clicked() {
                         input_mgr.shortcuts_mut().unbind(bind);
                     }
-                    
+
                     // Keybind label
                     ui.label(bind.to_string());
-                    
+
                     if i > 0 {
                         ui.label("/");
                     }
                 }
-                
+
                 if bindings.is_empty() {
                     ui.label(egui::RichText::new("(none)").weak());
                 }
             });
         });
-        
+
         // Capture dialog
         if self.capturing == Some(action) {
             self.draw_capture_popup(ui.ctx(), action, input_mgr);
         }
     }
-    
-    fn draw_capture_popup(&mut self, ctx: &egui::Context, action: AppAction, input_mgr: &mut InputManager) {
+
+    fn draw_capture_popup(
+        &mut self,
+        ctx: &egui::Context,
+        action: AppAction,
+        input_mgr: &mut InputManager,
+    ) {
         if self.capture_buffer.is_none() {
             let captured = ctx.input(|i| {
                 for event in &i.events {
-                    if let egui::Event::Key { key, pressed: true, modifiers, .. } = event {
+                    if let egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                    {
                         if *key == egui::Key::Escape {
                             return Some(None); // cancel
                         }
@@ -1390,7 +1427,6 @@ impl ShortcutsEditorDialog {
             }
         }
 
-        
         let captured_bind_opt = self.capture_buffer;
 
         egui::Window::new("Capture Keybind")
@@ -1405,10 +1441,11 @@ impl ShortcutsEditorDialog {
                     ui.separator();
                     ui.label(format!("Captured: {}", bind.to_string()));
 
-                    if let Some(conflict) = input_mgr.shortcuts().has_conflict(&bind, Some(action)) {
+                    if let Some(conflict) = input_mgr.shortcuts().has_conflict(&bind, Some(action))
+                    {
                         ui.colored_label(
                             egui::Color32::from_rgb(255, 100, 100),
-                            format!("⚠ Already used by: {}", conflict.name())
+                            format!("⚠ Already used by: {}", conflict.name()),
                         );
                     }
 
@@ -1461,8 +1498,6 @@ enum ExportRange {
     Custom,
 }
 
-
-
 pub struct ExportDialog {
     closed: bool,
     path: PathBuf,
@@ -1470,9 +1505,9 @@ pub struct ExportDialog {
     export_range: ExportRange,
     start_beat_input: String,
     end_beat_input: String,
-    
+
     state: Option<ExportState>,
-    
+
     file_dialog: FileDialog,
     normalize: bool,
 }
@@ -1487,20 +1522,21 @@ impl ExportDialog {
             start_beat_input: "0.0".to_string(),
             end_beat_input: "16.0".to_string(),
             state: None, // Start in idle state
-            file_dialog: FileDialog::new()
-                .title("Export to WAV")
-                .add_file_filter("WAV Audio", Arc::new(|path| path.extension().unwrap_or_default() == "wav")),
+            file_dialog: FileDialog::new().title("Export to WAV").add_file_filter(
+                "WAV Audio",
+                Arc::new(|path| path.extension().unwrap_or_default() == "wav"),
+            ),
             normalize: false,
         }
     }
 
     pub fn set_state(&mut self, state: ExportState) {
-            self.state = Some(state);
+        self.state = Some(state);
     }
-    
+
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
         let mut open = true;
-        
+
         egui::Window::new("Export Audio")
             .open(&mut open)
             .resizable(false)
@@ -1520,7 +1556,7 @@ impl ExportDialog {
                             ui.label("Finalizing file...");
                             ui.add(egui::Spinner::new());
                         }
-                       ExportState::Complete(path) => {
+                        ExportState::Complete(path) => {
                             ui.colored_label(egui::Color32::GREEN, "Export Complete!");
                             ui.label(format!("File saved to: {}", path));
                             if ui.button("Close").clicked() {
@@ -1559,7 +1595,7 @@ impl ExportDialog {
                         self.file_dialog.save_file();
                     }
                 });
-                
+
                 self.file_dialog.update(ctx);
                 if let Some(path) = self.file_dialog.take_picked() {
                     self.path = path;
@@ -1580,9 +1616,21 @@ impl ExportDialog {
                 // Export Range
                 ui.separator();
                 ui.label("Export Range:");
-                ui.radio_value(&mut self.export_range, ExportRange::EntireProject, "Entire Project");
-                ui.radio_value(&mut self.export_range, ExportRange::LoopRegion, "Loop Region");
-                ui.radio_value(&mut self.export_range, ExportRange::Custom, "Custom Range (beats)");
+                ui.radio_value(
+                    &mut self.export_range,
+                    ExportRange::EntireProject,
+                    "Entire Project",
+                );
+                ui.radio_value(
+                    &mut self.export_range,
+                    ExportRange::LoopRegion,
+                    "Loop Region",
+                );
+                ui.radio_value(
+                    &mut self.export_range,
+                    ExportRange::Custom,
+                    "Custom Range (beats)",
+                );
 
                 if self.export_range == ExportRange::Custom {
                     ui.horizontal(|ui| {
@@ -1592,7 +1640,7 @@ impl ExportDialog {
                         ui.text_edit_singleline(&mut self.end_beat_input);
                     });
                 }
-                
+
                 ui.separator();
 
                 // Action buttons
@@ -1603,14 +1651,16 @@ impl ExportDialog {
                                 let end = app.timeline_ui.compute_project_end_beats(app);
                                 (0.0, end)
                             }
-                            ExportRange::LoopRegion => {
-                                (app.audio_state.loop_start.load(), app.audio_state.loop_end.load())
-                            }
-                            ExportRange::Custom => {
-                                (self.start_beat_input.parse().unwrap_or(0.0), self.end_beat_input.parse().unwrap_or(0.0))
-                            }
+                            ExportRange::LoopRegion => (
+                                app.audio_state.loop_start.load(),
+                                app.audio_state.loop_end.load(),
+                            ),
+                            ExportRange::Custom => (
+                                self.start_beat_input.parse().unwrap_or(0.0),
+                                self.end_beat_input.parse().unwrap_or(0.0),
+                            ),
                         };
-                        
+
                         let config = crate::audio_export::ExportConfig {
                             path: self.path.clone(),
                             sample_rate: app.audio_state.sample_rate.load(),
@@ -1619,7 +1669,7 @@ impl ExportDialog {
                             end_beat,
                             normalize: self.normalize,
                         };
-                        
+
                         let _ = app.command_tx.send(AudioCommand::ExportAudio(config));
                         // Set initial state to start showing progress bar
                         self.state = Some(ExportState::Rendering(0.0));
@@ -1639,7 +1689,6 @@ impl ExportDialog {
     }
 }
 
-
 pub struct PluginManagerDialog {
     closed: bool,
     scan_paths: Vec<String>,
@@ -1650,12 +1699,15 @@ pub struct PluginManagerDialog {
 impl PluginManagerDialog {
     pub fn new() -> Self {
         let browse_fd = FileDialog::new().title("Select Plugin Directory");
-        
+
         let scan_paths = crate::config::Config::load()
-            .map(|c| c.paths.plugin_scan_paths
-                .iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect())
+            .map(|c| {
+                c.paths
+                    .plugin_scan_paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect()
+            })
             .unwrap_or_else(|_| {
                 // Fallback to default paths if config load fails
                 crate::config::Config::default()
@@ -1665,7 +1717,7 @@ impl PluginManagerDialog {
                     .map(|p| p.to_string_lossy().to_string())
                     .collect()
             });
-        
+
         Self {
             closed: false,
             scan_paths,
@@ -1723,28 +1775,32 @@ impl PluginManagerDialog {
 
                 if ui.button("Scan for Plugins").clicked() {
                     if let Ok(mut config) = crate::config::Config::load() {
-                        config.paths.plugin_scan_paths = self.scan_paths
+                        config.paths.plugin_scan_paths = self
+                            .scan_paths
                             .iter()
                             .map(|s| std::path::PathBuf::from(s))
                             .collect();
                         let _ = config.save();
                     }
-                    
+
                     let host_cfg = HostConfig {
                         sample_rate: app.audio_state.sample_rate.load() as f64,
                         max_block: crate::constants::MAX_BUFFER_SIZE,
-                        plugin_scan_paths: self.scan_paths
+                        plugin_scan_paths: self
+                            .scan_paths
                             .iter()
                             .map(|s| std::path::PathBuf::from(s))
                             .collect(),
                     };
                     match crate::plugin_facade::HostFacade::new(host_cfg).and_then(|f| f.scan()) {
                         Ok(list) => {
-                            app.available_plugins = list.into_iter().map(|p| (p.uri.clone(), p)).collect();
+                            app.available_plugins =
+                                list.into_iter().map(|p| (p.uri.clone(), p)).collect();
                             app.dialogs.show_message("Plugin scan complete.");
                         }
                         Err(e) => {
-                            app.dialogs.show_warning(&format!("Plugin scan failed: {}", e));
+                            app.dialogs
+                                .show_warning(&format!("Plugin scan failed: {}", e));
                         }
                     }
                 }
@@ -1844,7 +1900,8 @@ impl ImportAudioDialog {
                         self.import_file(&path, app, bpm as f64);
                     }
                     Err(e) => {
-                        app.dialogs.show_error(&format!("Failed to import file: {}", e));
+                        app.dialogs
+                            .show_error(&format!("Failed to import file: {}", e));
                     }
                 }
             }
@@ -2050,7 +2107,9 @@ impl TrackGroupingDialog {
                     let info = order
                         .iter()
                         .filter_map(|&tid| {
-                            st.tracks.get(&tid).map(|t| (tid, t.name.clone(), t.group_id))
+                            st.tracks
+                                .get(&tid)
+                                .map(|t| (tid, t.name.clone(), t.group_id))
                         })
                         .collect();
                     (groups, order, info)
@@ -2065,7 +2124,7 @@ impl TrackGroupingDialog {
                     } else {
                         for group in &groups {
                             let selected = self.selected_group == Some(group.id);
-                            
+
                             ui.horizontal(|ui| {
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(16.0, 16.0),
@@ -2074,22 +2133,32 @@ impl TrackGroupingDialog {
                                 ui.painter().rect_filled(
                                     rect,
                                     3.0,
-                                    egui::Color32::from_rgb(group.color.0, group.color.1, group.color.2),
+                                    egui::Color32::from_rgb(
+                                        group.color.0,
+                                        group.color.1,
+                                        group.color.2,
+                                    ),
                                 );
 
                                 if self.editing_group == Some(group.id) {
                                     let response = ui.text_edit_singleline(&mut self.edit_name);
-                                    if response.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                        let _ = app.command_tx.send(
-                                            AudioCommand::RenameGroup(group.id, self.edit_name.clone())
-                                        );
+                                    if response.lost_focus()
+                                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    {
+                                        let _ = app.command_tx.send(AudioCommand::RenameGroup(
+                                            group.id,
+                                            self.edit_name.clone(),
+                                        ));
                                         self.editing_group = None;
                                     }
                                 } else if ui.selectable_label(selected, &group.name).clicked() {
                                     self.selected_group = Some(group.id);
                                 }
 
-                                let member_count = track_info.iter().filter(|(_, _, gid)| *gid == Some(group.id)).count();
+                                let member_count = track_info
+                                    .iter()
+                                    .filter(|(_, _, gid)| *gid == Some(group.id))
+                                    .count();
                                 ui.weak(format!("({} tracks)", member_count));
 
                                 if ui.small_button("✏").on_hover_text("Rename").clicked() {
@@ -2098,10 +2167,15 @@ impl TrackGroupingDialog {
                                 }
 
                                 ui.menu_button("🎨", |ui| {
-                                    if let Some((r, g, b)) = super::color_picker::ColorPicker::palette_grid(ui, group.color) {
-                                        let _ = app.command_tx.send(
-                                            AudioCommand::SetGroupColor(group.id, r, g, b)
-                                        );
+                                    if let Some((r, g, b)) =
+                                        super::color_picker::ColorPicker::palette_grid(
+                                            ui,
+                                            group.color,
+                                        )
+                                    {
+                                        let _ = app
+                                            .command_tx
+                                            .send(AudioCommand::SetGroupColor(group.id, r, g, b));
                                         ui.close();
                                     }
                                 });
@@ -2116,17 +2190,19 @@ impl TrackGroupingDialog {
 
                                         if ui.checkbox(&mut link_vol, "Link Volume").changed() {
                                             let _ = app.command_tx.send(
-                                                AudioCommand::SetGroupLinkVolume(group.id, link_vol)
+                                                AudioCommand::SetGroupLinkVolume(
+                                                    group.id, link_vol,
+                                                ),
                                             );
                                         }
                                         if ui.checkbox(&mut link_mute, "Link Mute").changed() {
                                             let _ = app.command_tx.send(
-                                                AudioCommand::SetGroupLinkMute(group.id, link_mute)
+                                                AudioCommand::SetGroupLinkMute(group.id, link_mute),
                                             );
                                         }
                                         if ui.checkbox(&mut link_solo, "Link Solo").changed() {
                                             let _ = app.command_tx.send(
-                                                AudioCommand::SetGroupLinkSolo(group.id, link_solo)
+                                                AudioCommand::SetGroupLinkSolo(group.id, link_solo),
                                             );
                                         }
                                     });
@@ -2137,7 +2213,10 @@ impl TrackGroupingDialog {
 
                     ui.horizontal(|ui| {
                         if ui
-                            .add_enabled(self.selected_group.is_some(), egui::Button::new("Delete Group"))
+                            .add_enabled(
+                                self.selected_group.is_some(),
+                                egui::Button::new("Delete Group"),
+                            )
                             .clicked()
                         {
                             if let Some(gid) = self.selected_group {
@@ -2167,7 +2246,10 @@ impl TrackGroupingDialog {
                             .map(|g| format!(" [{}]", g.name))
                             .unwrap_or_default();
 
-                        if ui.checkbox(&mut checked, format!("{}{}", name, group_label)).changed() {
+                        if ui
+                            .checkbox(&mut checked, format!("{}{}", name, group_label))
+                            .changed()
+                        {
                             if checked {
                                 self.selected_tracks.push(*tid);
                             } else {
@@ -2178,7 +2260,10 @@ impl TrackGroupingDialog {
 
                     ui.horizontal(|ui| {
                         if ui
-                            .add_enabled(!self.selected_tracks.is_empty(), egui::Button::new("Create Group"))
+                            .add_enabled(
+                                !self.selected_tracks.is_empty(),
+                                egui::Button::new("Create Group"),
+                            )
                             .clicked()
                         {
                             let _ = app.command_tx.send(AudioCommand::CreateGroup(
@@ -2197,18 +2282,25 @@ impl TrackGroupingDialog {
                         {
                             if let Some(gid) = self.selected_group {
                                 for tid in &self.selected_tracks {
-                                    let _ = app.command_tx.send(AudioCommand::AddTrackToGroup(*tid, gid));
+                                    let _ = app
+                                        .command_tx
+                                        .send(AudioCommand::AddTrackToGroup(*tid, gid));
                                 }
                             }
                             self.selected_tracks.clear();
                         }
 
                         if ui
-                            .add_enabled(!self.selected_tracks.is_empty(), egui::Button::new("Remove from Group"))
+                            .add_enabled(
+                                !self.selected_tracks.is_empty(),
+                                egui::Button::new("Remove from Group"),
+                            )
                             .clicked()
                         {
                             for tid in &self.selected_tracks {
-                                let _ = app.command_tx.send(AudioCommand::RemoveTrackFromGroup(*tid));
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::RemoveTrackFromGroup(*tid));
                             }
                             self.selected_tracks.clear();
                         }

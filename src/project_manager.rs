@@ -281,7 +281,9 @@ impl ProjectManager {
         let _ = self.save_recent_projects();
     }
 
-    pub fn mark_clean(&mut self) { self.is_dirty = false; }
+    pub fn mark_clean(&mut self) {
+        self.is_dirty = false;
+    }
 
     fn load_recent_projects() -> Vec<PathBuf> {
         if let Some(dirs) = directories::ProjectDirs::from("com", "yadaw", "yadaw") {

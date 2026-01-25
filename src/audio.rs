@@ -10,9 +10,7 @@ use crate::messages::{PluginParamInfo, UIUpdate};
 use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::ChannelStrip;
 use crate::model::clip::AudioClip;
-use crate::model::plugin_api::{
-    BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEvent,
-};
+use crate::model::plugin_api::{BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEvent};
 use crate::model::track::TrackType;
 use crate::plugin_facade::HostFacade;
 use crate::time_utils::TimeConverter;

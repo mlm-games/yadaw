@@ -1,9 +1,16 @@
 use anyhow::{Result, anyhow};
 use std::{collections::HashMap, path::Path};
 
-use crate::model::clip::{MidiClip, MidiNote};
+use crate::model::clip::MidiNote;
 
-pub fn import_midi_file(path: &Path, bpm: f32) -> Result<MidiClip> {
+#[derive(Clone)]
+pub struct ImportedTrack {
+    pub name: String,
+    pub notes: Vec<MidiNote>,
+    pub program: Option<u8>,
+}
+
+pub fn import_midi_file(path: &Path, bpm: f32) -> Result<Vec<ImportedTrack>> {
     let data = std::fs::read(path)?;
     let smf = midly::Smf::parse(&data).map_err(|e| anyhow!("MIDI parse failed: {e}"))?;
 
@@ -25,13 +32,6 @@ pub fn import_midi_file(path: &Path, bpm: f32) -> Result<MidiClip> {
         }
     };
 
-    let mut abs_ticks: u64;
-    let mut max_end_beats: f64 = 0.0;
-
-    // Active note starts can overlap; store stacks per (channel, key)
-    let mut active: HashMap<(u8, u8), Vec<(u64 /*start ticks*/, u8 /*velocity*/)>> = HashMap::new();
-    let mut notes: Vec<MidiNote> = Vec::new();
-
     // Helper: convert absolute ticks to beats
     let ticks_to_beats = |t: u64, conv: &TickToBeats| -> f64 {
         match *conv {
@@ -40,17 +40,31 @@ pub fn import_midi_file(path: &Path, bpm: f32) -> Result<MidiClip> {
         }
     };
 
-    // Iterate all tracks, merging into a single clip
-    for track in &smf.tracks {
-        abs_ticks = 0;
+    let mut result_tracks = Vec::new();
+
+    // Iterate all tracks
+    for (i, track) in smf.tracks.iter().enumerate() {
+        let mut abs_ticks: u64 = 0;
+        // Active note starts can overlap; store stacks per (channel, key)
+        let mut active: HashMap<(u8, u8), Vec<(u64 /*start ticks*/, u8 /*velocity*/)>> =
+            HashMap::new();
+        let mut notes: Vec<MidiNote> = Vec::new();
+        let mut program: Option<u8> = None;
+        let mut track_name: Option<String> = None;
+
         for ev in track {
             abs_ticks = abs_ticks.saturating_add(ev.delta.as_int() as u64);
 
-            // Only channel voice events matter for notes
             use midly::{MetaMessage, TrackEventKind};
             match ev.kind {
                 TrackEventKind::Midi { channel, message } => {
                     match message {
+                        midly::MidiMessage::ProgramChange { program: p } => {
+                            // Only keep the first program change as the track instrument for now
+                            if program.is_none() {
+                                program = Some(p.as_int());
+                            }
+                        }
                         midly::MidiMessage::NoteOn { key, vel } => {
                             let ch = channel.as_int();
                             let k = key.as_int();
@@ -69,7 +83,6 @@ pub fn import_midi_file(path: &Path, bpm: f32) -> Result<MidiClip> {
                                             start: start_beats,
                                             duration: dur,
                                         });
-                                        max_end_beats = max_end_beats.max(end_beats);
                                     }
                                 }
                             } else {
@@ -91,68 +104,56 @@ pub fn import_midi_file(path: &Path, bpm: f32) -> Result<MidiClip> {
                                         start: start_beats,
                                         duration: dur,
                                     });
-                                    max_end_beats = max_end_beats.max(end_beats);
                                 }
                             }
                         }
                         _ => {}
                     }
                 }
-                // Ignore Meta tempo for beat domain (tempo affects seconds, not beats);
-                // the app uses constant BPM for playback anyway.
-                TrackEventKind::Meta(MetaMessage::Tempo(_)) => {}
+                TrackEventKind::Meta(MetaMessage::TrackName(name)) => {
+                    if let Ok(n) = std::str::from_utf8(name) {
+                        track_name = Some(n.to_string());
+                    }
+                }
                 _ => {}
             }
         }
-    }
 
-    // Close any hanging notes at end of file (for a minimal duration)
-    for ((_ch, _k), stack) in active.into_iter() {
-        for (start_ticks, start_vel) in stack {
-            let start_beats = ticks_to_beats(start_ticks, &conv);
-            let end_beats = (start_beats + 0.25).max(start_beats + 1e-6);
-            notes.push(MidiNote {
-                id: 0,
-                pitch: _k,
-                velocity: start_vel,
-                start: start_beats,
-                duration: end_beats - start_beats,
+        // Close any hanging notes at end of track
+        for ((_ch, _k), stack) in active.into_iter() {
+            for (start_ticks, start_vel) in stack {
+                let start_beats = ticks_to_beats(start_ticks, &conv);
+                let end_beats = (start_beats + 0.25).max(start_beats + 1e-6);
+                notes.push(MidiNote {
+                    id: 0,
+                    pitch: _k,
+                    velocity: start_vel,
+                    start: start_beats,
+                    duration: end_beats - start_beats,
+                });
+            }
+        }
+
+        if !notes.is_empty() {
+            // Sort by start time
+            notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+
+            let name = track_name.unwrap_or_else(|| {
+                if let Some(p) = program {
+                    format!("Track {} (Prog {})", i + 1, p)
+                } else {
+                    format!("Track {}", i + 1)
+                }
             });
-            max_end_beats = max_end_beats.max(end_beats);
+
+            result_tracks.push(ImportedTrack {
+                name,
+                notes,
+                program,
+            });
         }
     }
 
-    // Sort by start time for nicer UI
-    notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
-
-    // Build the clip
-    let clip = MidiClip {
-        id: 0,
-        name: path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Imported MIDI")
-            .to_string(),
-        start_beat: 0.0,
-        length_beats: max_end_beats.max(0.000001),
-        notes,
-        color: Some((100, 150, 200)),
-        // Defaults
-        velocity_offset: 0,
-        transpose: 0,
-        loop_enabled: false,
-        content_len_beats: max_end_beats.max(0.000001),
-        pattern_id: None,
-        quantize_grid: 0.25,
-        quantize_strength: 1.0,
-        quantize_enabled: false,
-        muted: false,
-        locked: false,
-        groove: None,
-        swing: 0.0,
-        humanize: 0.0,
-        content_offset_beats: 0.0,
-    };
-
-    Ok(clip)
+    // If no tracks with notes found, maybe it was a Type 0 file or empty?
+    Ok(result_tracks)
 }
