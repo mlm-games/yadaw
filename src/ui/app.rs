@@ -1399,19 +1399,34 @@ impl YadawApp {
 
             Duplicate => {
                 if self.is_selected_track_midi() {
-                    if let Some(clipboard) = self
-                        .piano_roll_view
-                        .copy_selected_notes(&self.state, self.selected_track)
-                    {
-                        self.push_undo();
-                        self.piano_roll_view.paste_notes(
-                            &self.audio_state,
-                            &self.command_tx,
-                            &clipboard,
-                        );
-                    }
-                } else {
+                    self.push_undo();
+                    self.piano_roll_view.duplicate_selected_notes_smart(
+                        &self.state,
+                        self.selected_track,
+                        &self.command_tx,
+                    );
+                } else if self.selected_clips.is_empty() {
                     self.duplicate_selected_track();
+                } else {
+                    self.push_undo();
+                    let selected_clips = self.selected_clips.clone();
+                    let state = self.state.lock().unwrap();
+                    for clip_id in selected_clips {
+                        if let Some((_track, loc)) = state.find_clip(clip_id) {
+                            match loc {
+                                crate::project::ClipLocation::Midi(_) => {
+                                    let _ = self
+                                        .command_tx
+                                        .send(AudioCommand::DuplicateMidiClip { clip_id });
+                                }
+                                crate::project::ClipLocation::Audio(_) => {
+                                    let _ = self
+                                        .command_tx
+                                        .send(AudioCommand::DuplicateAudioClip { clip_id });
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

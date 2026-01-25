@@ -883,6 +883,72 @@ impl PianoRollView {
             }
         }
     }
+
+    pub fn duplicate_selected_notes_smart(
+        &self,
+        state: &Arc<Mutex<AppState>>,
+        selected_track: u64,
+        command_tx: &Sender<AudioCommand>,
+    ) {
+        let clip_id = match self.selected_clip {
+            Some(id) => id,
+            None => return,
+        };
+
+        if self.piano_roll.selected_note_ids.is_empty() {
+            return;
+        }
+
+        let state_guard = state.lock().unwrap();
+        let (clip, base_notes) = if let Some(track) = state_guard.tracks.get(&selected_track) {
+            if let Some(clip) = track.midi_clips.iter().find(|c| c.id == clip_id) {
+                let notes = if let Some(pid) = clip.pattern_id {
+                    state_guard
+                        .patterns
+                        .get(&pid)
+                        .map(|p| p.notes.as_slice())
+                        .unwrap_or_else(|| clip.notes.as_slice())
+                } else {
+                    clip.notes.as_slice()
+                };
+                (clip, notes)
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        let selected_notes: Vec<&MidiNote> = base_notes
+            .iter()
+            .filter(|n| self.piano_roll.selected_note_ids.contains(&n.id))
+            .collect();
+
+        if selected_notes.is_empty() {
+            return;
+        }
+
+        let min_start = selected_notes
+            .iter()
+            .map(|n| n.start)
+            .fold(f64::INFINITY, f64::min);
+        let max_end = selected_notes
+            .iter()
+            .map(|n| n.start + n.duration)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let delta_beats = max_end - min_start;
+        if !delta_beats.is_finite() || delta_beats <= 0.0 {
+            return;
+        }
+
+        let _ = command_tx.send(AudioCommand::DuplicateNotesWithOffset {
+            clip_id: clip.id,
+            source_note_ids: self.piano_roll.selected_note_ids.clone(),
+            delta_beats,
+            delta_semitones: 0,
+        });
+    }
 }
 
 impl Default for PianoRollView {
