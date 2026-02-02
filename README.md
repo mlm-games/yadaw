@@ -2,7 +2,7 @@
 
 A basic daw for sound effects (works on Android too, but not as functional). Is also pretty lightweight (<20mb)
 
-Current intention is to not add too much code for outdated parts, and to keep it minimal; helps refactoring later on, might implement a plugin system like blender if needed (for example, midi controller lanes feature could be implemented as a plugin, etc..)
+Current intention is to not fill the app with patches for outdated/non-standardised parts, and to keep it minimal, might implement a plugin system like blender if needed (for an example, midi controller lanes feature could be implemented as a plugin, etc..)
 
 <img src="others/assets/demo.gif" align="center">
 
@@ -18,8 +18,7 @@ Current intention is to not add too much code for outdated parts, and to keep it
 #### Missing common features (would not be done in the near future)
 
 - No VST support (LV2 and CLAP only).
-- No MP3/FLAC export (WAV only).
-
+- No plugin GUIs (parameter based / DAW generated UIs only). (Is a egui/winit limitation, and the workarounds are questionable in terms of working, and the amount of spaghetti that'll be needed for them)
 
 ## Quick start
 
