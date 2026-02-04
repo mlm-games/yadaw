@@ -14,7 +14,7 @@
 
   <description>
     <p>
-      Yadaw is a rust-based DAW built to not crash as much as the alternatives. It mainly depends on external plugins,
+      Yadaw is a purely rust-based digital audio workstation built to not crash as much as the alternatives. It mainly depends on external plugins,
       and has no inbuilt plugins of its own to keep the base light.
     </p>
     <p>Features:</p>
