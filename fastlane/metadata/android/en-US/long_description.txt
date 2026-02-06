@@ -1,1 +1,17 @@
-A minimal DAW for sound design and prototyping. CLAP/LV2 hosting, runs on desktop and Android. Rust + egui. Open source (AGPL).
+A basic DAW for sound effects and music production. Built with Rust and egui.
+
+Uses CLAP and LV2 plugins - no built-in effects to keep it minimal and lightweight.
+
+Features:
+- Multi-track audio recording and editing
+- MIDI input with piano roll editor
+- Plugin hosting (CLAP/LV2 instruments and effects)
+- Automation lanes for parameter control
+- Timeline-based arrangement
+- Mixer with track controls
+- WAV import/export
+- Cross-platform: Linux, Windows, macOS, Android
+
+Under 20MB binary size.
+
+Open source under AGPL-3.0.

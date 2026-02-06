@@ -3,7 +3,6 @@
 - make midi import seperate content to tracks as intended.
 - Update README.md
 - Reduce warns
-- Update README.md
 - link readme to quick start manual
 - Add a get-started video
 - maybe some other day

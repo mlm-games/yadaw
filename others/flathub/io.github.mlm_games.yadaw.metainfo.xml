@@ -3,7 +3,7 @@
   <id>io.github.mlm_games.yadaw</id>
 
   <name>YADAW</name>
-  <summary>Lightweight Digital Audio Workstation for prototyping</summary>
+  <summary>Digital Audio Workstation for prototyping</summary>
 
   <developer id="io.github.mlm_games">
     <name>MLM Games</name>
@@ -14,20 +14,22 @@
 
   <description>
     <p>
-      Yadaw is a purely rust-based digital audio workstation built to not crash as much as the alternatives. It mainly depends on external plugins,
+      Yadaw is a minimal rust-based digital audio workstation built to not crash as much as the alternatives. It mainly depends on external plugins,
       and has no inbuilt plugins of its own to keep the base light.
     </p>
     <p>Features:</p>
     <ul>
-      <li>LV2 and CLAP plugin hosting for effects and instruments</li>
       <li>Multi-track audio recording and editing</li>
-      <li>MIDI input support with piano roll editor</li>
-      <li>Waveform visualization (simple) and audio import/export</li>
-      <li>Automation lanes for precise parameter control</li>
-      <li>Project management with save/load functionality</li>
-      <li>Low latency audio engine powered by cpal (no jack)</li>
-      <li>Cross-platform: Linux, Windows, macOS, and Android</li>
+      <li>MIDI input with piano roll editor</li>
+      <li>CLAP and LV2 plugin hosting</li>
+      <li>Automation lanes</li>
+      <li>WAV import/export</li>
+      <li>Cross-platform support</li>
     </ul>
+    <p>
+      No VST support (LV2/CLAP only). No built-in plugins.
+      No MP3/FLAC export (WAV only).
+    </p>
   </description>
 
   <launchable type="desktop-id">io.github.mlm_games.yadaw.desktop</launchable>
@@ -36,6 +38,7 @@
   <url type="bugtracker">https://github.com/mlm-games/yadaw/issues</url>
   <url type="vcs-browser">https://github.com/mlm-games/yadaw</url>
   <url type="donation">https://github.com/sponsors/mlm-games</url>
+  <url type="help">https://github.com/mlm-games/yadaw/blob/master/quick_start.md</url>
 
   <branding>
     <color type="primary" scheme_preference="light">#4a90d9</color>
@@ -44,24 +47,42 @@
 
   <screenshots>
     <screenshot type="default">
-      <caption>Main UI</caption>
+      <caption>Main interface</caption>
       <image>https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/tvScreenshots/4.png</image>
     </screenshot>
-    <screenshot type="default">
-      <caption>Overloaded</caption>
-      <image>https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/tvScreenshots/1.png</image>
-    </screenshot>
-    <screenshot type="default">
-      <caption>Piano roll</caption>
+    <screenshot>
+      <caption>Piano roll editor</caption>
       <image>https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/tvScreenshots/2.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Multi-track view</caption>
+      <image>https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/tvScreenshots/1.png</image>
     </screenshot>
   </screenshots>
 
   <releases>
+    <release version="0.6.1" date="2026-01-25">
+      <description>
+        <ul>
+          <li>Updated dependencies</li>
+          <li>Ctrl+D now duplicates to next beat</li>
+          <li>MIDI import improvements</li>
+          <li>Added quick start guide and video</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.5.8" date="2026-01-14">
+      <description>
+        <ul>
+          <li>Cross-compilation improvements</li>
+          <li>Fixed plugin path scanning</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.3" date="2026-01-05">
       <description>
         <ul>
-          <li>Initial flathub release</li>
+          <li>Initial Flathub release</li>
         </ul>
       </description>
     </release>
@@ -84,22 +105,15 @@
 
   <provides>
     <binary>yadaw</binary>
-    <mediatype>audio/midi</mediatype>
-    <mediatype>audio/x-midi</mediatype>
     <mediatype>audio/wav</mediatype>
     <mediatype>audio/x-wav</mediatype>
-    <mediatype>audio/flac</mediatype>
-    <mediatype>audio/mpeg</mediatype>
-    <mediatype>audio/ogg</mediatype>
   </provides>
 
   <keywords>
     <keyword>audio</keyword>
-    <keyword>music</keyword>
     <keyword>DAW</keyword>
     <keyword>MIDI</keyword>
-    <keyword>LV2</keyword>
     <keyword>CLAP</keyword>
-    <keyword>sequencer</keyword>
+    <keyword>LV2</keyword>
   </keywords>
 </component>
