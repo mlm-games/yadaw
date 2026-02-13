@@ -53,14 +53,7 @@ It's a copyleft license that keeps the software free. If you distribute it or ru
 
 ### Support
 
-If you find this useful:
+If you find this useful, you could:
 - Star the repo
 - [Sponsor on GitHub](https://github.com/sponsors/mlm-games)
-- Contribute code
-
-### Version Trackers
-
-| Platform | Version |
-|----------|---------|
-| AUR | [![AUR Version](https://img.shields.io/aur/version/yadaw-bin)](https://aur.archlinux.org/packages/yadaw-bin) |
-| Flathub | [![Flathub Version](https://img.shields.io/flathub/v/io.github.mlm_games.yadaw)](https://flathub.org/apps/io.github.mlm_games.yadaw) |
+- Contribute code (try to implement it as a plugin, when possible)
