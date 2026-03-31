@@ -19,7 +19,7 @@ Current intention is to not fill the app with patches for outdated/non-standardi
 
 - No VST support (LV2 and CLAP only).
 - No MP3/FLAC export (WAV only).
-- No plugin GUIs (parameter based / DAW generated UIs only). (Is a egui/winit limitation, and the workarounds are questionable in terms of working, considering the amount of spaghetti that'll be needed for them)
+- No plugin GUIs (parameter based / DAW generated UIs only). (Is a egui/winit limitation, and the workarounds are questionable, considering the amount of spaghetti that'll be needed to get them working)
 
 ## Quick start
 
