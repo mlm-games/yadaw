@@ -1,10 +1,9 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
-use crate::lv2_plugin_host::{ControlPortInfo, PluginInfo};
 use crate::messages::AudioCommand;
 use crate::model::plugin::PluginDescriptor;
-use crate::model::plugin_api::{BackendKind, UnifiedPluginInfo};
-use crate::plugin_host::{get_available_plugins, with_host};
+use yadaw_plugin_api::{BackendKind, UnifiedPluginInfo};
+use yadaw_plugin_host::legacy::{get_available_plugins, with_host, ControlPortInfo, PluginInfo};
 
 pub trait PluginCategorizationInfo {
     fn name(&self) -> &str;
@@ -74,7 +73,7 @@ pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDesc
         id: 0,
         uri: uri.to_string(),
         name: plugin_info.name.clone(),
-        backend: BackendKind::Clap,
+        backend: BackendKind::Lv2,
         bypass: false,
         params,
         preset_name: None,

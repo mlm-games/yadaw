@@ -10,7 +10,7 @@ mod clap_impl {
     use clack_host::prelude::*;
     use clack_host::process::StartedPluginAudioProcessor;
 
-    use crate::model::plugin_api::{
+    use yadaw_plugin_api::{
         BackendKind, HostConfig, MidiEvent, ParamKey, ParamKind, PluginBackend,
         PluginInstance as UniInstance, ProcessCtx, UnifiedParamInfo, UnifiedPluginInfo,
     };
@@ -110,7 +110,6 @@ mod clap_impl {
             Ok((path, id.to_string()))
         }
 
-        /// Detect param kind, labels & extract unit suffix
         fn detect_kind_labels_and_unit(
             params_ext: &ParamsExt,
             plugin: &mut PluginMainThreadHandle<'_>,
@@ -121,7 +120,6 @@ mod clap_impl {
             let default = info.default_value;
             let stepped = info.flags.contains(ParamInfoFlags::IS_STEPPED);
 
-            // Try to extract unit from default value text
             let unit = Self::extract_unit(params_ext, plugin, info.id, default);
 
             if !stepped {
@@ -130,7 +128,6 @@ mod clap_impl {
 
             let range = (max - min).round() as i32;
 
-            // Boolean: stepped 0..1
             if range == 1 && min.round() as i32 == 0 && max.round() as i32 == 1 {
                 return (ParamKind::Bool, None, unit);
             }
@@ -175,7 +172,6 @@ mod clap_impl {
             (ParamKind::Int, None, unit)
         }
 
-        /// Extract unit suffix from value_to_text (e.g., "5.0 ms" -> " ms")
         fn extract_unit(
             params_ext: &ParamsExt,
             plugin: &mut PluginMainThreadHandle<'_>,
@@ -191,11 +187,6 @@ mod clap_impl {
                 .trim_end_matches('\0')
                 .to_string();
 
-            // Find where the number ends and unit begins
-            // e.g., "5.00 ms" -> find position after "5.00"
-            let _value_str = format!("{:.2}", value);
-
-            // Try to find common patterns
             if let Some(pos) = text.find(|c: char| c.is_alphabetic() || c == '%' || c == '×') {
                 let unit = text[pos..].trim().to_string();
                 if !unit.is_empty() {
@@ -203,7 +194,6 @@ mod clap_impl {
                 }
             }
 
-            // Check for unit at end after space
             if let Some(pos) = text.rfind(' ') {
                 let suffix = &text[pos..];
                 if suffix
@@ -218,7 +208,6 @@ mod clap_impl {
             None
         }
 
-        /// Get formatted text for a value
         fn format_value(
             params_ext: &ParamsExt,
             plugin: &mut PluginMainThreadHandle<'_>,
@@ -256,7 +245,6 @@ mod clap_impl {
                     let id = info.id.get();
                     let flags = info.flags;
 
-                    // Skip hidden params
                     if flags.contains(ParamInfoFlags::IS_HIDDEN) {
                         continue;
                     }
@@ -285,7 +273,6 @@ mod clap_impl {
                         .map(|v| v as f32)
                         .unwrap_or(default);
 
-                    // Get formatted text for current value
                     let value_to_text =
                         Self::format_value(&params_ext, &mut plugin, info.id, current_value as f64);
 
@@ -454,11 +441,9 @@ mod clap_impl {
                 }
             }
 
-            // Sort events by time
             self.note_ons.sort_by_key(|e| e.time());
             self.note_offs.sort_by_key(|e| e.time());
 
-            // Copy input audio
             for (i, &input_channel) in audio_in.iter().enumerate() {
                 if i < self.input_copies.len() {
                     let len = frames.min(input_channel.len());
@@ -466,7 +451,6 @@ mod clap_impl {
                 }
             }
 
-            // Build audio ports
             let mut in_ports = AudioPorts::with_capacity(audio_in.len(), 1);
             let mut out_ports = AudioPorts::with_capacity(audio_out.len(), 1);
 

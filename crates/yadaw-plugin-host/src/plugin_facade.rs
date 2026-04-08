@@ -1,7 +1,5 @@
-use crate::model::plugin_api::{
-    BackendKind, HostConfig, PluginBackend, PluginInstance, UnifiedPluginInfo,
-};
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use yadaw_plugin_api::{BackendKind, HostConfig, PluginBackend, PluginInstance, UnifiedPluginInfo};
 
 pub struct HostFacade {
     backends: Vec<Box<dyn PluginBackend>>,

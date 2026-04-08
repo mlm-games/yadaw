@@ -6,13 +6,14 @@ use crate::{
     audio_export::ExportConfig,
     midi_input::RawMidiMessage,
     model::{
-        MidiNote,
         automation::{AutomationMode, AutomationTarget},
         clip::{AudioClip, MidiClip},
-        plugin_api::{BackendKind, ParamKind},
+        MidiNote,
     },
     project::AppStateSnapshot,
 };
+
+use yadaw_plugin_api::{BackendKind, ParamKind};
 
 /// Serializable param type tag for message passing
 #[derive(Debug, Clone)]

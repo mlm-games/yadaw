@@ -6,14 +6,24 @@ edition = "2024"
 [[bin]]
 name = "yadaw"
 path = "src/main.rs"
-# required-features = ["desktop-bin"]
 
 [lib]
 name = "yadaw"
 crate-type = ["rlib", "cdylib"]
 
 
+[workspace]
+members = [
+    "crates/yadaw-plugin-api",
+    "crates/yadaw-plugin-host",
+]
+resolver = "3"
+
+
 [dependencies]
+yadaw-plugin-api = { path = "crates/yadaw-plugin-api" }
+yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = false }
+
 # Audio Backend
 cpal = "0.17"
 chrono = { version = "0.4", features = ["serde"] }
@@ -65,8 +75,8 @@ winit = "0.30.12"
 default = ["clap-host", "lv2-legacy"]
 desktop-bin = []
 android = []
-clap-host = ["clack-extensions"]
-lv2-legacy = []
+clap-host = ["yadaw-plugin-host/clap-host"]
+lv2-legacy = ["yadaw-plugin-host/lv2-legacy"]
 
 [dependencies.clack-host]
 git = "https://github.com/prokopyl/clack"
@@ -95,7 +105,6 @@ icon = "@drawable/ic_launcher_monochrome"
 version_code = 16778753
 min_sdk_version = 29
 target_sdk_version = 36
-# max_sdk_version = 29
 
 [patch.crates-io]
 livi = { git = "https://github.com/mlm-games/livi-rs", branch = "main" }

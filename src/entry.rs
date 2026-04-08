@@ -6,10 +6,12 @@ use crate::{
     config::Config,
     constants,
     messages::{AudioCommand, UIUpdate},
-    plugin_host, ui,
+    ui,
 };
-use crate::{audio_state::AudioGraphSnapshot, model::plugin_api::HostConfig, project};
+use crate::{audio_state::AudioGraphSnapshot, project};
 use std::sync::{Arc, Mutex};
+use yadaw_plugin_api::HostConfig;
+use yadaw_plugin_host::{legacy::init as plugin_host_init, HostFacade};
 
 #[cfg(target_os = "android")]
 use android_activity::AndroidApp;
@@ -47,7 +49,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded::<AudioGraphSnapshot>(1);
 
     // Initialize the global LV2 plugin host with current audio settings
-    plugin_host::init(
+    plugin_host_init(
         audio_state.sample_rate.load() as f64,
         constants::MAX_BUFFER_SIZE,
     )?;
@@ -58,7 +60,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         max_block: constants::MAX_BUFFER_SIZE,
         plugin_scan_paths: config.paths.plugin_scan_paths.clone(),
     };
-    let ui_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
+    let ui_facade = HostFacade::new(host_cfg)?;
     let available_plugins = ui_facade.scan().unwrap_or_default();
 
     std::panic::set_hook(Box::new(|info| {
@@ -185,7 +187,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         max_block: constants::MAX_BUFFER_SIZE,
         plugin_scan_paths: config.paths.plugin_scan_paths.clone(),
     };
-    let ui_facade = crate::plugin_facade::HostFacade::new(host_cfg)?;
+    let ui_facade = HostFacade::new(host_cfg)?;
     let available_plugins = ui_facade.scan().unwrap_or_default();
 
     // Start audio thread

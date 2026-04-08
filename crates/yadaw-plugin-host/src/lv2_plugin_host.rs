@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use livi::event::LV2AtomSequence;
 use livi::{Features, FeaturesBuilder, Instance, PortCounts, PortType, World};
@@ -38,19 +38,16 @@ impl LV2PluginHost {
     pub fn new(sample_rate: f64, max_block_size: usize) -> Result<Self> {
         let world = World::new();
 
-        // Build features with your audio engine's requirements
         let features = world.build_features(FeaturesBuilder {
             min_block_length: 1,
             max_block_length: max_block_size,
         });
 
-        // Collect available plugins
         let available_plugins: Vec<PluginInfo> = world
             .iter_plugins()
             .map(|plugin| {
                 let port_counts = plugin.port_counts();
 
-                // Collect control port info
                 let control_ports = plugin
                     .ports()
                     .filter(|p| p.port_type == PortType::ControlInput)
@@ -101,7 +98,6 @@ impl LV2PluginHost {
                 .map_err(|_| anyhow!("Failed to instantiate plugin"))?
         };
 
-        // Initialize parameter cache and control port mapping
         let params = Arc::new(DashMap::new());
         let mut control_port_indices = HashMap::new();
 
@@ -137,7 +133,7 @@ impl LV2PluginHost {
 
             max_block_size: self.max_block_size,
             silent_audio: vec![0.0; self.max_block_size],
-            scratch_audio_out: Vec::new(), // will be sized lazily but not allocated per block
+            scratch_audio_out: Vec::new(),
         })
     }
 
@@ -160,7 +156,6 @@ pub struct LV2PluginInstance {
     pub midi_sequence: Option<LV2AtomSequence>,
     control_port_indices: HashMap<String, livi::PortIndex>,
 
-    // Pre-allocated for RT safety
     empty_atom_in: LV2AtomSequence,
     atom_outputs: Vec<LV2AtomSequence>,
 
@@ -183,7 +178,6 @@ impl LV2PluginInstance {
             .unwrap_or(false)
     }
 
-    // Ensure we have N scratch output buffers (each max_block_size long) and zero first `samples`
     fn ensure_scratch_out(&mut self, n: usize, samples: usize) {
         if self.scratch_audio_out.len() < n {
             let add = n - self.scratch_audio_out.len();
@@ -207,7 +201,6 @@ impl LV2PluginInstance {
         let need_ao = self.port_counts.audio_outputs;
         let ai = self.port_counts.atom_sequence_inputs;
 
-        // 1) Apply control parameters
         for entry in self.params.iter() {
             if let Some(&pi) = self.control_port_indices.get(entry.key()) {
                 self.instance.set_control_input(pi, *entry.value());
@@ -217,12 +210,10 @@ impl LV2PluginInstance {
         let mut atom_outputs = std::mem::take(&mut self.atom_outputs);
         let mut scratch_audio = std::mem::take(&mut self.scratch_audio_out);
 
-        // Clear atom outputs
         for seq in atom_outputs.iter_mut() {
             seq.clear_as_chunk();
         }
 
-        // 3) Build audio input refs (read-only, no conflicts)
         let mut in_refs: Vec<&[f32]> = Vec::with_capacity(need_ai);
         for i in 0..need_ai {
             let src = audio_inputs
@@ -232,7 +223,6 @@ impl LV2PluginInstance {
             in_refs.push(&src[..len.min(src.len())]);
         }
 
-        // 4) Ensure scratch buffers exist and are zeroed
         if scratch_audio.len() < need_ao {
             scratch_audio.resize(need_ao, vec![0.0; self.max_block_size]);
         }
@@ -243,9 +233,7 @@ impl LV2PluginInstance {
         let provided_count = audio_outputs.len().min(need_ao);
         let mut out_refs: Vec<&mut [f32]> = Vec::with_capacity(need_ao);
 
-        // Split audio_outputs to avoid aliasing
         if provided_count > 0 {
-            // Use split_at_mut to safely get non-overlapping slices
             let (provided, _rest) = audio_outputs.split_at_mut(provided_count);
             for out_buf in provided.iter_mut() {
                 let l = out_buf.len().min(len);
@@ -253,13 +241,11 @@ impl LV2PluginInstance {
             }
         }
 
-        // Add scratch buffers for remaining outputs
         let extra_needed = need_ao.saturating_sub(provided_count);
         for buf in scratch_audio.iter_mut().take(extra_needed) {
             out_refs.push(&mut buf[..len]);
         }
 
-        // 6) Build atom input refs
         let atom_in_refs: Vec<&LV2AtomSequence> = if ai > 0 {
             let atom = if use_midi && self.has_midi_events() {
                 self.midi_sequence.as_ref().unwrap()
@@ -271,28 +257,24 @@ impl LV2PluginInstance {
             Vec::new()
         };
 
-        // 7) Build ports in ONE expression (no intermediate borrows)
         let ports = livi::EmptyPortConnections::new()
             .with_audio_inputs(in_refs.into_iter())
             .with_audio_outputs(out_refs.into_iter())
             .with_atom_sequence_inputs(atom_in_refs.into_iter())
             .with_atom_sequence_outputs(atom_outputs.iter_mut());
 
-        // 8) Run plugin
         let result = unsafe {
             self.instance
                 .run(samples, ports)
                 .map_err(|e| anyhow!("[LV2] run() error: {}", e))
         };
 
-        // 9) Move fields back into self
         self.atom_outputs = atom_outputs;
         self.scratch_audio_out = scratch_audio;
 
         result
     }
 
-    // Keep stereo convenience; auto-enable MIDI if events exist
     pub fn process(
         &mut self,
         input_l: &[f32],
@@ -316,7 +298,6 @@ impl LV2PluginInstance {
     }
 
     pub fn prepare_midi_raw_events(&mut self, events: &[(u8, u8, u8, i64)]) {
-        // Reuse pre-allocated sequence
         let mut sequence = self
             .midi_sequence
             .take()
@@ -336,7 +317,6 @@ impl LV2PluginInstance {
     }
 
     pub fn prepare_midi_events(&mut self, notes: &[(u8, u8, i64)]) {
-        // Reuse pre-allocated LV2AtomSequence
         let mut sequence = self
             .midi_sequence
             .take()
@@ -344,7 +324,7 @@ impl LV2PluginInstance {
         sequence.clear();
 
         for &(pitch, velocity, time) in notes {
-            let midi_data = [0x90, pitch, velocity]; // Note On
+            let midi_data = [0x90, pitch, velocity];
             let _ = sequence.push_midi_event::<3>(time, self.features.midi_urid(), &midi_data);
         }
 

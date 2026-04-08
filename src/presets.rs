@@ -1,8 +1,8 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::model::plugin_api::BackendKind;
+use yadaw_plugin_api::BackendKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginPreset {

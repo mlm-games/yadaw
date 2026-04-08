@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 
-use crate::model::plugin_api::{
+use yadaw_plugin_api::{
     BackendKind, HostConfig, MidiEvent, ParamKey, PluginBackend, PluginInstance, ProcessCtx,
     UnifiedParamInfo, UnifiedPluginInfo,
 };
@@ -28,7 +28,6 @@ impl PluginBackend for Lv2HostBackend {
     }
 
     fn init(&self, cfg: &HostConfig) -> Result<()> {
-        // Use your global facade to init LV2 host
         crate::plugin_host::ensure(cfg.sample_rate, cfg.max_block)?;
         Ok(())
     }
@@ -44,14 +43,14 @@ impl PluginBackend for Lv2HostBackend {
                 is_instrument: p.is_instrument,
                 audio_inputs: p.audio_inputs,
                 audio_outputs: p.audio_outputs,
-                has_midi: p.has_midi || p.audio_outputs == 0, // common LV2 instruments pattern
+                has_midi: p.has_midi || p.audio_outputs == 0,
             })
             .collect();
         Ok(infos)
     }
 
     fn instantiate(&self, uri: &str) -> Result<Box<dyn PluginInstance>> {
-        use crate::model::plugin_api::ParamKind;
+        use yadaw_plugin_api::ParamKind;
 
         let instance = crate::plugin_host::instantiate(uri)
             .map_err(|e| anyhow!("LV2 instantiate failed: {e}"))?;
@@ -108,9 +107,7 @@ impl PluginInstance for Lv2Instance {
         audio_out: &mut [&mut [f32]],
         events: &[MidiEvent],
     ) -> Result<()> {
-        // Prepare MIDI into LV2AtomSequence only if the plugin expects it
         if !events.is_empty() {
-            // Convert to raw bytes; your LV2 instance already exposes a helper
             let raw: Vec<(u8, u8, u8, i64)> = events
                 .iter()
                 .map(|e| (e.status, e.data1, e.data2, e.time_frames))
@@ -120,7 +117,6 @@ impl PluginInstance for Lv2Instance {
             self.inner.clear_midi_events();
         }
 
-        // Run. We do not retain mutable borrows across this call.
         self.inner
             .process_multi(audio_in, audio_out, !events.is_empty(), ctx.frames)?;
         Ok(())
@@ -145,7 +141,8 @@ impl PluginInstance for Lv2Instance {
 
     fn save_state(&mut self) -> Option<Vec<u8>> {
         None
-    } // optional for LV2
+    }
+
     fn load_state(&mut self, _data: &[u8]) -> bool {
         false
     }

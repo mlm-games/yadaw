@@ -5148,6 +5148,33 @@ dependencies = [
  "smallvec",
  "symphonia",
  "winit",
+ "yadaw-plugin-api",
+ "yadaw-plugin-host",
+]
+
+[[package]]
+name = "yadaw-plugin-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
+name = "yadaw-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clack",
+ "clack-extensions",
+ "clack-host",
+ "dashmap",
+ "livi",
+ "log",
+ "once_cell",
+ "parking_lot",
+ "smallvec",
+ "yadaw-plugin-api",
 ]
 
 [[package]]

@@ -4,11 +4,11 @@ use super::*;
 use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
 use crate::messages::{AudioCommand, PluginParamInfo};
-use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
-use crate::model::plugin_api::{BackendKind, ParamKind};
 use crate::model::track::TrackType;
+use crate::model::PluginDescriptor;
 use crate::plugin::get_control_port_info;
+use yadaw_plugin_api::{BackendKind, ParamKind};
 
 pub struct TracksPanel {
     track_meters: HashMap<u64, LevelMeter>,

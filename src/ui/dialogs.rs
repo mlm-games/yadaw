@@ -9,10 +9,11 @@ use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
 use crate::input::shortcuts::{KeyCode, Keybind};
 use crate::messages::{AudioCommand, ExportState};
-use crate::model::plugin_api::{BackendKind, HostConfig};
 use crate::model::track::TrackType;
 use crate::plugin::categorize_plugin;
 use crate::ui::theme;
+use yadaw_plugin_api::{BackendKind, HostConfig};
+use yadaw_plugin_host::HostFacade;
 
 macro_rules! simple_dialog {
     ($name:ident, $title:expr, $content:expr) => {
@@ -1792,7 +1793,7 @@ impl PluginManagerDialog {
                             .map(|s| std::path::PathBuf::from(s))
                             .collect(),
                     };
-                    match crate::plugin_facade::HostFacade::new(host_cfg).and_then(|f| f.scan()) {
+                    match HostFacade::new(host_cfg).and_then(|f| f.scan()) {
                         Ok(list) => {
                             app.available_plugins =
                                 list.into_iter().map(|p| (p.uri.clone(), p)).collect();

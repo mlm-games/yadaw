@@ -11,7 +11,7 @@ use crate::idgen;
 use crate::messages::{AudioCommand, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
-use crate::model::plugin_api::BackendKind;
+use yadaw_plugin_api::BackendKind;
 use crate::model::track::TrackType;
 use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor, TrackGroup};
 use crate::plugin::{create_plugin_instance, get_control_port_info};
