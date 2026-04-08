@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "android")]
 use std::sync::Arc;
 
 use egui_file_dialog::FileDialog;
 
 use super::*;
+use crate::audio_export::ExportFormat;
 use crate::error::UserNotification;
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
@@ -643,7 +645,7 @@ impl PluginBrowserDialog {
                         let backend_badge =
                             if plugin.uri.starts_with("file://") { "[CLAP]" } else { "[LV2]" };
 
-                        // Show category hint in “All”
+                        // Show category hint in "All"
                         let display_name = if self.selected_category == "All" {
                             let cats = categorize_plugin(plugin);
                             let main_cat = cats.iter().find(|c| *c != "All").map(|c| c.as_str()).unwrap_or("Unknown");
@@ -660,7 +662,7 @@ impl PluginBrowserDialog {
                                 BackendKind::Lv2
                             };
                             let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
-                
+
                             let plugin_idx = {
                                 let state = app.state.lock().unwrap();
                                 state.tracks.get(&track_id).map(|t| t.plugin_chain.len()).unwrap_or(0)
@@ -671,7 +673,7 @@ impl PluginBrowserDialog {
                                 backend,
                                 uri: plugin.uri.clone(),
                                 display_name: plugin.name.clone(),
-                                plugin_idx, 
+                                plugin_idx,
                             });
 
                             // clear the selection target after adding
@@ -708,7 +710,7 @@ impl PluginBrowserDialog {
                 let can_add = self.selected_plugin.is_some();
                 if ui.add_enabled(can_add, egui::Button::new("Add to Track")).clicked()
                     && let Some(uri) = &self.selected_plugin
-                    && let Some(plugin) = app.available_plugins.get(uri) { 
+                    && let Some(plugin) = app.available_plugins.get(uri) {
                             // Warning for MIDI track with effect
                             let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
                             let is_midi = {
@@ -725,12 +727,12 @@ impl PluginBrowserDialog {
                             if is_midi && !plugin.is_instrument {
                                 app.dialogs.show_message("You are adding an effect plugin to a MIDI track. It will not output audio unless the track is fed with audio. Consider adding it to an audio track or a bus.");
                             }
-                            
+
                             let track_id = app.selected_track;
-                            
+
                             let plugin_idx = {
-                            let state = app.state.lock().unwrap();
-                            state.tracks.get(&track_id).map(|t| t.plugin_chain.len()).unwrap_or(0)
+                                let state = app.state.lock().unwrap();
+                                state.tracks.get(&track_id).map(|t| t.plugin_chain.len()).unwrap_or(0)
                             };
                             let _ = app.command_tx.send(AudioCommand::AddPluginUnified {
                                 track_id,
@@ -739,7 +741,7 @@ impl PluginBrowserDialog {
                                 display_name: plugin.name.clone(),
                                 plugin_idx,
                             });
-                        
+
                             app.selected_track_for_plugin = None;
                             self.closed = true;
                         }
@@ -1476,13 +1478,6 @@ impl Default for ShortcutsEditorDialog {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum ExportFormat {
-    Wav,
-    Mp3,
-    Flac,
-    Ogg,
-}
 // later for prs
 #[derive(Clone, Copy, PartialEq)]
 enum ExportQuality {
@@ -1502,14 +1497,16 @@ enum ExportRange {
 pub struct ExportDialog {
     closed: bool,
     path: PathBuf,
+    format: ExportFormat,
     bit_depth: u16,
     export_range: ExportRange,
     start_beat_input: String,
     end_beat_input: String,
-
     state: Option<ExportState>,
-
+    #[cfg(target_os = "android")]
     file_dialog: FileDialog,
+    #[cfg(target_os = "android")]
+    file_dialog_open: bool,
     normalize: bool,
 }
 
@@ -1518,15 +1515,25 @@ impl ExportDialog {
         Self {
             closed: false,
             path: PathBuf::from("untitled.wav"),
+            format: ExportFormat::Wav,
             bit_depth: 24,
             export_range: ExportRange::LoopRegion,
             start_beat_input: "0.0".to_string(),
             end_beat_input: "16.0".to_string(),
-            state: None, // Start in idle state
-            file_dialog: FileDialog::new().title("Export to WAV").add_file_filter(
-                "WAV Audio",
-                Arc::new(|path| path.extension().unwrap_or_default() == "wav"),
-            ),
+            state: None,
+            #[cfg(target_os = "android")]
+            file_dialog: FileDialog::new()
+                .id(egui::Id::new("export_file_dialog"))
+                .title("Export Audio")
+                .add_file_filter(
+                    "Audio Files",
+                    Arc::new(|path| {
+                        let ext = path.extension().unwrap_or_default();
+                        ext == "wav" || ext == "flac" || ext == "ogg"
+                    }),
+                ),
+            #[cfg(target_os = "android")]
+            file_dialog_open: false,
             normalize: false,
         }
     }
@@ -1551,7 +1558,7 @@ impl ExportDialog {
                         }
                         ExportState::Normalizing => {
                             ui.label("Normalizing audio...");
-                            ui.add(egui::ProgressBar::new(1.0)); // Show full bar
+                            ui.add(egui::ProgressBar::new(1.0));
                         }
                         ExportState::Finalizing => {
                             ui.label("Finalizing file...");
@@ -1579,7 +1586,6 @@ impl ExportDialog {
                         }
                     }
                     if ui.button("Cancel").clicked() {
-                        // TODO: Implement cancellation logic via AudioExporter
                         self.state = Some(ExportState::Cancelled);
                         self.closed = true;
                     }
@@ -1592,25 +1598,49 @@ impl ExportDialog {
                 ui.horizontal(|ui| {
                     ui.label("File Path:");
                     ui.label(self.path.to_string_lossy());
+                    #[cfg(not(target_os = "android"))]
                     if ui.button("Browse...").clicked() {
+                        let mut picker = rfd::FileDialog::new()
+                            .set_title("Export Audio")
+                            .add_filter("Audio Files", &["wav", "flac", "ogg"]);
+
+                        if let Some(parent) = self.path.parent() {
+                            picker = picker.set_directory(parent);
+                        }
+                        if let Some(file_name) = self.path.file_name().and_then(|n| n.to_str()) {
+                            picker = picker.set_file_name(file_name);
+                        }
+
+                        if let Some(path) = picker.save_file() {
+                            self.path = path;
+                        }
+                    }
+
+                    #[cfg(target_os = "android")]
+                    if ui.button("Browse...").clicked() && !self.file_dialog_open {
                         self.file_dialog.save_file();
+                        self.file_dialog_open = true;
                     }
                 });
 
-                self.file_dialog.update(ctx);
-                if let Some(path) = self.file_dialog.take_picked() {
-                    self.path = path;
-                }
-
                 // Format
                 ui.separator();
-                ui.label("Format: WAV");
+                ui.label("Format:");
                 ui.horizontal(|ui| {
-                    ui.label("Bit Depth:");
-                    ui.radio_value(&mut self.bit_depth, 16, "16-bit");
-                    ui.radio_value(&mut self.bit_depth, 24, "24-bit");
-                    ui.radio_value(&mut self.bit_depth, 32, "32-bit Float");
+                    ui.radio_value(&mut self.format, ExportFormat::Wav, "WAV");
+                    ui.radio_value(&mut self.format, ExportFormat::Flac, "FLAC");
+                    ui.radio_value(&mut self.format, ExportFormat::Ogg, "OGG (48k Hz only)");
                 });
+                if self.format != ExportFormat::Ogg {
+                    ui.horizontal(|ui| {
+                        ui.label("Bit Depth:");
+                        ui.radio_value(&mut self.bit_depth, 16, "16-bit");
+                        ui.radio_value(&mut self.bit_depth, 24, "24-bit");
+                        if self.format == ExportFormat::Wav {
+                            ui.radio_value(&mut self.bit_depth, 32, "32-bit Float");
+                        }
+                    });
+                }
 
                 ui.checkbox(&mut self.normalize, "Normalize Peak to -0.1 dB");
 
@@ -1664,6 +1694,7 @@ impl ExportDialog {
 
                         let config = crate::audio_export::ExportConfig {
                             path: self.path.clone(),
+                            format: Some(self.format),
                             sample_rate: app.audio_state.sample_rate.load(),
                             bit_depth: self.bit_depth,
                             start_beat,
@@ -1672,7 +1703,6 @@ impl ExportDialog {
                         };
 
                         let _ = app.command_tx.send(AudioCommand::ExportAudio(config));
-                        // Set initial state to start showing progress bar
                         self.state = Some(ExportState::Rendering(0.0));
                     }
                     if ui.button("Cancel").clicked() {
@@ -1681,10 +1711,25 @@ impl ExportDialog {
                 });
             });
 
+        #[cfg(target_os = "android")]
+        if self.file_dialog_open {
+            self.file_dialog.update(ctx);
+            if let Some(path) = self.file_dialog.take_picked() {
+                self.path = path;
+                self.file_dialog_open = false;
+            } else if matches!(
+                self.file_dialog.state(),
+                egui_file_dialog::DialogState::Closed | egui_file_dialog::DialogState::Cancelled
+            ) {
+                self.file_dialog_open = false;
+            }
+        }
+
         if !open {
             self.closed = true;
         }
     }
+
     pub fn is_closed(&self) -> bool {
         self.closed
     }

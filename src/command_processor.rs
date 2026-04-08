@@ -1417,7 +1417,7 @@ fn process_command(
             let audio_state_clone = audio_state.clone();
             let ui_tx_clone = ui_tx.clone();
 
-            let _ = AudioExporter::export_to_wav(
+            let _ = AudioExporter::export(
                 app_state_clone,
                 audio_state_clone,
                 config.clone(),
