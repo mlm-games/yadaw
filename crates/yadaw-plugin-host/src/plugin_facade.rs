@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use yadaw_plugin_api::{BackendKind, HostConfig, PluginBackend, PluginInstance, UnifiedPluginInfo};
 
 pub struct HostFacade {

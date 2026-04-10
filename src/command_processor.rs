@@ -11,12 +11,12 @@ use crate::idgen;
 use crate::messages::{AudioCommand, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
-use yadaw_plugin_api::BackendKind;
 use crate::model::track::TrackType;
 use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor, TrackGroup};
 use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::{AppState, ClipLocation, ClipRef};
 use crate::time_utils::quick::samples_to_beats;
+use yadaw_plugin_api::BackendKind;
 
 pub fn run_command_processor(
     app_state: Arc<std::sync::Mutex<AppState>>,

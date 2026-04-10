@@ -225,7 +225,6 @@ impl MixerWindow {
                     ui.set_min_width(ui.available_width());
                     ui.label(&track.name);
                 });
-                
                 // Channel name
                 ui.group(|ui| {
                     ui.set_min_width(ui.available_width());

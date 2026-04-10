@@ -10,11 +10,11 @@ mod clap_impl {
     use clack_host::prelude::*;
     use clack_host::process::StartedPluginAudioProcessor;
 
+    use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
     use yadaw_plugin_api::{
         BackendKind, HostConfig, MidiEvent, ParamKey, ParamKind, PluginBackend,
         PluginInstance as UniInstance, ProcessCtx, UnifiedParamInfo, UnifiedPluginInfo,
     };
-    use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
 
     struct MyHostShared;
     impl<'a> SharedHandler<'a> for MyHostShared {

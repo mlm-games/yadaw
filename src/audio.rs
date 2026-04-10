@@ -10,10 +10,10 @@ use crate::messages::{PluginParamInfo, UIUpdate};
 use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::ChannelStrip;
 use crate::model::clip::AudioClip;
-use yadaw_plugin_api::{BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEvent};
 use crate::model::track::TrackType;
-use yadaw_plugin_host::HostFacade;
 use crate::time_utils::TimeConverter;
+use yadaw_plugin_api::{BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEvent};
+use yadaw_plugin_host::HostFacade;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};

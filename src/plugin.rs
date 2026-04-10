@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::messages::AudioCommand;
 use crate::model::plugin::PluginDescriptor;
 use yadaw_plugin_api::{BackendKind, UnifiedPluginInfo};
-use yadaw_plugin_host::legacy::{get_available_plugins, with_host, ControlPortInfo, PluginInfo};
+use yadaw_plugin_host::legacy::{ControlPortInfo, PluginInfo, get_available_plugins, with_host};
 
 pub trait PluginCategorizationInfo {
     fn name(&self) -> &str;

@@ -1906,190 +1906,199 @@ impl TimelineView {
             .fixed_pos(self.clip_menu_pos)
             .interactable(true)
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(180.0);
+                egui::Frame::popup(ui.style())
+                    .show(ui, |ui| {
+                        ui.set_min_width(180.0);
 
-                    if ui.button("Cut").clicked() {
-                        app.cut_selected();
-                        close_menu = true;
-                    }
-                    if ui.button("Copy").clicked() {
-                        app.copy_selected();
-                        close_menu = true;
-                    }
-                    if ui.button("Paste").clicked() {
+                        if ui.button("Cut").clicked() {
+                            app.cut_selected();
+                            close_menu = true;
+                        }
+                        if ui.button("Copy").clicked() {
+                            app.copy_selected();
+                            close_menu = true;
+                        }
+                        if ui.button("Paste").clicked() {
+                            if let Some(primary_clip_id) = app.selected_clips.first().copied() {
+                                if let Some(tid) = app
+                                    .state
+                                    .lock()
+                                    .unwrap()
+                                    .clips_by_id
+                                    .get(&primary_clip_id)
+                                    .map(|r| r.track_id)
+                                {
+                                    app.selected_track = tid;
+                                }
+                            }
+                            app.paste_at_playhead();
+                            close_menu = true;
+                        }
+
+                        ui.separator();
+
+                        if ui.button("Split at Playhead").clicked() {
+                            app.split_selected_at_playhead();
+                            close_menu = true;
+                        }
+                        if ui.button("Delete").clicked() {
+                            app.delete_selected();
+                            close_menu = true;
+                        }
+
                         if let Some(primary_clip_id) = app.selected_clips.first().copied() {
-                            if let Some(tid) = app
+                            let is_midi = app
                                 .state
                                 .lock()
                                 .unwrap()
                                 .clips_by_id
                                 .get(&primary_clip_id)
-                                .map(|r| r.track_id)
-                            {
-                                app.selected_track = tid;
-                            }
-                        }
-                        app.paste_at_playhead();
-                        close_menu = true;
-                    }
+                                .map_or(false, |r| r.is_midi);
+                            if is_midi {
+                                ui.separator();
+                                if ui.button("Toggle Loop").clicked() {
+                                    let enabled = {
+                                        let st = app.state.lock().unwrap();
+                                        st.find_clip(primary_clip_id)
+                                            .and_then(|(track, loc)| {
+                                                if let crate::project::ClipLocation::Midi(idx) = loc
+                                                {
+                                                    track
+                                                        .midi_clips
+                                                        .get(idx)
+                                                        .map(|c| !c.loop_enabled)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .unwrap_or(true)
+                                    };
+                                    let _ = app.command_tx.send(AudioCommand::ToggleClipLoop {
+                                        clip_id: primary_clip_id,
+                                        enabled,
+                                    });
+                                    close_menu = true;
+                                }
 
-                    ui.separator();
+                                ui.separator();
+                                ui.label("Quantize");
 
-                    if ui.button("Split at Playhead").clicked() {
-                        app.split_selected_at_playhead();
-                        close_menu = true;
-                    }
-                    if ui.button("Delete").clicked() {
-                        app.delete_selected();
-                        close_menu = true;
-                    }
-
-                    if let Some(primary_clip_id) = app.selected_clips.first().copied() {
-                        let is_midi = app
-                            .state
-                            .lock()
-                            .unwrap()
-                            .clips_by_id
-                            .get(&primary_clip_id)
-                            .map_or(false, |r| r.is_midi);
-                        if is_midi {
-                            ui.separator();
-                            if ui.button("Toggle Loop").clicked() {
-                                let enabled = {
-                                    let st = app.state.lock().unwrap();
-                                    st.find_clip(primary_clip_id)
+                                let (mut q_grid, mut q_strength, mut q_swing, mut q_enabled) = {
+                                    app.state
+                                        .lock()
+                                        .unwrap()
+                                        .find_clip(primary_clip_id)
                                         .and_then(|(track, loc)| {
                                             if let crate::project::ClipLocation::Midi(idx) = loc {
-                                                track.midi_clips.get(idx).map(|c| !c.loop_enabled)
+                                                track.midi_clips.get(idx).map(|c| {
+                                                    (
+                                                        c.quantize_grid,
+                                                        c.quantize_strength,
+                                                        c.swing,
+                                                        c.quantize_enabled,
+                                                    )
+                                                })
                                             } else {
                                                 None
                                             }
                                         })
-                                        .unwrap_or(true)
+                                        .unwrap_or((0.25, 1.0, 0.0, false))
                                 };
-                                let _ = app.command_tx.send(AudioCommand::ToggleClipLoop {
-                                    clip_id: primary_clip_id,
-                                    enabled,
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Grid:");
+                                    const GRIDS: [(&str, f32); 6] = [
+                                        ("1/1", 1.0),
+                                        ("1/2", 0.5),
+                                        ("1/4", 0.25),
+                                        ("1/8", 0.125),
+                                        ("1/16", 0.0625),
+                                        ("1/32", 0.03125),
+                                    ];
+                                    for (label, g) in GRIDS {
+                                        ui.selectable_value(&mut q_grid, g, label);
+                                    }
                                 });
-                                close_menu = true;
-                            }
+                                ui.add(
+                                    egui::Slider::new(&mut q_strength, 0.0..=1.0).text("Strength"),
+                                );
+                                ui.add(egui::Slider::new(&mut q_swing, -0.5..=0.5).text("Swing"));
+                                ui.checkbox(&mut q_enabled, "Enabled");
 
-                            ui.separator();
-                            ui.label("Quantize");
-
-                            let (mut q_grid, mut q_strength, mut q_swing, mut q_enabled) = {
-                                app.state
-                                    .lock()
-                                    .unwrap()
-                                    .find_clip(primary_clip_id)
-                                    .and_then(|(track, loc)| {
-                                        if let crate::project::ClipLocation::Midi(idx) = loc {
-                                            track.midi_clips.get(idx).map(|c| {
-                                                (
-                                                    c.quantize_grid,
-                                                    c.quantize_strength,
-                                                    c.swing,
-                                                    c.quantize_enabled,
-                                                )
-                                            })
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .unwrap_or((0.25, 1.0, 0.0, false))
-                            };
-
-                            ui.horizontal(|ui| {
-                                ui.label("Grid:");
-                                const GRIDS: [(&str, f32); 6] = [
-                                    ("1/1", 1.0),
-                                    ("1/2", 0.5),
-                                    ("1/4", 0.25),
-                                    ("1/8", 0.125),
-                                    ("1/16", 0.0625),
-                                    ("1/32", 0.03125),
-                                ];
-                                for (label, g) in GRIDS {
-                                    ui.selectable_value(&mut q_grid, g, label);
+                                if ui.button("Apply Quantize").clicked() {
+                                    let _ = app.command_tx.send(AudioCommand::SetClipQuantize {
+                                        clip_id: primary_clip_id,
+                                        grid: q_grid,
+                                        strength: q_strength,
+                                        swing: q_swing,
+                                        enabled: q_enabled,
+                                    });
+                                    close_menu = true;
                                 }
-                            });
-                            ui.add(egui::Slider::new(&mut q_strength, 0.0..=1.0).text("Strength"));
-                            ui.add(egui::Slider::new(&mut q_swing, -0.5..=0.5).text("Swing"));
-                            ui.checkbox(&mut q_enabled, "Enabled");
 
-                            if ui.button("Apply Quantize").clicked() {
-                                let _ = app.command_tx.send(AudioCommand::SetClipQuantize {
-                                    clip_id: primary_clip_id,
-                                    grid: q_grid,
-                                    strength: q_strength,
-                                    swing: q_swing,
-                                    enabled: q_enabled,
-                                });
-                                close_menu = true;
-                            }
-
-                            ui.separator();
-                            if ui.button("Duplicate (independent)").clicked() {
-                                let _ = app.command_tx.send(AudioCommand::DuplicateMidiClip {
-                                    clip_id: primary_clip_id,
-                                });
-                                close_menu = true;
-                            }
-                            if ui.button("Duplicate as Alias").clicked() {
-                                let _ =
-                                    app.command_tx.send(AudioCommand::DuplicateMidiClipAsAlias {
+                                ui.separator();
+                                if ui.button("Duplicate (independent)").clicked() {
+                                    let _ = app.command_tx.send(AudioCommand::DuplicateMidiClip {
                                         clip_id: primary_clip_id,
                                     });
-                                close_menu = true;
-                            }
+                                    close_menu = true;
+                                }
+                                if ui.button("Duplicate as Alias").clicked() {
+                                    let _ = app.command_tx.send(
+                                        AudioCommand::DuplicateMidiClipAsAlias {
+                                            clip_id: primary_clip_id,
+                                        },
+                                    );
+                                    close_menu = true;
+                                }
 
-                            let is_alias = {
-                                let st = app.state.lock().unwrap();
-                                st.find_clip(primary_clip_id)
-                                    .and_then(|(track, loc)| {
-                                        if let crate::project::ClipLocation::Midi(idx) = loc {
-                                            track.midi_clips.get(idx).and_then(|c| c.pattern_id)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .is_some()
-                            };
-                            if ui
-                                .add_enabled(is_alias, egui::Button::new("Make Unique"))
-                                .clicked()
-                            {
-                                let _ = app.command_tx.send(AudioCommand::MakeClipUnique {
-                                    clip_id: primary_clip_id,
-                                });
-                                close_menu = true;
-                            }
-                        } else {
-                            let warp_enabled = {
-                                let st = app.state.lock().unwrap();
-                                st.find_clip(primary_clip_id)
-                                    .and_then(|(track, loc)| {
-                                        if let crate::project::ClipLocation::Audio(idx) = loc {
-                                            track.audio_clips.get(idx).map(|c| c.warp_mode)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .unwrap_or(false)
-                            };
+                                let is_alias = {
+                                    let st = app.state.lock().unwrap();
+                                    st.find_clip(primary_clip_id)
+                                        .and_then(|(track, loc)| {
+                                            if let crate::project::ClipLocation::Midi(idx) = loc {
+                                                track.midi_clips.get(idx).and_then(|c| c.pattern_id)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .is_some()
+                                };
+                                if ui
+                                    .add_enabled(is_alias, egui::Button::new("Make Unique"))
+                                    .clicked()
+                                {
+                                    let _ = app.command_tx.send(AudioCommand::MakeClipUnique {
+                                        clip_id: primary_clip_id,
+                                    });
+                                    close_menu = true;
+                                }
+                            } else {
+                                let warp_enabled = {
+                                    let st = app.state.lock().unwrap();
+                                    st.find_clip(primary_clip_id)
+                                        .and_then(|(track, loc)| {
+                                            if let crate::project::ClipLocation::Audio(idx) = loc {
+                                                track.audio_clips.get(idx).map(|c| c.warp_mode)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap_or(false)
+                                };
 
-                            ui.separator();
-                            let mut warp_mode = warp_enabled;
-                            if ui.checkbox(&mut warp_mode, "Warp Mode").changed() {
-                                let _ = app.set_warp_mode_for_audio_clip(primary_clip_id, warp_mode);
-                                close_menu = true;
+                                ui.separator();
+                                let mut warp_mode = warp_enabled;
+                                if ui.checkbox(&mut warp_mode, "Warp Mode").changed() {
+                                    let _ = app
+                                        .set_warp_mode_for_audio_clip(primary_clip_id, warp_mode);
+                                    close_menu = true;
+                                }
                             }
                         }
-                    }
-                })
-                .response
-                .rect
+                    })
+                    .response
+                    .rect
             })
             .inner;
 

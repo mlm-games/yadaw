@@ -7,7 +7,7 @@ use crate::messages::{ExportState, UIUpdate};
 use crate::project::AppState;
 use crate::time_utils::TimeConverter;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use crossbeam_channel::Sender;
 use dissonia::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -249,7 +249,9 @@ fn write_ogg(
     let output_rate: u32 = match sample_rate {
         8000 | 12000 | 16000 | 24000 | 48000 => sample_rate,
         44100 => 48000,
-        _ => bail!("OGG/Opus export requires sample rate of 8000, 12000, 16000, 24000, 44100, or 48000 Hz. Current: {sample_rate} Hz"),
+        _ => bail!(
+            "OGG/Opus export requires sample rate of 8000, 12000, 16000, 24000, 44100, or 48000 Hz. Current: {sample_rate} Hz"
+        ),
     };
 
     let pcm_data = if output_rate != sample_rate {

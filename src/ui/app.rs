@@ -2,9 +2,9 @@ use crate::audio_state::AudioState;
 use crate::config::Config;
 use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 use crate::edit_actions::EditProcessor;
-use crate::error::{common, ResultExt, UserNotification};
-use crate::input::actions::{ActionContext, AppAction};
+use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
+use crate::input::actions::{ActionContext, AppAction};
 use crate::messages::{AudioCommand, PluginParamInfo, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
@@ -774,7 +774,11 @@ impl YadawApp {
         self.set_warp_mode_for_audio_clips(enabled, Some(clip_id))
     }
 
-    fn set_warp_mode_for_audio_clips(&mut self, enabled: bool, fallback_clip: Option<u64>) -> usize {
+    fn set_warp_mode_for_audio_clips(
+        &mut self,
+        enabled: bool,
+        fallback_clip: Option<u64>,
+    ) -> usize {
         let mut targets = Vec::new();
 
         {

@@ -469,7 +469,8 @@ impl MenuBar {
 
                 let (selected_audio, selected_warped) = app.selected_audio_warp_stats();
                 let mut warp_enabled = selected_audio > 0 && selected_warped == selected_audio;
-                let mixed_selection = selected_audio > 0 && selected_warped > 0 && selected_warped < selected_audio;
+                let mixed_selection =
+                    selected_audio > 0 && selected_warped > 0 && selected_warped < selected_audio;
 
                 let toggle_changed = ui
                     .add_enabled(

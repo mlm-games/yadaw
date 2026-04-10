@@ -6,9 +6,9 @@ use crate::{
     audio_export::ExportConfig,
     midi_input::RawMidiMessage,
     model::{
+        MidiNote,
         automation::{AutomationMode, AutomationTarget},
         clip::{AudioClip, MidiClip},
-        MidiNote,
     },
     project::AppStateSnapshot,
 };
