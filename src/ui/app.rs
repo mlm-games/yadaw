@@ -1028,10 +1028,11 @@ impl YadawApp {
             let avg = total / (taps.len() - 1) as f64;
             let bpm = (60.0 / avg) as f32;
             if (20.0..=999.0).contains(&bpm) {
-                if let Some(transport) = &mut self.transport_ui.transport {
+                if let Some(transport) = &self.transport_ui.transport {
                     transport.set_bpm(bpm);
+                } else {
+                    let _ = self.command_tx.send(AudioCommand::SetBPM(bpm));
                 }
-                self.audio_state.bpm.store(bpm);
             }
         }
 

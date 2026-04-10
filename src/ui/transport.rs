@@ -163,7 +163,8 @@ impl TransportUI {
                         if (enter_pressed || bpm_response.lost_focus()) && typed_ok {
                             if let Ok(bpm) = self.bpm_input.parse::<f32>() {
                                 if let Some(t) = &self.transport {
-                                    t.audio_state.bpm.store(bpm);
+                                    t.set_bpm(bpm);
+                                } else {
                                     let _ = app.command_tx.send(AudioCommand::SetBPM(bpm));
                                 }
                                 self.bpm_input = format!("{:.1}", bpm);

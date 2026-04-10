@@ -172,6 +172,10 @@ impl PianoRollView {
             match clip_opt {
                 Some((track, crate::project::ClipLocation::Midi(idx))) => {
                     if let Some(clip) = track.midi_clips.get(idx) {
+                        let clip_color = match clip.color {
+                            Some((1, 1, 1)) | Some((100, 150, 200)) => None,
+                            other => other,
+                        };
                         let notes = if let Some(pid) = clip.pattern_id {
                             state
                                 .patterns
@@ -181,7 +185,7 @@ impl PianoRollView {
                         } else {
                             clip.notes.clone()
                         };
-                        (clip.length_beats, notes, track.color.or(clip.color))
+                        (clip.length_beats, notes, track.color.or(clip_color))
                     } else {
                         self.selected_clip = None;
                         self.piano_roll.selected_note_ids.clear();

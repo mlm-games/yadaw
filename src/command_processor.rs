@@ -72,9 +72,38 @@ fn process_command(
             audio_state.set_position(position);
         }
         AudioCommand::SetBPM(bpm) => {
-            audio_state.bpm.store(bpm);
             let mut state = app_state.lock().unwrap();
+            let old_bpm = state.bpm;
+
+            if bpm.is_finite() && bpm > 0.0 && old_bpm.is_finite() && old_bpm > 0.0 {
+                let ratio = bpm as f64 / old_bpm as f64;
+
+                if (ratio - 1.0).abs() > f64::EPSILON {
+                    for track in state.tracks.values_mut() {
+                        for clip in &mut track.audio_clips {
+                            clip.length_beats = (clip.length_beats * ratio).max(0.0);
+                            clip.offset_beats = (clip.offset_beats * ratio).max(0.0);
+
+                            if let Some(v) = clip.fade_in.as_mut() {
+                                *v = (*v * ratio).max(0.0);
+                            }
+                            if let Some(v) = clip.fade_out.as_mut() {
+                                *v = (*v * ratio).max(0.0);
+                            }
+                            if let Some(v) = clip.crossfade_in.as_mut() {
+                                *v = (*v * ratio).max(0.0);
+                            }
+                            if let Some(v) = clip.crossfade_out.as_mut() {
+                                *v = (*v * ratio).max(0.0);
+                            }
+                        }
+                    }
+                }
+            }
+
             state.bpm = bpm;
+            audio_state.bpm.store(bpm);
+            send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::SetMasterVolume(volume) => {
             audio_state.master_volume.store(volume);

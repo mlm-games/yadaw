@@ -787,7 +787,11 @@ impl TimelineView {
         } else {
             (180, 200, 230) // Light blueish
         };
-        let (r, g, b) = track_color.or(clip.color).unwrap_or(default_color);
+        let clip_color = match clip.color {
+            Some((1, 1, 1)) | Some((100, 150, 200)) => None,
+            other => other,
+        };
+        let (r, g, b) = track_color.or(clip_color).unwrap_or(default_color);
         let base_color = egui::Color32::from_rgb(r, g, b);
 
         // Contrast Calculation
