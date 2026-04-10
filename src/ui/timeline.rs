@@ -1351,44 +1351,45 @@ impl TimelineView {
                             let sel_ids: std::collections::HashSet<u64> =
                                 clip_ids_and_starts.iter().map(|(cid, _)| *cid).collect();
 
-                            // Helper: punch-out (cut-in) overlapped regions on destination track
-                            let punch_out = |start: f64, end: f64, is_midi: bool| {
-                                if is_midi {
-                                    for c in &dest_clips_midi {
-                                        if sel_ids.contains(&c.id) {
-                                            continue;
-                                        }
-                                        let c_start = c.start_beat;
-                                        let c_end = c_start + c.length_beats;
-                                        if start < c_end && end > c_start {
-                                            let _ = app.command_tx.send(
-                                                AudioCommand::PunchOutMidiClip {
+                            // Helper: build punch-out (cut-in) commands for overlaps on destination track
+                            let build_punch_out_commands =
+                                |start: f64, end: f64, is_midi: bool| -> Vec<AudioCommand> {
+                                    let mut cmds = Vec::new();
+                                    if is_midi {
+                                        for c in &dest_clips_midi {
+                                            if sel_ids.contains(&c.id) {
+                                                continue;
+                                            }
+                                            let c_start = c.start_beat;
+                                            let c_end = c_start + c.length_beats;
+                                            if start < c_end && end > c_start {
+                                                cmds.push(AudioCommand::PunchOutMidiClip {
                                                     clip_id: c.id,
                                                     start_beat: start.max(c_start).min(c_end),
                                                     end_beat: end.max(c_start).min(c_end),
-                                                },
-                                            );
+                                                });
+                                            }
                                         }
-                                    }
-                                } else {
-                                    for c in &dest_clips_audio {
-                                        if sel_ids.contains(&c.id) {
-                                            continue;
-                                        }
-                                        let c_start = c.start_beat;
-                                        let c_end = c_start + c.length_beats;
-                                        if start < c_end && end > c_start {
-                                            let _ = app.command_tx.send(
-                                                AudioCommand::PunchOutAudioClip {
+                                    } else {
+                                        for c in &dest_clips_audio {
+                                            if sel_ids.contains(&c.id) {
+                                                continue;
+                                            }
+                                            let c_start = c.start_beat;
+                                            let c_end = c_start + c.length_beats;
+                                            if start < c_end && end > c_start {
+                                                cmds.push(AudioCommand::PunchOutAudioClip {
                                                     clip_id: c.id,
                                                     start_beat: start.max(c_start).min(c_end),
                                                     end_beat: end.max(c_start).min(c_end),
-                                                },
-                                            );
+                                                });
+                                            }
                                         }
                                     }
-                                }
-                            };
+                                    cmds
+                                };
+
+                            let mut pushed_undo = false;
 
                             // For each dragged clip: compute new window, cut-in any overlapped region first, then move/duplicate
                             for (clip_id, original_start) in clip_ids_and_starts.iter().copied() {
@@ -1428,8 +1429,22 @@ impl TimelineView {
                                 let new_start = (original_start + delta).max(0.0);
                                 let new_end = new_start + length_beats.max(0.0);
 
+                                let is_noop_move = !duplicate_on_drop
+                                    && dest_track_id == src_track_id
+                                    && (new_start - original_start).abs() <= f64::EPSILON;
+                                if is_noop_move {
+                                    continue;
+                                }
+
+                                if !pushed_undo {
+                                    app.push_undo();
+                                    pushed_undo = true;
+                                }
+
                                 // 1) Default UX: Punch-out overlapped regions on destination
-                                punch_out(new_start, new_end, is_midi);
+                                for cmd in build_punch_out_commands(new_start, new_end, is_midi) {
+                                    let _ = app.command_tx.send(cmd);
+                                }
 
                                 // 2) Move or duplicate onto destination
                                 let cmd = if duplicate_on_drop {
