@@ -1,5 +1,6 @@
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "android"))]
+use std::process::Command;
 
 #[cfg(target_os = "android")]
 pub fn projects_dir() -> PathBuf {
@@ -67,27 +68,27 @@ pub fn plugins_dir() -> PathBuf {
 }
 
 #[cfg(target_os = "android")]
-pub fn presets_dir() -> std::path::PathBuf {
+pub fn presets_dir() -> PathBuf {
     let dir = files_dir_pathbuf().join("presets");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn presets_dir() -> std::path::PathBuf {
+pub fn presets_dir() -> PathBuf {
     if let Some(dirs) = directories::ProjectDirs::from("com", "yadaw", "yadaw") {
         let dir = dirs.config_dir().join("presets");
         let _ = std::fs::create_dir_all(&dir);
         dir
     } else {
-        let dir = std::path::PathBuf::from("./presets");
+        let dir = PathBuf::from("./presets");
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
 }
 
 #[cfg(target_os = "android")]
-fn files_dir_pathbuf() -> std::path::PathBuf {
+fn files_dir_pathbuf() -> PathBuf {
     use anyhow::Context;
     crate::android_saf::with_env(|env, context| {
         let file_obj = env
@@ -97,13 +98,13 @@ fn files_dir_pathbuf() -> std::path::PathBuf {
             .call_method(&file_obj, "getAbsolutePath", "()Ljava/lang/String;", &[])?
             .l()?;
         let s: String = env.get_string(&jni::objects::JString::from(jpath))?.into();
-        Ok(std::path::PathBuf::from(s))
+        Ok(PathBuf::from(s))
     })
     .expect("getFilesDir failed")
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn config_root_dir() -> std::path::PathBuf {
+pub fn config_root_dir() -> PathBuf {
     directories::ProjectDirs::from("com", "yadaw", "yadaw")
         .unwrap()
         .config_dir()
@@ -111,24 +112,50 @@ pub fn config_root_dir() -> std::path::PathBuf {
 }
 
 #[cfg(target_os = "android")]
-pub fn config_root_dir() -> std::path::PathBuf {
+pub fn config_root_dir() -> PathBuf {
     files_dir_pathbuf().join("config")
 }
 
-pub fn shortcuts_path() -> std::path::PathBuf {
+pub fn shortcuts_path() -> PathBuf {
     let dir = config_root_dir();
     let _ = std::fs::create_dir_all(&dir);
     dir.join("shortcuts.json")
 }
 
-pub fn custom_themes_path() -> std::path::PathBuf {
+pub fn custom_themes_path() -> PathBuf {
     let dir = config_root_dir();
     let _ = std::fs::create_dir_all(&dir);
     dir.join("custom_themes.json")
 }
 
-pub fn current_theme_path() -> std::path::PathBuf {
+pub fn current_theme_path() -> PathBuf {
     let dir = config_root_dir();
     let _ = std::fs::create_dir_all(&dir);
     dir.join("current_theme.json")
+}
+
+pub fn open_path_in_file_manager(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(path).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer").arg(path).spawn()?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Opening preset folders is not supported on this platform",
+    ))
 }

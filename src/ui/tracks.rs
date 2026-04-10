@@ -557,6 +557,34 @@ impl TracksPanel {
                                 ui.close();
                             }
 
+                            #[cfg(not(target_os = "android"))]
+                            {
+                                if ui.button("Open Presets Folder").clicked() {
+                                    let uri_dir = crate::paths::presets_dir().join(
+                                        plugin_uri
+                                            .chars()
+                                            .map(
+                                                |c| if c.is_ascii_alphanumeric() { c } else { '_' },
+                                            )
+                                            .collect::<String>(),
+                                    );
+
+                                    if let Err(e) = std::fs::create_dir_all(&uri_dir) {
+                                        app.dialogs.show_message(&format!(
+                                            "Failed to create presets folder: {e}"
+                                        ));
+                                    } else if let Err(e) =
+                                        crate::paths::open_path_in_file_manager(&uri_dir)
+                                    {
+                                        app.dialogs.show_message(&format!(
+                                            "Failed to open presets folder: {e}"
+                                        ));
+                                    }
+
+                                    ui.close();
+                                }
+                            }
+
                             let presets = crate::presets::list_presets_for(&plugin_uri);
                             if presets.is_empty() {
                                 ui.label(egui::RichText::new("(no presets)").weak());
