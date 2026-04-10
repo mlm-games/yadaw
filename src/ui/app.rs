@@ -872,58 +872,28 @@ impl YadawApp {
         };
 
         let selected_clips = self.selected_clips.clone();
-        let mut state = self.state.lock().unwrap();
-        let bpm = state.bpm;
+        let split_commands: Vec<AudioCommand> = {
+            let state = self.state.lock().unwrap();
+            selected_clips
+                .into_iter()
+                .filter_map(|clip_id| {
+                    state.find_clip(clip_id).map(|(_, loc)| match loc {
+                        crate::project::ClipLocation::Midi(_) => AudioCommand::SplitMidiClip {
+                            clip_id,
+                            position: current_beat,
+                        },
+                        crate::project::ClipLocation::Audio(_) => AudioCommand::SplitAudioClip {
+                            clip_id,
+                            position: current_beat,
+                        },
+                    })
+                })
+                .collect()
+        };
 
-        for clip_id in selected_clips {
-            let (track_id, clip_to_split, clip_ref_opt, original_idx) = {
-                if let Some((track, loc)) = state.find_clip(clip_id) {
-                    if let crate::project::ClipLocation::Audio(idx) = loc {
-                        let clip_ref = state.clips_by_id.get(&clip_id).cloned();
-                        (
-                            Some(track.id),
-                            track.audio_clips.get(idx).cloned(),
-                            clip_ref,
-                            Some(idx),
-                        )
-                    } else {
-                        (None, None, None, None)
-                    }
-                } else {
-                    (None, None, None, None)
-                }
-            };
-
-            if let (Some(track_id), Some(clip), Some(clip_ref), Some(idx)) =
-                (track_id, clip_to_split, clip_ref_opt, original_idx)
-            {
-                if let Some((first_half, mut second_half)) =
-                    EditProcessor::split_clip(&clip, current_beat, bpm)
-                {
-                    // Now we can generate an ID because we don't hold a mutable borrow
-                    let new_id = state.fresh_id();
-                    second_half.id = new_id;
-
-                    // Re-acquire mutable borrow to perform the update
-                    if let Some(track) = state.tracks.get_mut(&track_id) {
-                        track.audio_clips[idx] = first_half;
-                        track.audio_clips.insert(idx + 1, second_half.clone());
-
-                        state.clips_by_id.insert(
-                            new_id,
-                            crate::project::ClipRef {
-                                track_id: clip_ref.track_id,
-                                is_midi: false,
-                            },
-                        );
-                    }
-                }
-            }
+        for cmd in split_commands {
+            let _ = self.command_tx.send(cmd);
         }
-
-        drop(state);
-        self.selected_clips.clear();
-        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
     pub fn set_loop_to_selection(&mut self) {

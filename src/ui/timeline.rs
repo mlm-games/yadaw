@@ -1901,15 +1901,12 @@ impl TimelineView {
 
         let ctx = ui.ctx();
         let mut close_menu = false;
-        let mut popup_rect: Option<egui::Rect> = None;
-
-        egui::Area::new(egui::Id::new("clip_context_menu"))
+        let popup_rect = egui::Area::new(egui::Id::new("clip_context_menu"))
             .order(egui::Order::Foreground)
             .fixed_pos(self.clip_menu_pos)
             .interactable(true)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    popup_rect = Some(ui.min_rect());
                     ui.set_min_width(180.0);
 
                     if ui.button("Cut").clicked() {
@@ -2090,15 +2087,18 @@ impl TimelineView {
                             }
                         }
                     }
-                });
-            });
+                })
+                .response
+                .rect
+            })
+            .inner;
 
         // close on any outside click
         let outside_clicked = ui.ctx().input(|i| {
             i.pointer.any_pressed()
                 && i.pointer
                     .interact_pos()
-                    .map(|p| popup_rect.map(|r| !r.contains(p)).unwrap_or(true))
+                    .map(|p| !popup_rect.contains(p))
                     .unwrap_or(true)
         });
 
