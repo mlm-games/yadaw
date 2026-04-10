@@ -13,10 +13,7 @@ crate-type = ["rlib", "cdylib"]
 
 
 [workspace]
-members = [
-    "crates/yadaw-plugin-api",
-    "crates/yadaw-plugin-host",
-]
+members = ["crates/yadaw-plugin-api", "crates/yadaw-plugin-host"]
 resolver = "3"
 
 
@@ -25,7 +22,7 @@ yadaw-plugin-api = { path = "crates/yadaw-plugin-api" }
 yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = false }
 
 # Audio Backend
-cpal = "0.17"
+cpal = "0.17.3"
 chrono = { version = "0.4", features = ["serde"] }
 egui = "0.33.3"
 eframe = { version = "0.33.3", features = ["wgpu"] }
@@ -42,11 +39,16 @@ shellexpand = "3.1"
 env_logger = "0.11"
 once_cell = "1.19"
 hound = "3.5"
-dissonia = { path = "../dissonia/dissonia", features = ["flac", "flac-container", "ogg", "opus"] }
+dissonia = { path = "../dissonia/dissonia", features = [
+    "flac",
+    "flac-container",
+    "ogg",
+    "opus",
+] }
 symphonia = { version = "0.5", features = ["all"] }
 dashmap = "6.1"
 parking_lot = "0.12"
-rand = "0.9.2"
+rand = "0.10.0"
 midir = "0.11.1"
 midly = "0.5"
 lru = "0.16"
@@ -70,7 +72,7 @@ jni = "0.21"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 winit = "0.30.12"
-rfd = "0.15"
+rfd = "0.17.2"
 
 
 [features]
@@ -113,5 +115,5 @@ livi = { git = "https://github.com/mlm-games/livi-rs", branch = "main" }
 lilv = { git = "https://github.com/mlm-games/lilv-rs", branch = "main" }
 lv2_raw = { git = "https://github.com/mlm-games/lv2_raw" }
 lilv-sys = { git = "https://github.com/mlm-games/lilv-sys-rs", branch = "main" }
-midir = { git = "https://github.com/mlm-games/midir", rev = "28e276a3731f2480bddac0b7813a4bab573037f8" }
+midir = { git = "https://github.com/mlm-games/midir" }
 midly = { git = "https://github.com/mlm-games/midly" }

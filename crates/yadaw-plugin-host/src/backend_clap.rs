@@ -6,6 +6,7 @@ mod clap_impl {
     use std::mem::MaybeUninit;
     use std::path::Path;
 
+    use clack_host::entry::PluginEntry;
     use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
     use clack_host::prelude::*;
     use clack_host::process::StartedPluginAudioProcessor;
@@ -62,8 +63,8 @@ mod clap_impl {
 
             for lib in libs {
                 unsafe {
-                    if let Ok(bundle) = PluginBundle::load(lib.to_string_lossy().as_ref())
-                        && let Some(factory) = bundle.get_plugin_factory()
+                    if let Ok(entry) = PluginEntry::load(lib.to_string_lossy().as_ref())
+                        && let Some(factory) = entry.get_plugin_factory()
                     {
                         for d in factory.plugin_descriptors() {
                             let name = d
@@ -140,7 +141,7 @@ mod clap_impl {
 
                 for step in 0..=range {
                     let value = min + step as f64;
-                    let mut buf: [MaybeUninit<u8>; 256] = [MaybeUninit::uninit(); 256];
+                    let mut buf = [0u8; 256];
 
                     match params_ext.value_to_text(plugin, info.id, value, &mut buf) {
                         Ok(bytes) => {
@@ -178,7 +179,7 @@ mod clap_impl {
             param_id: ClapId,
             value: f64,
         ) -> Option<String> {
-            let mut buf: [MaybeUninit<u8>; 256] = [MaybeUninit::uninit(); 256];
+            let mut buf = [0u8; 256];
 
             let bytes = params_ext
                 .value_to_text(plugin, param_id, value, &mut buf)
@@ -214,7 +215,7 @@ mod clap_impl {
             param_id: ClapId,
             value: f64,
         ) -> Option<String> {
-            let mut buf: [MaybeUninit<u8>; 256] = [MaybeUninit::uninit(); 256];
+            let mut buf = [0u8; 256];
 
             params_ext
                 .value_to_text(plugin, param_id, value, &mut buf)
@@ -332,11 +333,11 @@ mod clap_impl {
         fn instantiate(&self, uri: &str) -> Result<Box<dyn UniInstance>> {
             let (lib, plugin_id) = Self::parse_uri(uri)?;
             unsafe {
-                let bundle = PluginBundle::load(&lib)
-                    .map_err(|e| anyhow!("CLAP load bundle failed: {e:?}"))?;
-                let factory = bundle
+                let entry = PluginEntry::load(&lib)
+                    .map_err(|e| anyhow!("CLAP load entry failed: {e:?}"))?;
+                let factory = entry
                     .get_plugin_factory()
-                    .ok_or_else(|| anyhow!("No plugin factory in bundle: {}", lib))?;
+                    .ok_or_else(|| anyhow!("No plugin factory in entry: {}", lib))?;
                 let descriptor = factory
                     .plugin_descriptors()
                     .find(|d| {
@@ -344,12 +345,12 @@ mod clap_impl {
                             .map(|id| id.to_string_lossy() == plugin_id)
                             .unwrap_or(false)
                     })
-                    .ok_or_else(|| anyhow!("Plugin id not found in bundle: {}", plugin_id))?;
+                    .ok_or_else(|| anyhow!("Plugin id not found in entry: {}", plugin_id))?;
 
                 let mut inst = PluginInstance::<MyHost>::new(
                     |_| MyHostShared,
                     |_| (),
-                    &bundle,
+                    &entry,
                     descriptor.id().unwrap(),
                     &self.host_info,
                 )

@@ -1,3 +1,5 @@
+use rand::RngExt;
+
 use crate::model::{AudioClip, MidiNote};
 
 #[derive(Debug, Clone)]
@@ -179,7 +181,7 @@ impl EditProcessor {
     }
 
     pub fn humanize_notes(notes: &mut Vec<MidiNote>, amount: f32) {
-        use rand::Rng;
+        use rand::{Rng, RngExt};
         let mut rng = rand::rng();
         for n in notes.iter_mut() {
             let dt = (rng.random::<f64>() - 0.5) * amount as f64 * 0.1;
