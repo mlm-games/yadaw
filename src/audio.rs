@@ -149,15 +149,99 @@ struct RecordingState {
     monitor_queue: Vec<f32>,
 }
 
+fn choose_output_stream_config(
+    device: &cpal::Device,
+    preferred_sample_rate: f32,
+) -> cpal::SupportedStreamConfig {
+    let default_config = device.default_output_config().expect("No default config");
+    let default_rate = default_config.sample_rate();
+    let preferred_rate = if preferred_sample_rate.is_finite() && preferred_sample_rate > 0.0 {
+        preferred_sample_rate.round() as u32
+    } else {
+        default_rate
+    };
+
+    if preferred_rate == default_rate {
+        return default_config;
+    }
+
+    let default_format = default_config.sample_format();
+    let default_channels = default_config.channels();
+
+    let mut exact_channel_match = None;
+    let mut fallback_match = None;
+
+    if let Ok(configs) = device.supported_output_configs() {
+        for range in configs {
+            if range.sample_format() != default_format {
+                continue;
+            }
+
+            let min_rate = range.min_sample_rate();
+            let max_rate = range.max_sample_rate();
+            if preferred_rate < min_rate || preferred_rate > max_rate {
+                continue;
+            }
+
+            let candidate = range.with_sample_rate(preferred_rate);
+            if candidate.channels() == default_channels {
+                exact_channel_match = Some(candidate);
+                break;
+            }
+
+            if fallback_match.is_none() {
+                fallback_match = Some(candidate);
+            }
+        }
+    }
+
+    exact_channel_match
+        .or(fallback_match)
+        .unwrap_or(default_config)
+}
+
+pub fn resolve_output_sample_rate(preferred_sample_rate: f32) -> f32 {
+    let host = cpal::default_host();
+    let Some(device) = host.default_output_device() else {
+        return preferred_sample_rate;
+    };
+
+    choose_output_stream_config(&device, preferred_sample_rate)
+        .sample_rate()
+        as f32
+}
+
 pub fn run_audio_thread(
     audio_state: Arc<AudioState>,
     realtime_commands: Receiver<RealtimeCommand>,
     updates: Sender<UIUpdate>,
     snapshot_rx: Receiver<AudioGraphSnapshot>,
+    preferred_sample_rate: f32,
 ) {
     let host = cpal::default_host();
     let device = host.default_output_device().expect("No output device");
-    let config = device.default_output_config().expect("No default config");
+    let config = choose_output_stream_config(&device, preferred_sample_rate);
+
+    let requested_rate = if preferred_sample_rate.is_finite() && preferred_sample_rate > 0.0 {
+        preferred_sample_rate.round() as u32
+    } else {
+        config.sample_rate()
+    };
+
+    if requested_rate != config.sample_rate() {
+        log::warn!(
+            "Requested sample rate {} Hz is unavailable on the default output; using {} Hz instead",
+            requested_rate,
+            config.sample_rate()
+        );
+    }
+
+    log::info!(
+        "Audio output configured: {} channels @ {} Hz",
+        config.channels(),
+        config.sample_rate()
+    );
+
     let sample_rate = config.sample_rate() as f64;
     let channels = config.channels() as usize;
 

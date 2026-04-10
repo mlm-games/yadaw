@@ -11,7 +11,7 @@ use crate::{
 use crate::{audio_state::AudioGraphSnapshot, project};
 use std::sync::{Arc, Mutex};
 use yadaw_plugin_api::HostConfig;
-use yadaw_plugin_host::{HostFacade, legacy::init as plugin_host_init};
+use yadaw_plugin_host::{legacy::init as plugin_host_init, HostFacade};
 
 #[cfg(target_os = "android")]
 use android_activity::AndroidApp;
@@ -43,6 +43,14 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = Arc::new(Mutex::new(project::AppState::default()));
     let audio_state = Arc::new(AudioState::new());
 
+    let preferred_sample_rate = config.audio.sample_rate;
+    let host_sample_rate = audio::resolve_output_sample_rate(preferred_sample_rate);
+    audio_state.sample_rate.store(host_sample_rate);
+    {
+        let mut state = app_state.lock().unwrap();
+        state.sample_rate = host_sample_rate;
+    }
+
     // Create channels for communication
     let (command_tx, command_rx) = crossbeam_channel::unbounded::<AudioCommand>();
     let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
@@ -51,14 +59,11 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded::<AudioGraphSnapshot>(1);
 
     // Initialize the global LV2 plugin host with current audio settings
-    plugin_host_init(
-        audio_state.sample_rate.load() as f64,
-        constants::MAX_BUFFER_SIZE,
-    )?;
+    plugin_host_init(host_sample_rate as f64, constants::MAX_BUFFER_SIZE)?;
 
     log::info!("Scanning for plugins...");
     let host_cfg = HostConfig {
-        sample_rate: audio_state.sample_rate.load() as f64, // or device_rate if you queried CPAL first
+        sample_rate: host_sample_rate as f64,
         max_block: constants::MAX_BUFFER_SIZE,
         plugin_scan_paths: config.paths.plugin_scan_paths.clone(),
     };
@@ -78,7 +83,13 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         let audio_state_clone = audio_state.clone();
         let ui_tx_audio = ui_tx.clone();
         std::thread::spawn(move || {
-            audio::run_audio_thread(audio_state_clone, realtime_rx, ui_tx_audio, snapshot_rx);
+            audio::run_audio_thread(
+                audio_state_clone,
+                realtime_rx,
+                ui_tx_audio,
+                snapshot_rx,
+                host_sample_rate,
+            );
         });
     }
 
@@ -169,6 +180,14 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     let app_state = Arc::new(Mutex::new(crate::project::AppState::default()));
     let audio_state = Arc::new(AudioState::new());
 
+    let preferred_sample_rate = config.audio.sample_rate;
+    let host_sample_rate = audio::resolve_output_sample_rate(preferred_sample_rate);
+    audio_state.sample_rate.store(host_sample_rate);
+    {
+        let mut state = app_state.lock().unwrap();
+        state.sample_rate = host_sample_rate;
+    }
+
     // Create channels
     let (command_tx, command_rx) = crossbeam_channel::unbounded::<AudioCommand>();
     let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
@@ -178,14 +197,11 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     import_clap_bundles_from_external();
 
     // Initialize plugin host
-    plugin_host::init(
-        audio_state.sample_rate.load() as f64,
-        constants::MAX_BUFFER_SIZE,
-    )?;
+    plugin_host::init(host_sample_rate as f64, constants::MAX_BUFFER_SIZE)?;
 
     log::info!("Scanning for plugins...");
     let host_cfg = HostConfig {
-        sample_rate: audio_state.sample_rate.load() as f64, // or device_rate if you queried CPAL first
+        sample_rate: host_sample_rate as f64,
         max_block: constants::MAX_BUFFER_SIZE,
         plugin_scan_paths: config.paths.plugin_scan_paths.clone(),
     };
@@ -198,7 +214,13 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         let ui_tx_audio = ui_tx.clone();
         let snapshot_tx_audio = snapshot_tx.clone();
         std::thread::spawn(move || {
-            audio::run_audio_thread(audio_state_clone, realtime_rx, ui_tx_audio, snapshot_rx);
+            audio::run_audio_thread(
+                audio_state_clone,
+                realtime_rx,
+                ui_tx_audio,
+                snapshot_rx,
+                host_sample_rate,
+            );
         });
     }
 

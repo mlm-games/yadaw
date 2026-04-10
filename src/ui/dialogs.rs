@@ -903,12 +903,13 @@ impl ProjectSettingsDialog {
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
+        const SAMPLE_RATES: [u32; 6] = [22050, 44100, 48000, 88200, 96000, 192000];
         let mut open = true;
 
         // Load current settings
         if !self.initialized {
             self.bpm = app.audio_state.bpm.load();
-            self.sample_rate = app.audio_state.sample_rate.load();
+            self.sample_rate = app.config.audio.sample_rate;
             self.initialized = true;
         }
 
@@ -949,7 +950,25 @@ impl ProjectSettingsDialog {
 
                 ui.horizontal(|ui| {
                     ui.label("Sample Rate:");
-                    ui.label(format!("{} Hz", self.sample_rate));
+
+                    let mut selected_rate = self.sample_rate.round() as u32;
+                    egui::ComboBox::from_id_salt("project_settings_sample_rate")
+                        .selected_text(format!("{selected_rate} Hz"))
+                        .show_ui(ui, |ui| {
+                            for rate in SAMPLE_RATES {
+                                ui.selectable_value(
+                                    &mut selected_rate,
+                                    rate,
+                                    format!("{rate} Hz"),
+                                );
+                            }
+                        });
+                    self.sample_rate = selected_rate as f32;
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Active Engine Rate:");
+                    ui.label(format!("{} Hz", app.audio_state.sample_rate.load().round() as u32));
                 });
 
                 ui.separator();
@@ -958,6 +977,35 @@ impl ProjectSettingsDialog {
                     if ui.button("Apply").clicked() {
                         app.audio_state.bpm.store(self.bpm);
                         let _ = app.command_tx.send(AudioCommand::SetBPM(self.bpm));
+
+                        let selected_rate = self.sample_rate.round() as u32;
+                        let active_rate = app.audio_state.sample_rate.load().round() as u32;
+                        let mut sample_rate_changed = false;
+
+                        if app.config.audio.sample_rate.round() as u32 != selected_rate {
+                            app.config.audio.sample_rate = selected_rate as f32;
+                            sample_rate_changed = true;
+                            if let Err(e) = app.config.save() {
+                                app.dialogs.show_message(&format!(
+                                    "Failed to save sample-rate preference: {e}"
+                                ));
+                            }
+                        }
+
+                        {
+                            let mut state = app.state.lock().unwrap();
+                            state.sample_rate = selected_rate as f32;
+                        }
+
+                        app.project_manager.mark_dirty();
+
+                        if sample_rate_changed && active_rate != selected_rate {
+                            app.dialogs.show_message(&format!(
+                                "Sample rate set to {} Hz. Restart YADAW to apply (current engine: {} Hz).",
+                                selected_rate, active_rate
+                            ));
+                        }
+
                         self.closed = true;
                     }
 

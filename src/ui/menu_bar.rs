@@ -2,12 +2,14 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 use crate::{
-    constants::DEFAULT_MIN_PROJECT_BEATS, input::actions::AppAction, messages::AudioCommand,
+    config::Config, constants::DEFAULT_MIN_PROJECT_BEATS, input::actions::AppAction,
+    messages::AudioCommand,
 };
 
 pub struct MenuBar {
     show_about: bool,
     show_preferences: bool,
+    preferences_draft: Option<Config>,
 }
 
 impl MenuBar {
@@ -15,6 +17,7 @@ impl MenuBar {
         Self {
             show_about: false,
             show_preferences: false,
+            preferences_draft: None,
         }
     }
 
@@ -176,6 +179,7 @@ impl MenuBar {
 
             if ui.button("Preferences...").clicked() {
                 self.show_preferences = true;
+                self.preferences_draft = None;
                 ui.close();
             }
         });
@@ -569,22 +573,47 @@ impl MenuBar {
         }
 
         if self.show_preferences {
-            let mut show_preferences = true;
-            let config = app.config.clone();
+            if self.preferences_draft.is_none() {
+                self.preferences_draft = Some(app.config.clone());
+            }
 
-            egui::Window::new("Preferences")
-                .open(&mut show_preferences)
-                .resizable(true)
-                .default_size(egui::vec2(600.0, 400.0))
-                .show(ctx, |ui| {
-                    draw_preferences_static(ui, &config);
-                });
+            let mut show_preferences = true;
+            let mut apply_clicked = false;
+
+            if let Some(config) = self.preferences_draft.as_mut() {
+                egui::Window::new("Preferences")
+                    .open(&mut show_preferences)
+                    .resizable(true)
+                    .default_size(egui::vec2(600.0, 400.0))
+                    .show(ctx, |ui| {
+                        apply_clicked = draw_preferences(ui, config);
+                    });
+            }
+
+            if apply_clicked && let Some(config) = &self.preferences_draft {
+                app.config = config.clone();
+                match app.config.save() {
+                    Ok(()) => app.dialogs.show_message(
+                        "Preferences saved. Sample-rate changes apply immediately for new plugin instances after relaunch.",
+                    ),
+                    Err(e) => app
+                        .dialogs
+                        .show_message(&format!("Failed to save preferences: {e}")),
+                }
+            }
+
             self.show_preferences = show_preferences;
+            if !self.show_preferences {
+                self.preferences_draft = None;
+            }
         }
     }
 }
 
-fn draw_preferences_static(ui: &mut egui::Ui, config: &crate::config::Config) {
+fn draw_preferences(ui: &mut egui::Ui, config: &mut crate::config::Config) -> bool {
+    const SAMPLE_RATES: [u32; 6] = [22050, 44100, 48000, 88200, 96000, 192000];
+    let mut apply_clicked = false;
+
     ui.horizontal(|ui| {
         // Categories list
         ui.vertical(|ui| {
@@ -611,16 +640,30 @@ fn draw_preferences_static(ui: &mut egui::Ui, config: &crate::config::Config) {
 
             ui.horizontal(|ui| {
                 ui.label("Sample Rate:");
-                ui.label(format!("{} Hz", config.audio.sample_rate));
+                let mut sample_rate = config.audio.sample_rate.round() as u32;
+
+                egui::ComboBox::from_id_salt("preferences_sample_rate")
+                    .selected_text(format!("{sample_rate} Hz"))
+                    .show_ui(ui, |ui| {
+                        for rate in SAMPLE_RATES {
+                            ui.selectable_value(&mut sample_rate, rate, format!("{rate} Hz"));
+                        }
+                    });
+
+                config.audio.sample_rate = sample_rate as f32;
             });
+
+            ui.label(egui::RichText::new("Takes effect on restart.").weak());
 
             ui.separator();
 
             if ui.button("Apply").clicked() {
-                // Apply settings
+                apply_clicked = true;
             }
         });
     });
+
+    apply_clicked
 }
 
 impl Default for MenuBar {
