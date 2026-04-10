@@ -24,9 +24,9 @@ yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = fals
 # Audio Backend
 cpal = "0.17.3"
 chrono = { version = "0.4", features = ["serde"] }
-egui = "0.33.3"
-eframe = { version = "0.33.3", features = ["wgpu"] }
-egui-file-dialog = "0.12.0"
+egui = "0.34.1"
+eframe = { version = "0.34.1", features = ["wgpu"] }
+egui-file-dialog = "0.13.0"
 # Utilities
 rtrb = "0.3"
 crossbeam-channel = "0.5"

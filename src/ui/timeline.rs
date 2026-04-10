@@ -273,7 +273,7 @@ impl TimelineView {
         // wheel zoom (Ctrl/Cmd + wheel zooms around cursor)
         if response.hovered() {
             let modifiers = ui.input(|i| i.modifiers);
-            let scroll = ui.input(|i| i.raw_scroll_delta);
+            let scroll = ui.input(|i| i.smooth_scroll_delta);
             if (modifiers.ctrl || modifiers.command) && scroll.y.abs() > 0.0 {
                 let anchor_x = response
                     .hover_pos()

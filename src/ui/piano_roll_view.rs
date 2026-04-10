@@ -125,7 +125,7 @@ impl PianoRollView {
                 );
 
                 if lane_resp.hovered() {
-                    let scroll_delta = ui.input(|i| i.raw_scroll_delta);
+                    let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
                     if ui.input(|i| i.modifiers.ctrl) {
                         let old = self.piano_roll.zoom_x;
                         self.piano_roll.zoom_x = (self.piano_roll.zoom_x

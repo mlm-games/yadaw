@@ -2006,6 +2006,13 @@ impl YadawApp {
 
 impl eframe::App for YadawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let _ = ctx;
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx();
+        self.show_close_confirmation = false;
+
         if ctx.input(|i| i.viewport().close_requested()) {
             if self.project_manager.is_dirty() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -2046,7 +2053,6 @@ impl eframe::App for YadawApp {
 
         self.theme_manager.apply_theme(ctx);
 
-        // Process UI updates from audio thread
         while let Ok(update) = self.ui_rx.try_recv() {
             self.process_ui_update(update, ctx);
         }
@@ -2057,31 +2063,24 @@ impl eframe::App for YadawApp {
             self.input_manager.set_context(ActionContext::Timeline);
         }
 
-        // Poll actions
         let actions = self.input_manager.poll_actions(ctx);
 
-        // Dispatch actions
         for action in actions {
             self.handle_action(action);
         }
 
-        // Draw menu bar
         let mut menu_bar = std::mem::take(&mut self.menu_bar);
         menu_bar.show(ctx, self);
         self.menu_bar = menu_bar;
 
-        // Draw transport
         let mut transport_ui = std::mem::take(&mut self.transport_ui);
         transport_ui.show(ctx, self);
         self.transport_ui = transport_ui;
 
-        // Draw main panels
         self.show_main_panels(ctx);
 
-        // Draw floating windows
         self.show_floating_windows(ctx);
 
-        // Request repaint if playing
         if self.audio_state.playing.load(Ordering::Relaxed) {
             ctx.request_repaint();
         }
@@ -2092,7 +2091,6 @@ impl eframe::App for YadawApp {
             let state_guard = self.state.lock().unwrap();
             if let Err(e) = self.project_manager.auto_save(&state_guard) {
                 log::error!("Auto-save failed: {}", e);
-                // Non-intrusive feedback, could be a small status bar icon
             }
             self.last_autosave = Instant::now();
         }

@@ -681,7 +681,7 @@ impl PianoRoll {
             // Disable scroll while interacting to prevent the canvas drifting under your finger
             let interacting = !matches!(self.interaction_state, InteractionState::Idle);
             if !interacting {
-                let scroll_delta = ui.input(|i| i.raw_scroll_delta);
+                let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
                 if ui.input(|i| i.modifiers.ctrl) {
                     self.zoom_x *= 1.0 + scroll_delta.y * 0.01;
                     self.zoom_x = self.zoom_x.clamp(10.0, 500.0);
