@@ -511,7 +511,11 @@ impl TimelineView {
         let audio_duration_seconds = clip.samples.len() as f64 / clip.sample_rate as f64;
         let audio_length_beats = audio_duration_seconds * (bpm as f64 / 60.0);
 
-        let effective_length_beats = (audio_length_beats as f32).min(clip.length_beats as f32);
+        let effective_length_beats = if clip.warp_mode {
+            clip.length_beats as f32
+        } else {
+            (audio_length_beats as f32).min(clip.length_beats as f32)
+        };
         let clip_width = effective_length_beats * self.zoom_x;
 
         let clip_rect = egui::Rect::from_min_size(
@@ -591,6 +595,16 @@ impl TimelineView {
             egui::FontId::proportional(12.0),
             fg_color,
         );
+
+        if clip.warp_mode {
+            painter.text(
+                clip_rect.right_top() + egui::vec2(-6.0, 5.0),
+                egui::Align2::RIGHT_TOP,
+                "WARP",
+                egui::FontId::proportional(10.0),
+                fg_color.gamma_multiply(0.8),
+            );
+        }
 
         let response = ui.interact(
             clip_rect,
@@ -2052,6 +2066,26 @@ impl TimelineView {
                                 let _ = app.command_tx.send(AudioCommand::MakeClipUnique {
                                     clip_id: primary_clip_id,
                                 });
+                                close_menu = true;
+                            }
+                        } else {
+                            let warp_enabled = {
+                                let st = app.state.lock().unwrap();
+                                st.find_clip(primary_clip_id)
+                                    .and_then(|(track, loc)| {
+                                        if let crate::project::ClipLocation::Audio(idx) = loc {
+                                            track.audio_clips.get(idx).map(|c| c.warp_mode)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(false)
+                            };
+
+                            ui.separator();
+                            let mut warp_mode = warp_enabled;
+                            if ui.checkbox(&mut warp_mode, "Warp Mode").changed() {
+                                let _ = app.set_warp_mode_for_audio_clip(primary_clip_id, warp_mode);
                                 close_menu = true;
                             }
                         }

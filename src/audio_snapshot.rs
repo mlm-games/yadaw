@@ -62,6 +62,7 @@ fn audio_clip_to_snapshot(c: &AudioClip) -> AudioClipSnapshot {
         offset_beats: c.offset_beats,
         samples: c.samples.clone(),
         sample_rate: c.sample_rate,
+        warp_mode: c.warp_mode,
         fade_in: c.fade_in,
         fade_out: c.fade_out,
         gain: c.gain,

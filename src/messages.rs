@@ -146,6 +146,7 @@ pub enum AudioCommand {
     SetAudioClipGain(u64, f32),
     SetAudioClipFadeIn(u64, Option<f64>),
     SetAudioClipFadeOut(u64, Option<f64>),
+    SetAudioClipWarpMode(u64, bool),
 
     // Automation (track ID + lane index)
     AddAutomationPoint(u64, AutomationTarget, f64, f32),

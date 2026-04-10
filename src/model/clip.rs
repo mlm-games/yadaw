@@ -119,6 +119,8 @@ pub struct AudioClip {
     pub gain: f32,
     pub pitch_shift: f32,
     pub time_stretch: f32,
+    #[serde(default = "default_false")]
+    pub warp_mode: bool,
     pub reverse: bool,
     pub loop_enabled: bool,
     pub color: Option<(u8, u8, u8)>,
@@ -143,6 +145,7 @@ impl Default for AudioClip {
             gain: 1.0,
             pitch_shift: 0.0,
             time_stretch: 1.0,
+            warp_mode: false,
             reverse: false,
             loop_enabled: false,
             color: None,

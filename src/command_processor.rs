@@ -81,6 +81,10 @@ fn process_command(
                 if (ratio - 1.0).abs() > f64::EPSILON {
                     for track in state.tracks.values_mut() {
                         for clip in &mut track.audio_clips {
+                            if clip.warp_mode {
+                                continue;
+                            }
+
                             clip.length_beats = (clip.length_beats * ratio).max(0.0);
                             clip.offset_beats = (clip.offset_beats * ratio).max(0.0);
 
@@ -1738,6 +1742,20 @@ fn process_command(
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(ac) = track.audio_clips.get_mut(idx) {
                         ac.fade_out = dur;
+                    }
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::SetAudioClipWarpMode(clip_id, warp_mode) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some((track, loc)) = st.find_clip_mut(clip_id) {
+                if let ClipLocation::Audio(idx) = loc {
+                    if let Some(ac) = track.audio_clips.get_mut(idx) {
+                        ac.warp_mode = warp_mode;
+                        if ac.time_stretch <= 0.0 || !ac.time_stretch.is_finite() {
+                            ac.time_stretch = 1.0;
+                        }
                     }
                 }
             }

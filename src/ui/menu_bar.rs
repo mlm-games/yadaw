@@ -467,9 +467,26 @@ impl MenuBar {
                     ui.close();
                 }
 
-                if ui.button("Time Stretch...").clicked() {
-                    app.dialogs.show_time_stretch_dialog();
+                let (selected_audio, selected_warped) = app.selected_audio_warp_stats();
+                let mut warp_enabled = selected_audio > 0 && selected_warped == selected_audio;
+                let mixed_selection = selected_audio > 0 && selected_warped > 0 && selected_warped < selected_audio;
+
+                let toggle_changed = ui
+                    .add_enabled(
+                        selected_audio > 0,
+                        egui::Checkbox::new(&mut warp_enabled, "Warp Mode (Selected Audio)"),
+                    )
+                    .changed();
+
+                if toggle_changed {
+                    app.set_warp_mode_for_selected_audio(warp_enabled);
                     ui.close();
+                }
+
+                if selected_audio == 0 {
+                    ui.label("Select audio clip(s) to edit warp mode");
+                } else if mixed_selection {
+                    ui.label("Mixed warp state in selection");
                 }
             });
         });

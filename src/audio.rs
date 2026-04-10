@@ -1816,7 +1816,11 @@ fn process_audio_track(
         let clip_start_samples = converter.beats_to_samples(clip.start_beat);
 
         let audio_duration_seconds = clip.samples.len() as f64 / clip.sample_rate as f64;
-        let audio_length_samples = audio_duration_seconds * sample_rate;
+        let audio_length_samples = if clip.warp_mode {
+            converter.beats_to_samples(clip.length_beats.max(0.0))
+        } else {
+            audio_duration_seconds * sample_rate
+        };
 
         let visual_length_samples = converter.beats_to_samples(clip.length_beats);
         let clip_length_samples = audio_length_samples.min(visual_length_samples);
@@ -1829,13 +1833,23 @@ fn process_audio_track(
             continue;
         }
 
-        let offset_samples = converter.beats_to_samples(clip.offset_beats);
+        let offset_samples = if clip.warp_mode {
+            converter.beats_to_samples(clip.offset_beats)
+        } else {
+            ((clip.offset_beats * 60.0 / bpm as f64) * clip.sample_rate as f64)
+                * (sample_rate / clip.sample_rate as f64)
+        };
 
         let frames = (overlap_end - overlap_start) as usize;
         let start_in_buffer = (overlap_start - buffer_start) as usize;
 
         // For each output frame, sample from clip at its own rate (linear)
-        let ratio = clip.sample_rate as f64 / sample_rate; // src_per_dst
+        let ratio = if clip.warp_mode {
+            let stretched_len_dst = audio_length_samples.max(1.0);
+            clip.samples.len() as f64 / stretched_len_dst
+        } else {
+            clip.sample_rate as f64 / sample_rate
+        }; // src_per_dst
         let clip_length_beats = clip.length_beats;
         let fade_in_beats = clip.fade_in.unwrap_or(0.0).max(0.0);
         let fade_out_beats = clip.fade_out.unwrap_or(0.0).max(0.0);

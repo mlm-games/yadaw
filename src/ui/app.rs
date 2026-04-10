@@ -747,6 +747,75 @@ impl YadawApp {
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
     }
 
+    pub fn set_warp_mode_for_selected_audio(&mut self, enabled: bool) -> usize {
+        self.set_warp_mode_for_audio_clips(enabled, None)
+    }
+
+    pub fn selected_audio_warp_stats(&self) -> (usize, usize) {
+        let state = self.state.lock().unwrap();
+        let mut selected_audio = 0usize;
+        let mut selected_warped = 0usize;
+
+        for &clip_id in &self.selected_clips {
+            if let Some((track, ClipLocation::Audio(idx))) = state.find_clip(clip_id)
+                && let Some(clip) = track.audio_clips.get(idx)
+            {
+                selected_audio += 1;
+                if clip.warp_mode {
+                    selected_warped += 1;
+                }
+            }
+        }
+
+        (selected_audio, selected_warped)
+    }
+
+    pub fn set_warp_mode_for_audio_clip(&mut self, clip_id: u64, enabled: bool) -> usize {
+        self.set_warp_mode_for_audio_clips(enabled, Some(clip_id))
+    }
+
+    fn set_warp_mode_for_audio_clips(&mut self, enabled: bool, fallback_clip: Option<u64>) -> usize {
+        let mut targets = Vec::new();
+
+        {
+            let state = self.state.lock().unwrap();
+
+            for &clip_id in &self.selected_clips {
+                if let Some((track, ClipLocation::Audio(idx))) = state.find_clip(clip_id)
+                    && let Some(clip) = track.audio_clips.get(idx)
+                    && clip.warp_mode != enabled
+                {
+                    targets.push(clip_id);
+                }
+            }
+
+            if targets.is_empty()
+                && let Some(clip_id) = fallback_clip
+                && let Some((track, ClipLocation::Audio(idx))) = state.find_clip(clip_id)
+                && let Some(clip) = track.audio_clips.get(idx)
+                && clip.warp_mode != enabled
+            {
+                targets.push(clip_id);
+            }
+        }
+
+        targets.sort_unstable();
+        targets.dedup();
+
+        if targets.is_empty() {
+            return 0;
+        }
+
+        self.push_undo();
+        for clip_id in &targets {
+            let _ = self
+                .command_tx
+                .send(AudioCommand::SetAudioClipWarpMode(*clip_id, enabled));
+        }
+
+        targets.len()
+    }
+
     pub fn apply_fade_in(&mut self) {
         if self.selected_clips.is_empty() {
             return;

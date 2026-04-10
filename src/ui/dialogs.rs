@@ -237,7 +237,6 @@ pub struct DialogManager {
 
     pub transpose_dialog: Option<TransposeDialog>,
     pub humanize_dialog: Option<HumanizeDialog>,
-    pub time_stretch_dialog: Option<TimeStretchDialog>,
 
     pub project_settings: Option<ProjectSettingsDialog>,
     pub export_dialog: Option<ExportDialog>,
@@ -264,7 +263,6 @@ impl DialogManager {
             quantize_dialog: None,
             transpose_dialog: None,
             humanize_dialog: None,
-            time_stretch_dialog: None,
             project_settings: None,
             export_dialog: None,
             theme_editor: None,
@@ -342,12 +340,6 @@ impl DialogManager {
             d.show(ctx, app);
             if !d.is_closed() {
                 self.humanize_dialog = Some(d);
-            }
-        }
-        if let Some(mut d) = self.time_stretch_dialog.take() {
-            d.show(ctx, app);
-            if !d.is_closed() {
-                self.time_stretch_dialog = Some(d);
             }
         }
 
@@ -429,9 +421,6 @@ impl DialogManager {
     }
     pub fn show_humanize_dialog(&mut self) {
         self.humanize_dialog = Some(HumanizeDialog::new());
-    }
-    pub fn show_time_stretch_dialog(&mut self) {
-        self.time_stretch_dialog = Some(TimeStretchDialog::new());
     }
     pub fn show_save_layout_dialog(&mut self) {
         self.layout_manager = Some(LayoutManagerDialog::new());
@@ -875,67 +864,6 @@ impl HumanizeDialog {
                 ui.horizontal(|ui| {
                     if ui.button("Apply").clicked() {
                         app.humanize_selected_notes(self.amount);
-                        self.closed = true;
-                    }
-
-                    if ui.button("Cancel").clicked() {
-                        self.closed = true;
-                    }
-                });
-            });
-
-        if !open {
-            self.closed = true;
-        }
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
-    }
-}
-
-pub struct TimeStretchDialog {
-    closed: bool,
-    stretch_factor: f32,
-    preserve_pitch: bool,
-}
-
-impl TimeStretchDialog {
-    pub fn new() -> Self {
-        Self {
-            closed: false,
-            stretch_factor: 1.0,
-            preserve_pitch: true,
-        }
-    }
-
-    pub fn show(&mut self, ctx: &egui::Context, _app: &mut super::app::YadawApp) {
-        let mut open = true;
-
-        egui::Window::new("Time Stretch")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Stretch Factor:");
-                    ui.add(
-                        egui::Slider::new(&mut self.stretch_factor, 0.5..=2.0)
-                            .suffix("x")
-                            .logarithmic(true),
-                    );
-                });
-
-                ui.checkbox(&mut self.preserve_pitch, "Preserve Pitch");
-
-                ui.separator();
-
-                ui.label(format!("New length: {:.1}%", self.stretch_factor * 100.0));
-
-                ui.separator();
-
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        // Apply time stretch
                         self.closed = true;
                     }
 

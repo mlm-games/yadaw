@@ -252,6 +252,7 @@ pub struct AudioClipSnapshot {
     pub offset_beats: f64,
     pub samples: Vec<f32>,
     pub sample_rate: f32,
+    pub warp_mode: bool,
     pub fade_in: Option<f64>,
     pub fade_out: Option<f64>,
     pub gain: f32,
