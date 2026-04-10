@@ -2011,7 +2011,6 @@ impl eframe::App for YadawApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx();
-        self.show_close_confirmation = false;
 
         if ctx.input(|i| i.viewport().close_requested()) {
             if self.project_manager.is_dirty() {
