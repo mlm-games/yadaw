@@ -496,6 +496,11 @@ impl PianoRoll {
         }
 
         // Draw notes
+        let (base_r, base_g, base_b) = pattern.color.unwrap_or((80, 120, 200));
+        let selected_r = base_r.saturating_add(40);
+        let selected_g = base_g.saturating_add(40);
+        let selected_b = base_b.saturating_add(40);
+
         for (i, note) in pattern.notes.iter().enumerate() {
             let mut visual_note = *note;
 
@@ -508,7 +513,8 @@ impl PianoRoll {
                 && note_indices.contains(&i)
             {
                 let original_note_rect = self.note_rect(note, grid_rect);
-                let faded_color = egui::Color32::from_rgba_premultiplied(80, 120, 200, 60);
+                let faded_color =
+                    egui::Color32::from_rgba_premultiplied(base_r, base_g, base_b, 60);
                 ui.painter()
                     .rect_filled(original_note_rect, 2.0, faded_color);
             }
@@ -554,9 +560,9 @@ impl PianoRoll {
             let velocity_factor = note.velocity as f32 / 127.0;
 
             let base_color = if is_selected {
-                egui::Color32::from_rgb(120, 170, 255)
+                egui::Color32::from_rgb(selected_r, selected_g, selected_b)
             } else {
-                egui::Color32::from_rgb(80, 120, 200)
+                egui::Color32::from_rgb(base_r, base_g, base_b)
             };
 
             let color = egui::Color32::from_rgb(

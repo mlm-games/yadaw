@@ -579,7 +579,7 @@ fn process_command(
                     start_beat,
                     length_beats,
                     notes: Vec::new(),
-                    color: Some((100, 150, 200)),
+                    color: None,
                     pattern_id: Some(new_pid),
                     ..Default::default()
                 };

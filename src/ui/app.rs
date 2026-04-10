@@ -1820,7 +1820,7 @@ impl YadawApp {
                             start_beat: 0.0,
                             length_beats,
                             notes: Vec::new(),
-                            color: Some((100, (track_id * 50) as u8 % 255, 200)),
+                            color: None,
                             velocity_offset: 0,
                             transpose: 0,
                             loop_enabled: false,

@@ -166,7 +166,7 @@ impl PianoRollView {
         let clip_id = self.selected_clip.unwrap();
 
         // Resolve notes and clip length for the view (pattern-first)
-        let (clip_length, current_notes) = {
+        let (clip_length, current_notes, clip_color) = {
             let state = app.state.lock().unwrap();
             let clip_opt = state.find_clip(clip_id);
             match clip_opt {
@@ -181,7 +181,7 @@ impl PianoRollView {
                         } else {
                             clip.notes.clone()
                         };
-                        (clip.length_beats, notes)
+                        (clip.length_beats, notes, track.color.or(clip.color))
                     } else {
                         self.selected_clip = None;
                         self.piano_roll.selected_note_ids.clear();
@@ -204,6 +204,7 @@ impl PianoRollView {
             &crate::model::clip::MidiClip {
                 length_beats: clip_length,
                 notes: current_notes.clone(),
+                color: clip_color,
                 ..Default::default()
             },
             self.tool_mode == super::piano_roll_view::ToolMode::Draw,

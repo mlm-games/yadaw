@@ -126,7 +126,7 @@ impl TrackBuilder {
             notes: Self::create_default_notes(),
             start_beat: 0.0,
             length_beats: DEFAULT_MIN_PROJECT_BEATS,
-            color: Some((1, 1, 1)),
+            color: None,
             ..Default::default()
         }
     }

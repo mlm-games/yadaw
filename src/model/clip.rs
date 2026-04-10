@@ -84,7 +84,7 @@ impl Default for MidiClip {
             start_beat: 0.0,
             length_beats: length,
             notes: Vec::new(),
-            color: Some((100, 150, 200)),
+            color: None,
             velocity_offset: 0,
             transpose: 0,
             loop_enabled: false,
