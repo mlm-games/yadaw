@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use egui_file_dialog::FileDialog;
+use serde::{Deserialize, Serialize};
 
 use super::*;
 use crate::audio_export::ExportFormat;
@@ -423,10 +424,10 @@ impl DialogManager {
         self.humanize_dialog = Some(HumanizeDialog::new());
     }
     pub fn show_save_layout_dialog(&mut self) {
-        self.layout_manager = Some(LayoutManagerDialog::new());
+        self.layout_manager = Some(LayoutManagerDialog::new(LayoutDialogMode::Save));
     }
     pub fn show_load_layout_dialog(&mut self) {
-        self.layout_manager = Some(LayoutManagerDialog::new());
+        self.layout_manager = Some(LayoutManagerDialog::new(LayoutDialogMode::Load));
     }
 
     pub fn show_message(&mut self, message: &str) {
@@ -1956,26 +1957,226 @@ pub struct LayoutManagerDialog {
     closed: bool,
     layouts: Vec<String>,
     selected_layout: Option<usize>,
+    mode: LayoutDialogMode,
+    save_name_input: String,
+}
+
+#[derive(Clone, Copy)]
+enum LayoutDialogMode {
+    Save,
+    Load,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SavedLayout {
+    mixer_visible: bool,
+    timeline_show_automation: bool,
+    timeline_zoom_x: f32,
+    timeline_scroll_x: f32,
+    piano_roll_zoom_x: f32,
+    piano_roll_zoom_y: f32,
+    piano_roll_scroll_x: f32,
+    piano_roll_scroll_y: f32,
+}
+
+impl SavedLayout {
+    fn capture(app: &super::app::YadawApp) -> Self {
+        Self {
+            mixer_visible: app.mixer_ui.visible,
+            timeline_show_automation: app.timeline_ui.show_automation,
+            timeline_zoom_x: app.timeline_ui.zoom_x,
+            timeline_scroll_x: app.timeline_ui.scroll_x,
+            piano_roll_zoom_x: app.piano_roll_view.piano_roll.zoom_x,
+            piano_roll_zoom_y: app.piano_roll_view.piano_roll.zoom_y,
+            piano_roll_scroll_x: app.piano_roll_view.piano_roll.scroll_x,
+            piano_roll_scroll_y: app.piano_roll_view.piano_roll.scroll_y,
+        }
+    }
+
+    fn apply(&self, app: &mut super::app::YadawApp) {
+        app.mixer_ui.visible = self.mixer_visible;
+        app.timeline_ui.show_automation = self.timeline_show_automation;
+        app.timeline_ui.zoom_x = self.timeline_zoom_x.clamp(10.0, 200.0);
+        app.timeline_ui.scroll_x = self.timeline_scroll_x.max(0.0);
+        app.piano_roll_view.piano_roll.zoom_x = self.piano_roll_zoom_x.clamp(20.0, 500.0);
+        app.piano_roll_view.piano_roll.zoom_y = self.piano_roll_zoom_y.clamp(8.0, 64.0);
+        app.piano_roll_view.piano_roll.scroll_x = self.piano_roll_scroll_x.max(0.0);
+        app.piano_roll_view.piano_roll.scroll_y = self.piano_roll_scroll_y.max(0.0);
+    }
 }
 
 impl LayoutManagerDialog {
-    pub fn new() -> Self {
-        Self {
+    const BUILTIN_LAYOUTS: [&'static str; 4] = ["Default", "Mixing", "Recording", "Editing"];
+
+    fn new(mode: LayoutDialogMode) -> Self {
+        let mut s = Self {
             closed: false,
-            layouts: vec![
-                "Default".to_string(),
-                "Mixing".to_string(),
-                "Recording".to_string(),
-                "Editing".to_string(),
-            ],
+            layouts: Vec::new(),
             selected_layout: Some(0),
+            mode,
+            save_name_input: "My Layout".to_string(),
+        };
+        s.refresh_layouts();
+        s
+    }
+
+    fn is_builtin_name(name: &str) -> bool {
+        Self::BUILTIN_LAYOUTS.contains(&name)
+    }
+
+    fn layouts_dir() -> PathBuf {
+        let dir = crate::paths::config_root_dir().join("layouts");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn sanitize_layout_name(name: &str) -> String {
+        let mut out = String::with_capacity(name.len());
+        for ch in name.chars() {
+            if ch.is_ascii_alphanumeric() || ch == ' ' || ch == '-' || ch == '_' {
+                out.push(ch);
+            }
         }
+        out.trim().to_string()
+    }
+
+    fn layout_path(name: &str) -> PathBuf {
+        Self::layouts_dir().join(format!("{}.json", name))
+    }
+
+    fn saved_layout_names() -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(Self::layouts_dir())
+            .ok()
+            .into_iter()
+            .flat_map(|it| it.flatten())
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    return None;
+                }
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            })
+            .filter(|name| !Self::is_builtin_name(name))
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn refresh_layouts(&mut self) {
+        let selected_name = self
+            .selected_layout
+            .and_then(|idx| self.layouts.get(idx))
+            .cloned();
+
+        self.layouts = Self::BUILTIN_LAYOUTS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        self.layouts.extend(Self::saved_layout_names());
+
+        self.selected_layout = selected_name
+            .and_then(|name| self.layouts.iter().position(|n| n == &name))
+            .or(Some(0));
+    }
+
+    fn apply_builtin_layout(idx: usize, app: &mut super::app::YadawApp) {
+        match idx {
+            0 => {
+                app.reset_layout();
+                app.switch_to_timeline();
+            }
+            1 => {
+                app.reset_layout();
+                app.mixer_ui.visible = true;
+                app.switch_to_timeline();
+            }
+            2 => {
+                app.reset_layout();
+                app.mixer_ui.visible = false;
+                app.timeline_ui.show_automation = false;
+                app.switch_to_timeline();
+            }
+            3 => {
+                app.reset_layout();
+                app.mixer_ui.visible = false;
+                app.timeline_ui.show_automation = true;
+                app.switch_to_piano_roll();
+            }
+            _ => {}
+        }
+    }
+
+    fn load_custom_layout(name: &str, app: &mut super::app::YadawApp) -> Result<(), String> {
+        let path = Self::layout_path(name);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read layout '{}': {e}", path.display()))?;
+        let layout = serde_json::from_str::<SavedLayout>(&text)
+            .map_err(|e| format!("Failed to parse layout '{}': {e}", path.display()))?;
+        layout.apply(app);
+        Ok(())
+    }
+
+    fn save_current_layout(&mut self, app: &super::app::YadawApp) -> Result<String, String> {
+        let name = Self::sanitize_layout_name(&self.save_name_input);
+        if name.is_empty() {
+            return Err("Layout name cannot be empty.".to_string());
+        }
+        if Self::is_builtin_name(&name) {
+            return Err(
+                "Choose a different name: built-in layouts cannot be overwritten.".to_string(),
+            );
+        }
+
+        let layout = SavedLayout::capture(app);
+        let json = serde_json::to_string_pretty(&layout)
+            .map_err(|e| format!("Failed to serialize layout: {e}"))?;
+
+        std::fs::write(Self::layout_path(&name), json)
+            .map_err(|e| format!("Failed to save layout '{name}': {e}"))?;
+
+        self.refresh_layouts();
+        if let Some(idx) = self.layouts.iter().position(|n| n == &name) {
+            self.selected_layout = Some(idx);
+        }
+
+        Ok(name)
+    }
+
+    fn delete_selected_layout(&mut self) -> Result<String, String> {
+        let Some(idx) = self.selected_layout else {
+            return Err("No layout selected.".to_string());
+        };
+        if idx < Self::BUILTIN_LAYOUTS.len() {
+            return Err("Built-in layouts cannot be deleted.".to_string());
+        }
+
+        let Some(name) = self.layouts.get(idx).cloned() else {
+            return Err("Invalid layout selection.".to_string());
+        };
+
+        let path = Self::layout_path(&name);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Failed to delete layout '{}': {e}", path.display())),
+        }
+
+        self.refresh_layouts();
+        Ok(name)
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
         let mut open = true;
+        let mut feedback: Option<String> = None;
 
-        egui::Window::new("Layout Manager")
+        let title = match self.mode {
+            LayoutDialogMode::Save => "Save Layout",
+            LayoutDialogMode::Load => "Load Layout",
+        };
+
+        egui::Window::new(title)
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
@@ -1987,44 +2188,62 @@ impl LayoutManagerDialog {
                         .clicked()
                     {
                         self.selected_layout = Some(idx);
+                        if matches!(self.mode, LayoutDialogMode::Save)
+                            && idx >= Self::BUILTIN_LAYOUTS.len()
+                        {
+                            self.save_name_input = layout.clone();
+                        }
                     }
+                }
+
+                if matches!(self.mode, LayoutDialogMode::Save) {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.save_name_input);
+                    });
                 }
 
                 ui.separator();
 
                 ui.horizontal(|ui| {
-                    if ui.button("Load").clicked() {
-                        if let Some(idx) = self.selected_layout {
-                            // Load the selected layout
-                            match idx {
-                                0 => app.reset_layout(), // Default
-                                1 => {
-                                    // Mixing layout - show mixer
-                                    app.mixer_ui.toggle_visibility();
+                    if matches!(self.mode, LayoutDialogMode::Load) {
+                        if ui.button("Load").clicked()
+                            && let Some(idx) = self.selected_layout
+                        {
+                            if idx < Self::BUILTIN_LAYOUTS.len() {
+                                Self::apply_builtin_layout(idx, app);
+                                self.closed = true;
+                            } else if let Some(name) = self.layouts.get(idx).cloned() {
+                                match Self::load_custom_layout(&name, app) {
+                                    Ok(()) => self.closed = true,
+                                    Err(e) => feedback = Some(e),
                                 }
-                                2 => {
-                                    // Recording layout
-                                }
-                                3 => {
-                                    // Editing layout
-                                }
-                                _ => {}
                             }
                         }
-                        self.closed = true;
+                    } else if ui.button("Save").clicked() {
+                        match self.save_current_layout(app) {
+                            Ok(name) => {
+                                feedback = Some(format!("Saved layout '{name}'."));
+                                self.closed = true;
+                            }
+                            Err(e) => feedback = Some(e),
+                        }
                     }
 
-                    if ui.button("Save Current...").clicked() {
-                        // Save current layout
-                    }
+                    let can_delete = self
+                        .selected_layout
+                        .map(|idx| idx >= Self::BUILTIN_LAYOUTS.len())
+                        .unwrap_or(false);
 
-                    if ui.button("Delete").clicked()
-                        && let Some(idx) = self.selected_layout
-                        && idx >= 4
+                    if ui
+                        .add_enabled(can_delete, egui::Button::new("Delete"))
+                        .clicked()
                     {
-                        // Don't delete built-in layouts
-                        self.layouts.remove(idx);
-                        self.selected_layout = None;
+                        match self.delete_selected_layout() {
+                            Ok(name) => feedback = Some(format!("Deleted layout '{name}'.")),
+                            Err(e) => feedback = Some(e),
+                        }
                     }
 
                     if ui.button("Cancel").clicked() {
@@ -2032,6 +2251,10 @@ impl LayoutManagerDialog {
                     }
                 });
             });
+
+        if let Some(msg) = feedback {
+            app.dialogs.show_message(&msg);
+        }
 
         if !open {
             self.closed = true;
