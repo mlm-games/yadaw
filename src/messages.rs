@@ -328,6 +328,8 @@ pub enum UIUpdate {
         note_ids: Vec<u64>,
     },
 
+    ClipsDuplicated(Vec<u64>),
+
     PluginParamsDiscovered {
         track_id: u64,
         plugin_idx: usize,

@@ -1232,6 +1232,9 @@ impl YadawApp {
             UIUpdate::ClipAdded(_) => {}
             UIUpdate::ClipRemoved(_) => {}
             UIUpdate::ClipUpdated(_) => {}
+            UIUpdate::ClipsDuplicated(clip_ids) => {
+                self.selected_clips = clip_ids;
+            }
             UIUpdate::AutomationUpdated(_, _) => {}
             UIUpdate::PluginAdded(_, _) => {}
             UIUpdate::PluginRemoved(_, _) => {}

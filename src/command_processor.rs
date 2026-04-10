@@ -647,9 +647,11 @@ fn process_command(
                 })
             };
 
+            let mut duplicated_clip_ids = Vec::new();
             if let Some(mut clip) = source {
                 let mut state = app_state.lock().unwrap();
                 let new_clip_id = idgen::next();
+                duplicated_clip_ids.push(new_clip_id);
                 let new_pid = idgen::next();
 
                 // Resolve base notes from pattern or clip, then assign fresh IDs.
@@ -705,6 +707,9 @@ fn process_command(
                 state.ensure_ids();
                 send_graph_snapshot(&state, snapshot_tx);
             }
+            if !duplicated_clip_ids.is_empty() {
+                let _ = ui_tx.send(UIUpdate::ClipsDuplicated(duplicated_clip_ids));
+            }
         }
         AudioCommand::MoveAudioClip { clip_id, new_start } => {
             let mut state = app_state.lock().unwrap();
@@ -749,9 +754,11 @@ fn process_command(
                 })
             };
 
+            let mut duplicated_clip_ids = Vec::new();
             if let Some(mut clip) = source {
                 let mut state = app_state.lock().unwrap();
                 let new_clip_id = idgen::next();
+                duplicated_clip_ids.push(new_clip_id);
                 clip.id = new_clip_id;
                 clip.name = format!("{} (copy)", clip.name);
                 clip.start_beat += clip.length_beats;
@@ -769,6 +776,9 @@ fn process_command(
                         );
                     }
                 }
+            }
+            if !duplicated_clip_ids.is_empty() {
+                let _ = ui_tx.send(UIUpdate::ClipsDuplicated(duplicated_clip_ids));
             }
             send_graph_snapshot(&app_state.lock().unwrap(), snapshot_tx);
         }
