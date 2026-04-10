@@ -642,9 +642,22 @@ impl YadawApp {
     }
 
     pub fn save_project_to_path(&mut self, path: &Path) {
-        let state = self.state.lock().unwrap();
-        self.project_manager
-            .save_project(&state, path)
+        let live_bpm = self.audio_state.bpm.load();
+        let live_loop_start = self.audio_state.loop_start.load();
+        let live_loop_end = self.audio_state.loop_end.load();
+        let live_loop_enabled = self.audio_state.loop_enabled.load(Ordering::Relaxed);
+
+        let save_result = {
+            let mut state = self.state.lock().unwrap();
+            state.bpm = live_bpm;
+            state.loop_start = live_loop_start;
+            state.loop_end = live_loop_end;
+            state.loop_enabled = live_loop_enabled;
+
+            self.project_manager.save_project(&state, path)
+        };
+
+        save_result
             .map_err(common::project_save_failed)
             .map(|_| {
                 self.project_path = Some(path.to_string_lossy().to_string());
@@ -1031,6 +1044,7 @@ impl YadawApp {
                 if let Some(transport) = &self.transport_ui.transport {
                     transport.set_bpm(bpm);
                 } else {
+                    self.audio_state.bpm.store(bpm);
                     let _ = self.command_tx.send(AudioCommand::SetBPM(bpm));
                 }
             }

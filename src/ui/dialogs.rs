@@ -1028,6 +1028,7 @@ impl ProjectSettingsDialog {
 
                 ui.horizontal(|ui| {
                     if ui.button("Apply").clicked() {
+                        app.audio_state.bpm.store(self.bpm);
                         let _ = app.command_tx.send(AudioCommand::SetBPM(self.bpm));
                         self.closed = true;
                     }

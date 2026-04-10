@@ -1560,6 +1560,8 @@ impl TimelineView {
                             app.audio_state.loop_start.store(start);
                             app.audio_state.loop_end.store(end);
                             app.audio_state.loop_enabled.store(true, Ordering::Relaxed);
+                            let _ = app.command_tx.send(AudioCommand::SetLoopRegion(start, end));
+                            let _ = app.command_tx.send(AudioCommand::SetLoopEnabled(true));
                         }
                         TimelineInteraction::LoopDragStart { offset_beats } => {
                             let cur = self.x_to_beat(response.rect, pos.x).max(0.0) - offset_beats;
@@ -1567,6 +1569,7 @@ impl TimelineView {
                             let end = app.audio_state.loop_end.load();
                             let start = snapped.min(end - min_len);
                             app.audio_state.loop_start.store(start);
+                            let _ = app.command_tx.send(AudioCommand::SetLoopRegion(start, end));
                         }
                         TimelineInteraction::LoopDragEnd { offset_beats } => {
                             let cur = self.x_to_beat(response.rect, pos.x).max(0.0) - offset_beats;
@@ -1574,6 +1577,7 @@ impl TimelineView {
                             let start = app.audio_state.loop_start.load();
                             let end = snapped.max(start + min_len);
                             app.audio_state.loop_end.store(end);
+                            let _ = app.command_tx.send(AudioCommand::SetLoopRegion(start, end));
                         }
                         _ => {}
                     }

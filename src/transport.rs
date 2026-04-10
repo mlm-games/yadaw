@@ -73,6 +73,7 @@ impl Transport {
     }
 
     pub fn set_bpm(&self, bpm: f32) {
+        self.audio_state.bpm.store(bpm);
         let _ = self.command_tx.send(AudioCommand::SetBPM(bpm));
     }
 

@@ -525,11 +525,20 @@ fn process_command(
         }
         AudioCommand::SetLoopEnabled(enabled) => {
             audio_state.loop_enabled.store(enabled, Ordering::Relaxed);
+            {
+                let mut state = app_state.lock().unwrap();
+                state.loop_enabled = enabled;
+            }
             let _ = realtime_tx.send(RealtimeCommand::SetLoopEnabled(enabled));
         }
         AudioCommand::SetLoopRegion(start, end) => {
             audio_state.loop_start.store(start);
             audio_state.loop_end.store(end);
+            {
+                let mut state = app_state.lock().unwrap();
+                state.loop_start = start;
+                state.loop_end = end;
+            }
             let _ = realtime_tx.send(RealtimeCommand::SetLoopRegion(start, end));
         }
         AudioCommand::AddPluginUnified {
