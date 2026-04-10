@@ -105,7 +105,8 @@ impl MenuBar {
             ui.separator();
 
             if ui.button("Exit").clicked() {
-                // app.handle_action(AppAction::Escape);
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                ui.close();
             }
         });
     }
