@@ -1,0 +1,23 @@
+- remove duplicate actions in right click (shortcuts are sufficient)
+- Wire layout load/save logic
+- Add an option to open presets folder in file manager (to rename/move/delete them)
+- wire sample rate, and add options
+- actually wire exit button
+- fix duplicate show close confirmation call
+- allow timline undo for basic movement
+- bump egui to 0.34
+- Fix right click menu
+- Add warp mode to audio tools (select audio clips to warp (keep length by speeding up))
+- loop and bpm save fix
+- time-based audio warp for bpm and tempo (they scale up or down in length based on bpm)
+- use set MIDI colors in piano roll tracks, and timeline UI (old save files will have black notes now, should be set with a new color)
+- CTRL + D selects the new audio clip instead of the original
+- Fix android build
+- Add flac, and ogg support (export)
+- refactor plugin source and api to seperate crates
+- Update README.md
+- try to make a non-selly, and simple readme
+- Revise Yadaw description for clarity and focus
+- Update README for clarity on app intentions
+- Fix link formatting for VSCO2 instruments in README
+- Fix AUR package name in README
