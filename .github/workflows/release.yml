@@ -6,16 +6,16 @@ on:
       - "*.*.*"
   workflow_dispatch:
     inputs:
-        upload_releases:
-          description: "Upload releases"
-          required: true
-          default: true
-          type: boolean
-        mark_prerelease:
-          description: "Mark as prerelease"
-          required: true
-          default: false
-          type: boolean
+      upload_releases:
+        description: "Upload releases"
+        required: true
+        default: true
+        type: boolean
+      mark_prerelease:
+        description: "Mark as prerelease"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -45,7 +45,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Bump Cargo version (patch) and set cargo-apk versionCode
+      - name: Bump Cargo version (patch) and set versionCode
         id: bump
         shell: bash
         run: |
@@ -62,7 +62,7 @@ jobs:
           NEW_VERSION="$MAJ.$MIN.$((PAT+1))"
           sed -i -E "0,/^version\s*=.*/s//version = \"$NEW_VERSION\"/" "$CARGO_TOML"
 
-          # 2) compute cargo-apk versionCode from NEW_VERSION
+          # 2) compute versionCode from NEW_VERSION
           IFS='.' read -r NMAJ NMIN NPAT <<<"$NEW_VERSION"
           APK_ID=1
           VERSION_CODE=$(( (APK_ID<<24) | (NMAJ<<16) | (NMIN<<8) | NPAT ))
@@ -98,7 +98,7 @@ jobs:
           changelog-path: "CHANGELOG.md"
           version-file-path: "./fastlane/metadata/android/en-US/changelogs/${{ steps.bump.outputs.version_code }}.txt"
           version-code: "${{ steps.bump.outputs.version_code }}"
-          metainfo-path: './others/flathub/io.github.mlm_games.yadaw.metainfo.xml'  # TODO: Change here when copying
+          metainfo-path: "./others/flathub/io.github.mlm_games.yadaw.metainfo.xml" # TODO: Change here when copying
           format: "- {{subject}}"
           exclude-patterns: "chore:,ci:,docs:,build:,Bump version,Merge pull request,[skip ci]"
           auto-commit: "false"
@@ -121,7 +121,7 @@ jobs:
           git commit -m "chore: bump to v${{ steps.bump.outputs.version_name }} (code ${{ steps.bump.outputs.version_code }}) [skip ci]" || true
           git push
           echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      
+
       - name: Create and push tag
         shell: bash
         run: |
@@ -144,7 +144,7 @@ jobs:
             target: ""
           - os: ubuntu-latest
             toolchain: stable
-            target: "aarch64-unknown-linux-gnu"  # Linux ARM64
+            target: "aarch64-unknown-linux-gnu" # Linux ARM64
           - os: macos-latest
             toolchain: stable
             target: ""
@@ -310,7 +310,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare-version.outputs.commit_sha }}
-      
+
       - name: Verify Termux libraries presence
         shell: bash
         run: |
@@ -334,9 +334,9 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ env.ANDROID_TARGET }}
-      - name: Install cargo-apk
+      - name: Install cargo-rapk
         shell: bash
-        run: cargo install cargo-apk --locked
+        run: cargo install cargo-rapk --locked
 
       - name: Prepare release keystore
         shell: bash
@@ -385,10 +385,10 @@ jobs:
       - name: Build Android APK (release, aarch64)
         shell: bash
         env:
-          TAG: ${{ needs.prepare-version.outputs.version_name }} 
+          TAG: ${{ needs.prepare-version.outputs.version_name }}
         run: |
           set -euo pipefail
-          cargo apk build --release --target $ANDROID_TARGET --lib
+          cargo rapk build --release --target $ANDROID_TARGET --lib
           OUT_DIR="target/release/apk"
           APK_SRC=$(ls -1t "$OUT_DIR"/*.apk | head -n1)
           VER="${TAG#v}"

@@ -211,15 +211,15 @@ jobs:
           toolchain: 1.90.0
           targets: aarch64-linux-android
 
-      - name: Install cargo-apk
-        run: cargo install cargo-apk --locked
+      - name: Install cargo-rapk
+        run: cargo install cargo-rapk --locked
 
       - name: Build Android APK (aarch64)
         env:
-          # reproducible 
+          # reproducible
           SOURCE_DATE_EPOCH: ${{ github.event.repository.pushed_at || 0 }}
         run: |
-          cargo apk build --target aarch64-linux-android --lib
+          cargo rapk build --target aarch64-linux-android --lib
           # Collect artifact
           OUT_DIR="target/aarch64-linux-android/debug/apk"
           if [ -d "target/aarch64-linux-android/release/apk" ]; then
