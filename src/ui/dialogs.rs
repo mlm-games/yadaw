@@ -1505,7 +1505,7 @@ impl ExportDialog {
                 .title("Export Audio")
                 .add_file_filter(
                     "Audio Files",
-                    Arc::new(|path| {
+                    Arc::new(|path: &Path| {
                         let ext = path.extension().unwrap_or_default();
                         ext == "wav" || ext == "flac" || ext == "ogg"
                     }),
