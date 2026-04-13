@@ -1503,13 +1503,7 @@ impl ExportDialog {
             file_dialog: FileDialog::new()
                 .id(egui::Id::new("export_file_dialog"))
                 .title("Export Audio")
-                .add_file_filter(
-                    "Audio Files",
-                    Arc::new(|path: &Path| {
-                        let ext = path.extension().unwrap_or_default();
-                        ext == "wav" || ext == "flac" || ext == "ogg"
-                    }),
-                ),
+                .add_file_filter_extensions("Audio Files", vec!["wav", "flac", "ogg"]),
             #[cfg(target_os = "android")]
             file_dialog_open: false,
             normalize: false,
