@@ -33,7 +33,6 @@ env:
   ANDROID_API: "35"
   ANDROID_BUILD_TOOLS: "35.0.0"
   ANDROID_NDK_VERSION: "27.0.12077973"
-  RUST_TOOLCHAIN: "1.92.0"
   ANDROID_TARGET: "aarch64-linux-android"
   CARGO_RAPK_VERSION: "0.14.1"
 
@@ -337,7 +336,6 @@ jobs:
       - name: Install Rust (host) + Android target
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ env.ANDROID_TARGET }}
 
       - name: Install cargo-rapk
