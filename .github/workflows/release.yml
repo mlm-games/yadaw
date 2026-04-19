@@ -155,6 +155,9 @@ jobs:
           - os: macos-latest
             toolchain: stable
             target: ""
+          - os: windows-latest
+            toolchain: stable
+            target: "x86_64-pc-windows-gnu"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -224,27 +227,29 @@ jobs:
         run: |
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> $GITHUB_ENV
 
-      # - name: Set up MSYS2 and install Windows dependencies
-      #   if: runner.os == 'Windows'
-      #   uses: msys2/setup-msys2@v2
-      #   with:
-      #     update: true
-      #     msystem: MINGW64
-      #     install: >-
-      #       base-devel
-      #       mingw-w64-x86_64-pkgconf
-      #       mingw-w64-x86_64-lilv
-      #       mingw-w64-x86_64-sratom
-      #       mingw-w64-x86_64-sord
-      #       mingw-w64-x86_64-serd
-      #       mingw-w64-x86_64-suil
-      # - name: Configure pkg-config and PATH (Windows)
-      #   if: runner.os == 'Windows'
-      #   shell: pwsh
-      #   run: |
-      #     Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG=C:\msys64\mingw64\bin\pkg-config.exe"
-      #     Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig"
-      #     Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\mingw64\bin"
+      - name: Set up MSYS2 and install Windows dependencies
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: MINGW64
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-lilv
+            mingw-w64-x86_64-sratom
+            mingw-w64-x86_64-sord
+            mingw-w64-x86_64-serd
+            mingw-w64-x86_64-suil
+
+      - name: Configure pkg-config and PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG=C:\msys64\mingw64\bin\pkgconf.exe"
+          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\mingw64\bin"
 
       - uses: Swatinem/rust-cache@v2
 
@@ -276,22 +281,24 @@ jobs:
           for f in README* LICENSE* CHANGELOG*; do [ -e "$f" ] && cp "$f" "$OUTDIR/" || true; done
           tar -C "dist" -czf "${OUTDIR}.tar.gz" "$(basename "$OUTDIR")"
 
-      # - name: Package (zip) [Windows]
-      #   if: runner.os == 'Windows'
-      #   shell: pwsh
-      #   env:
-      #     TAG: ${{ needs.prepare-version.outputs.version_name }}
-      #   run: |
-      #     $ErrorActionPreference = "Stop"
-      #     $ver = $env:TAG.Substring(1)
-      #     $host = & rustc -vV | Select-String '^host:' | ForEach-Object { $_.ToString().Split()[1] }
-      #     $out = "dist/$($env:BIN_NAME)-$ver-$host"
-      #     New-Item -ItemType Directory -Path $out -Force | Out-Null
-      #     Copy-Item "target\release\$($env:BIN_NAME).exe" "$out\"
-      #     foreach ($f in @("README*", "LICENSE*", "CHANGELOG*")) {
-      #       Get-ChildItem $f -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName $out\ }
-      #     }
-      #     Compress-Archive -Path "$out\*" -DestinationPath "$out.zip"
+      - name: Package (zip) [Windows]
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ steps.triple.outputs.target }}
+          TAG: ${{ needs.prepare-version.outputs.version_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = $env:TAG -replace '^v',''
+          $out = "dist/$($env:BIN_NAME)-$ver-$env:TARGET"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          
+          Copy-Item "target\$env:TARGET\release\$($env:BIN_NAME).exe" "$out\"
+          
+          foreach ($f in @("README*", "LICENSE*", "CHANGELOG*")) {
+            Get-ChildItem $f -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName $out\ }
+          }
+          Compress-Archive -Path "$out\*" -DestinationPath "$out.zip"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
