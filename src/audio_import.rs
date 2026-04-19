@@ -54,10 +54,10 @@ fn import_wav(path: &Path, bpm: f32) -> Result<AudioClip> {
                     .map(|s| s.map(|v| (v as f32) / 32768.0))
                     .collect::<Result<Vec<_>, _>>()?,
                 24 => {
-                    // Packed 24-bit in i32 container; shift to MSB and normalize by 2^23
+                    // 24-bit PCM decoded into i32 by hound; normalize by 2^23
                     reader
                         .samples::<i32>()
-                        .map(|s| s.map(|v| ((v >> 8) as f32) / 8_388_608.0))
+                        .map(|s| s.map(|v| (v as f32) / 8_388_608.0))
                         .collect::<Result<Vec<_>, _>>()?
                 }
                 32 => reader

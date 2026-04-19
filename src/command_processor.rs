@@ -2127,20 +2127,20 @@ fn process_command(
 }
 
 pub fn send_graph_snapshot(state: &AppState, snapshot_tx: &Sender<AudioGraphSnapshot>) {
-    if snapshot_tx.is_full() {
-        log::trace!("Skipping snapshot send, audio thread is busy.");
-        return;
-    }
-
     let snapshot = AudioGraphSnapshot {
         tracks: crate::audio_snapshot::build_track_snapshots(state),
         track_order: state.track_order.clone(),
     };
 
-    if let Err(e) = snapshot_tx.try_send(snapshot) {
-        if e.is_full() {
-            // benign
-        } else {
+    match snapshot_tx.try_send(snapshot) {
+        Ok(()) => {}
+        Err(e) if e.is_full() => {
+            let latest = e.into_inner();
+            if snapshot_tx.send(latest).is_err() {
+                log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
+            }
+        }
+        Err(_) => {
             log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
         }
     }
