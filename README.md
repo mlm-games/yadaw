@@ -47,10 +47,6 @@ The video uses [VSCO2](https://versilian-studios.com/vsco-community) pack's inst
 
 [AGPL-3.0](LICENSE)
 
-### Why AGPL?
-
-It's a copyleft license that keeps the software free. If you distribute it or run it as a service, you must share your modifications.
-
 ### Support
 
 If you find this useful, you could:
