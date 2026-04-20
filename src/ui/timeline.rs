@@ -1703,7 +1703,7 @@ impl TimelineView {
                     };
                     if is_midi {
                         let mut beat = self.x_to_beat(response.rect, pos.x);
-                        beat = if self.grid_snap > 0.0 {
+                beat = if self.grid_snap > 0.0 && ui.input(|i| i.modifiers.shift) {
                             (beat / self.grid_snap as f64).round() * self.grid_snap as f64
                         } else {
                             beat
