@@ -501,7 +501,7 @@ impl PianoRollView {
 
                     // Zoom controls
                     ui.label("Zoom:");
-                    if ui.button("−").clicked() {
+                    if ui.button("-").clicked() {
                         self.piano_roll.zoom_x = (self.piano_roll.zoom_x * 0.8).max(10.0);
                         self.piano_roll.zoom_y = (self.piano_roll.zoom_y * 0.9).max(10.0);
                     }

@@ -150,7 +150,7 @@ impl TimelineView {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Zoom:");
-                    if ui.button("−").clicked() {
+                    if ui.button("-").clicked() {
                         self.zoom_x = (self.zoom_x * 0.8).max(10.0);
                     }
                     if ui.button("+").clicked() {
