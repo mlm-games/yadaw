@@ -229,6 +229,7 @@ jobs:
 
       - name: Set up MSYS2 and install Windows dependencies
         if: runner.os == 'Windows'
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           update: true
@@ -247,9 +248,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG=C:\msys64\mingw64\bin\pkgconf.exe"
-          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig"
-          Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\mingw64\bin"
+          $msys2 = "${{ steps.msys2.outputs.msys2-location }}"
+          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG=$msys2\mingw64\bin\pkgconf.exe"
+          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG_PATH=$msys2\mingw64\lib\pkgconfig"
+          Add-Content -Path $env:GITHUB_PATH -Value "$msys2\mingw64\bin"
 
       - uses: Swatinem/rust-cache@v2
 
