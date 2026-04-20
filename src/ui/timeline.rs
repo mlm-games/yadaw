@@ -2427,9 +2427,7 @@ impl TimelineView {
                                     == clip_ref.is_midi
                                 {
                                     for &cid in &app.selected_clips {
-                                        let st2 = app.state.lock().unwrap();
-                                        // Use a match to safely get the start beat
-                                        if let Some((track, loc)) = st2.find_clip(cid) {
+                                        if let Some((track, loc)) = st.find_clip(cid) {
                                             let start_beat = match loc {
                                                 ClipLocation::Midi(i) => {
                                                     track.midi_clips[i].start_beat
@@ -2438,7 +2436,6 @@ impl TimelineView {
                                                     track.audio_clips[i].start_beat
                                                 }
                                             };
-                                            drop(st2);
 
                                             let cmd = if clip_ref.is_midi {
                                                 AudioCommand::MoveMidiClipToTrack {
