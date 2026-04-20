@@ -1,0 +1,2 @@
+- fix a nested deadlock (occurs when trying to drag a short clip)
+- try fixing windows build
