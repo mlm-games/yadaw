@@ -1936,43 +1936,11 @@ impl YadawApp {
         }
     }
 
-    /// Import an audio file, creating a new audio track if needed
+    /// creates a new audio track if needed
     fn import_audio_file_to_new_track(&mut self, path: &Path) {
-        // Ensure we have an audio track selected, or create one
-        let audio_track_id = {
-            let state = self.state.lock().unwrap();
+        self.add_audio_track();
+        let track_id = self.selected_track;
 
-            // Check if selected track is audio (not MIDI)
-            if state
-                .tracks
-                .get(&self.selected_track)
-                .map(|t| !matches!(t.track_type, TrackType::Midi))
-                .unwrap_or(false)
-            {
-                Some(self.selected_track)
-            } else {
-                // Find first audio track
-                state
-                    .tracks
-                    .iter()
-                    .find(|(_, t)| !matches!(t.track_type, TrackType::Midi))
-                    .map(|(id, _)| *id)
-            }
-        };
-
-        let track_id = match audio_track_id {
-            Some(id) => id,
-            None => {
-                // Create a new audio track
-                self.add_audio_track();
-                self.selected_track
-            }
-        };
-
-        // Select the track
-        self.select_track(track_id);
-
-        // Import the audio file
         let bpm = self.audio_state.bpm.load();
         match crate::audio_import::import_audio_file(path, bpm) {
             Ok(mut clip) => {

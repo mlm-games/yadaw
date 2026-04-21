@@ -1564,7 +1564,7 @@ impl ExportDialog {
                     return;
                 }
 
-                // --- Configuration UI (only shown when not exporting) ---
+                // only shown when not exporting
 
                 // File path
                 ui.horizontal(|ui| {
@@ -1929,17 +1929,7 @@ impl ImportAudioDialog {
     }
 
     fn import_file(&self, path: &Path, app: &mut YadawApp, _bpm: f64) {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        if ext == "mid" || ext == "midi" {
-            app.open_file_from_path(path);
-        } else {
-            app.open_file_from_path(path);
-        }
+        app.open_file_from_path(path);
     }
 
     pub fn is_open(&self) -> bool {
