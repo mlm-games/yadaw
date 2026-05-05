@@ -11,7 +11,7 @@ use crate::{
 use crate::{audio_state::AudioGraphSnapshot, project};
 use std::sync::{Arc, Mutex};
 use yadaw_plugin_api::HostConfig;
-use yadaw_plugin_host::{legacy::init as plugin_host_init, HostFacade};
+use yadaw_plugin_host::{HostFacade, legacy::init as plugin_host_init};
 
 #[cfg(target_os = "android")]
 use android_activity::AndroidApp;

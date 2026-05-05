@@ -62,6 +62,7 @@ log = "0.4"
 clack = "0.1.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
+rlobkit-dialogs = { path = "../rlobkit/rlobkit-dialogs" }
 android_logger = "0.15.1"
 android-activity = { version = "0.6.0", features = ["native-activity"] }
 winit = { version = "0.30.12", default-features = false, features = [
@@ -69,6 +70,7 @@ winit = { version = "0.30.12", default-features = false, features = [
 ] }
 ndk-context = "0.1"
 jni = "0.21"
+tokio = { version = "1", features = ["rt"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 winit = "0.30.12"
@@ -98,12 +100,30 @@ features = ["params", "clack-host"]
 [package.metadata.android]
 package = "com.yadaw.app"
 label = "YADAW"
-uses-permission = ["android.permission.RECORD_AUDIO"]
 build_targets = ["aarch64-linux-android"]
 resources = "others/packaging/res"
 
+[[package.metadata.android.uses_permission]]
+name = "android.permission.RECORD_AUDIO"
+
 [package.metadata.android.application]
 icon = "@drawable/ic_launcher_monochrome"
+
+# [[package.metadata.android.application.activity]]
+# name = "android.app.NativeActivity"
+# config_changes = "orientation|keyboardHidden|screenSize"
+
+# [[package.metadata.android.application.activity.intent_filter]]
+# actions = ["android.intent.action.VIEW", "android.intent.action.MAIN"]
+# categories = ["android.intent.category.LAUNCHER"]
+
+# [[package.metadata.android.application.activity.meta_data]]
+# name = "android.app.lib_name"
+# value = "yadaw"
+
+# [[package.metadata.android.application.activity]]
+# name = "rust.rlobkit.RlobKitPickerActivity"
+# exported = false
 
 [package.metadata.android.sdk]
 version_code = 16779019

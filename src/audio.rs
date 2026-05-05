@@ -206,9 +206,7 @@ pub fn resolve_output_sample_rate(preferred_sample_rate: f32) -> f32 {
         return preferred_sample_rate;
     };
 
-    choose_output_stream_config(&device, preferred_sample_rate)
-        .sample_rate()
-        as f32
+    choose_output_stream_config(&device, preferred_sample_rate).sample_rate() as f32
 }
 
 pub fn run_audio_thread(

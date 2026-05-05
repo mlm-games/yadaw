@@ -7,9 +7,11 @@ use crate::messages::{ExportState, UIUpdate};
 use crate::project::AppState;
 use crate::time_utils::TimeConverter;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use crossbeam_channel::Sender;
 use dissonia::prelude::*;
+#[cfg(target_os = "android")]
+use rlobkit_dialogs::PlatformFile;
 use serde::{Deserialize, Serialize};
 
 use std::fs::File;
@@ -17,6 +19,15 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
+
+#[cfg(target_os = "android")]
+fn export_through_cache_then_copy(config: &ExportConfig) -> ExportConfig {
+    let mut normalized = config.clone();
+    if normalized.export_uri.is_some() {
+        normalized.path = crate::paths::cache_dir().join("android_export_temp");
+    }
+    normalized
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportFormat {
@@ -38,6 +49,8 @@ impl ExportFormat {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportConfig {
     pub path: PathBuf,
+    #[serde(default)]
+    pub export_uri: Option<String>,
     pub format: Option<ExportFormat>,
     pub sample_rate: f32,
     pub bit_depth: u16,
@@ -106,6 +119,12 @@ fn run_export(
     config: &ExportConfig,
     ui_tx: &Sender<UIUpdate>,
 ) -> Result<PathBuf> {
+    #[cfg(target_os = "android")]
+    let config = export_through_cache_then_copy(config);
+
+    #[cfg(not(target_os = "android"))]
+    let config = config.clone();
+
     let sample_format = config.sample_format()?;
     let layout = config.channel_layout();
     let channels = layout.count() as usize;
@@ -170,14 +189,23 @@ fn run_export(
         );
 
         match format {
-            ExportFormat::Wav => write_wav(file, &pcm, config, layout, sample_format)?,
-            ExportFormat::Flac => write_flac(file, &pcm, config, layout, sample_format)?,
-            ExportFormat::Ogg => write_ogg(file, &pcm, config, layout)?,
+            ExportFormat::Wav => write_wav(file, &pcm, &config, layout, sample_format)?,
+            ExportFormat::Flac => write_flac(file, &pcm, &config, layout, sample_format)?,
+            ExportFormat::Ogg => write_ogg(file, &pcm, &config, layout)?,
         }
     }
 
     std::fs::rename(&temp_path, &output_path)
         .map_err(|e| anyhow!("Failed to move temp file: {e}"))?;
+
+    #[cfg(target_os = "android")]
+    if let Some(uri) = &config.export_uri {
+        let target = PlatformFile::from_uri(uri.as_str());
+        rlobkit_dialogs::RlobKit::write_file_from_path(&target, &output_path)
+            .map_err(|e| anyhow!("Failed to write exported file to SAF URI '{uri}': {e}"))?;
+        let _ = std::fs::remove_file(&output_path);
+        return Ok(PathBuf::from(uri));
+    }
 
     Ok(output_path)
 }

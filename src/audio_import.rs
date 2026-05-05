@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use std::path::Path;
 
 use crate::model::clip::AudioClip;
@@ -29,8 +29,10 @@ pub fn import_audio_file(path: &Path, bpm: f32) -> Result<AudioClip> {
 
     match extension.as_str() {
         "wav" => import_wav(path, bpm),
-        "mp3" | "flac" | "ogg" => import_with_symphonia(path, bpm),
-        _ => Err(anyhow!("Unsupported audio format: {}", extension)),
+        "mp3" | "flac" | "ogg" | "m4a" | "aac" => import_with_symphonia(path, bpm),
+        _ => import_wav(path, bpm)
+            .or_else(|_| import_with_symphonia(path, bpm))
+            .map_err(|_| anyhow!("Unsupported audio format: {}", extension)),
     }
 }
 
