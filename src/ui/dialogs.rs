@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 use crate::audio_export::ExportFormat;
+use crate::constants::{is_audio_extension, PROJECT_EXTENSION, PROJECT_ALT_EXTENSION, AUDIO_IMPORT_EXTENSIONS, EXPORT_EXTENSIONS};
 use crate::error::UserNotification;
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
@@ -584,7 +585,7 @@ impl OpenDialog {
             if self.picker_rx.is_none() {
                 self.picker_rx = Some(crate::android_picker::pick_open_file(
                     "Open Project",
-                    &["yadaw", "ydw"],
+                    &[PROJECT_EXTENSION, PROJECT_ALT_EXTENSION],
                 ));
             }
 
@@ -1779,15 +1780,6 @@ pub struct ExportDialog {
 }
 
 impl ExportDialog {
-    #[cfg(target_os = "android")]
-    fn current_extension(&self) -> &'static str {
-        match self.format {
-            ExportFormat::Wav => "wav",
-            ExportFormat::Flac => "flac",
-            ExportFormat::Ogg => "ogg",
-        }
-    }
-
     pub fn new() -> Self {
         Self {
             closed: false,
@@ -1888,7 +1880,7 @@ impl ExportDialog {
                     if ui.button("Browse...").clicked() {
                         let mut picker = rfd::FileDialog::new()
                             .set_title("Export Audio")
-                            .add_filter("Audio Files", &["wav", "flac", "ogg"]);
+                            .add_filter("Audio Files", EXPORT_EXTENSIONS);
 
                         if let Some(parent) = self.path.parent() {
                             picker = picker.set_directory(parent);
@@ -1910,9 +1902,9 @@ impl ExportDialog {
                                 &format!(
                                     "export_{}.{}",
                                     chrono::Local::now().format("%Y%m%d_%H%M%S"),
-                                    "wav"
+                                    self.format.default_extension()
                                 ),
-                                "wav",
+                                self.format.default_extension(),
                             ));
                         }
 
@@ -1925,7 +1917,7 @@ impl ExportDialog {
                                             self.path = crate::paths::cache_dir().join(format!(
                                                 "export_{}.{}",
                                                 chrono::Local::now().format("%Y%m%d_%H%M%S"),
-                                                self.current_extension()
+                                                self.format.default_extension()
                                             ));
                                         }
                                         AndroidPickedFile::Path(path) => {
@@ -2268,10 +2260,7 @@ impl ImportAudioDialog {
         {
             let fd = FileDialog::new()
                 .title("Import Audio")
-                .add_file_filter_extensions(
-                    "Audio/MIDI Files",
-                    ["wav", "mp3", "flac", "ogg", "m4a", "aac", "mid", "midi"].to_vec(),
-                )
+                .add_file_filter_extensions("Audio/MIDI Files", AUDIO_IMPORT_EXTENSIONS.to_vec())
                 .add_file_filter_extensions("All Files", ["*"].to_vec());
 
             return Self { fd, opened: false };

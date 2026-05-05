@@ -6,6 +6,8 @@ use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use rlobkit_dialogs::picker::{OpenFileOptions, SaveFileOptions};
 use rlobkit_dialogs::{RlobKit, RlobKitMode, RlobKitType};
 
+use crate::constants::AUDIO_IMPORT_EXTENSIONS;
+
 #[derive(Debug, Clone)]
 pub enum PickedFile {
     Uri(String),
@@ -111,20 +113,12 @@ pub fn pick_save_file(title: &str, suggested_name: &str, extension: &str) -> And
 }
 
 pub fn pick_multiple_audio() -> AndroidPicker<Vec<PickedFile>> {
+    let extensions: Vec<String> = AUDIO_IMPORT_EXTENSIONS.iter().map(|s| s.to_string()).collect();
     AndroidPicker::new(move || {
         block_on_android(async {
             let result = RlobKit::open_file_picker(OpenFileOptions {
                 file_type: RlobKitType::Custom {
-                    extensions: vec![
-                        "wav".to_string(),
-                        "mp3".to_string(),
-                        "flac".to_string(),
-                        "ogg".to_string(),
-                        "m4a".to_string(),
-                        "aac".to_string(),
-                        "mid".to_string(),
-                        "midi".to_string(),
-                    ],
+                    extensions,
                     mime_types: vec!["*/*".to_string()],
                 },
                 mode: RlobKitMode::Multiple { limit: None },

@@ -37,7 +37,7 @@ pub enum ExportFormat {
 }
 
 impl ExportFormat {
-    fn default_extension(self) -> &'static str {
+    pub fn default_extension(self) -> &'static str {
         match self {
             Self::Wav => "wav",
             Self::Flac => "flac",
