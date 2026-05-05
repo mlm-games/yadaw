@@ -1,6 +1,4 @@
 pub mod android_saf;
-#[cfg(target_os = "android")]
-pub mod android_picker;
 pub mod audio;
 mod audio_export;
 pub mod audio_import;
@@ -13,6 +11,9 @@ pub mod constants;
 pub mod edit_actions;
 pub mod entry;
 pub mod error;
+pub mod file_picker;
+mod file_picker_desktop;
+mod file_picker_android;
 pub mod idgen;
 pub mod input;
 pub mod level_meter;

@@ -1,14 +1,9 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "android")]
-use crate::android_picker::{AndroidPicker, PickedFile, PickedFile as AndroidPickedFile};
+use crate::file_picker::{Picker, PickedFile};
 
 #[cfg(target_os = "android")]
-use rlobkit_dialogs::picker::{OpenDirectoryOptions, OpenFileOptions, SaveFileOptions};
-#[cfg(target_os = "android")]
-use rlobkit_dialogs::{RlobKit, RlobKitMode, RlobKitType};
-#[cfg(target_os = "android")]
-use rlobkit_dialogs::PlatformFile;
+use crate::file_picker::{OpenDirectoryOptions, OpenFileOptions, PlatformFile, RlobKit, RlobKitMode, RlobKitType, SaveFileOptions};
 
 #[cfg(not(target_os = "android"))]
 use egui_file_dialog::FileDialog;
@@ -557,7 +552,7 @@ pub struct OpenDialog {
     #[cfg(not(target_os = "android"))]
     opened: bool,
     #[cfg(target_os = "android")]
-    picker_rx: Option<AndroidPicker<PickedFile>>,
+    picker_rx: Option<Picker<PickedFile>>,
 }
 
 impl OpenDialog {
@@ -583,7 +578,7 @@ impl OpenDialog {
         #[cfg(target_os = "android")]
         {
             if self.picker_rx.is_none() {
-                self.picker_rx = Some(crate::android_picker::pick_open_file(
+                self.picker_rx = Some(crate::file_picker::pick_open_file(
                     "Open Project",
                     &[PROJECT_EXTENSION, PROJECT_ALT_EXTENSION],
                 ));
@@ -593,8 +588,8 @@ impl OpenDialog {
                 if let Some(result) = picker.poll() {
                     match result {
                         Ok(Some(file)) => match file {
-                            AndroidPickedFile::Uri(uri) => load_project_from_uri(app, &uri),
-                            AndroidPickedFile::Path(path) => app.load_project_from_path(&path),
+                            PickedFile::Uri(uri) => load_project_from_uri(app, &uri),
+                            PickedFile::Path(path) => app.load_project_from_path(&path),
                         },
                         Ok(None) => self.closed = true,
                         Err(e) => {
@@ -637,7 +632,7 @@ pub struct SaveDialog {
     #[cfg(not(target_os = "android"))]
     opened: bool,
     #[cfg(target_os = "android")]
-    picker_rx: Option<AndroidPicker<PickedFile>>,
+    picker_rx: Option<Picker<PickedFile>>,
 }
 
 impl SaveDialog {
@@ -671,7 +666,7 @@ impl SaveDialog {
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| "untitled.yadaw".to_string());
 
-                self.picker_rx = Some(crate::android_picker::pick_save_file(
+                self.picker_rx = Some(crate::file_picker::pick_save_file(
                     "Save Project",
                     &suggested,
                     "yadaw",
@@ -682,8 +677,8 @@ impl SaveDialog {
                 if let Some(result) = picker.poll() {
                     match result {
                         Ok(Some(file)) => match file {
-                            AndroidPickedFile::Uri(uri) => save_project_to_uri(app, &uri),
-                            AndroidPickedFile::Path(path) => app.save_project_to_path(&path),
+                            PickedFile::Uri(uri) => save_project_to_uri(app, &uri),
+                            PickedFile::Path(path) => app.save_project_to_path(&path),
                         },
                         Ok(None) => self.closed = true,
                         Err(e) => {
@@ -1769,7 +1764,7 @@ pub struct ExportDialog {
     #[cfg(target_os = "android")]
     export_uri: Option<String>,
     #[cfg(target_os = "android")]
-    picker_rx: Option<AndroidPicker<PickedFile>>,
+    picker_rx: Option<Picker<PickedFile>>,
     format: ExportFormat,
     bit_depth: u16,
     export_range: ExportRange,
@@ -1878,26 +1873,26 @@ impl ExportDialog {
                     ui.label(self.path.to_string_lossy());
                     #[cfg(not(target_os = "android"))]
                     if ui.button("Browse...").clicked() {
-                        let mut picker = rfd::FileDialog::new()
-                            .set_title("Export Audio")
-                            .add_filter("Audio Files", EXPORT_EXTENSIONS);
-
-                        if let Some(parent) = self.path.parent() {
-                            picker = picker.set_directory(parent);
-                        }
-                        if let Some(file_name) = self.path.file_name().and_then(|n| n.to_str()) {
-                            picker = picker.set_file_name(file_name);
-                        }
-
-                        if let Some(path) = picker.save_file() {
-                            self.path = path;
+                        if self.picker_rx.is_none() {
+                            let ext = self.path.extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("wav");
+                            let name = self.path.file_stem()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("export");
+                            self.picker_rx = Some(crate::file_picker::pick_save_file(
+                                "Export Audio",
+                                name,
+                                ext,
+                            ));
+                            self.picker_opened = true;
                         }
                     }
 
                     #[cfg(target_os = "android")]
                     if ui.button("Browse...").clicked() {
                         if self.picker_rx.is_none() {
-                            self.picker_rx = Some(crate::android_picker::pick_save_file(
+                            self.picker_rx = Some(crate::file_picker::pick_save_file(
                                 "Export Audio",
                                 &format!(
                                     "export_{}.{}",
@@ -1912,7 +1907,7 @@ impl ExportDialog {
                             if let Some(result) = picker.poll() {
                                 match result {
                                     Ok(Some(file)) => match file {
-                                        AndroidPickedFile::Uri(uri) => {
+                                        PickedFile::Uri(uri) => {
                                             self.export_uri = Some(uri.to_string());
                                             self.path = crate::paths::cache_dir().join(format!(
                                                 "export_{}.{}",
@@ -1920,7 +1915,7 @@ impl ExportDialog {
                                                 self.format.default_extension()
                                             ));
                                         }
-                                        AndroidPickedFile::Path(path) => {
+                                        PickedFile::Path(path) => {
                                             self.export_uri = None;
                                             self.path = path.to_path_buf();
                                         }
@@ -2251,7 +2246,7 @@ pub struct ImportAudioDialog {
     fd: FileDialog,
     opened: bool,
     #[cfg(target_os = "android")]
-    picker_rx: Option<AndroidPicker<Vec<PickedFile>>>,
+    picker_rx: Option<Picker<Vec<PickedFile>>>,
 }
 
 impl ImportAudioDialog {
@@ -2293,7 +2288,7 @@ impl ImportAudioDialog {
         {
             if self.picker_rx.is_none() {
                 log::info!("yadaw: import audio picker requested");
-                self.picker_rx = Some(crate::android_picker::pick_multiple_audio());
+                self.picker_rx = Some(crate::file_picker::pick_multiple_audio());
             }
 
             if let Some(mut picker) = self.picker_rx.take() {
