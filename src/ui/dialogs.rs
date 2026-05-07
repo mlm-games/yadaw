@@ -1,17 +1,18 @@
 use std::path::{Path, PathBuf};
 
-use crate::file_picker::{Picker, PickedFile};
-
-#[cfg(target_os = "android")]
-use crate::file_picker::{OpenDirectoryOptions, OpenFileOptions, PlatformFile, RlobKit, RlobKitMode, RlobKitType, SaveFileOptions};
+use crate::file_picker::{PickedFile, Picker};
 
 #[cfg(not(target_os = "android"))]
 use egui_file_dialog::FileDialog;
+
 use serde::{Deserialize, Serialize};
 
 use super::*;
 use crate::audio_export::ExportFormat;
-use crate::constants::{is_audio_extension, PROJECT_EXTENSION, PROJECT_ALT_EXTENSION, AUDIO_IMPORT_EXTENSIONS, EXPORT_EXTENSIONS};
+use crate::constants::{
+    AUDIO_IMPORT_EXTENSIONS, EXPORT_EXTENSIONS, PROJECT_ALT_EXTENSION, PROJECT_EXTENSION,
+    is_audio_extension,
+};
 use crate::error::UserNotification;
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
@@ -43,6 +44,11 @@ fn load_project_from_uri(app: &mut super::app::YadawApp, uri: &str) {
             .dialogs
             .show_error(&format!("Failed to open selected project: {e}")),
     }
+}
+
+#[cfg(not(target_os = "android"))]
+fn load_project_from_uri(_app: &mut super::app::YadawApp, _uri: &str) {
+    unreachable!("load_project_from_uri should not be called on desktop");
 }
 
 #[cfg(target_os = "android")]
@@ -88,6 +94,11 @@ fn save_project_to_uri(app: &mut super::app::YadawApp, uri: &str) {
             .dialogs
             .show_error(&format!("Failed to save project: {e}")),
     }
+}
+
+#[cfg(not(target_os = "android"))]
+fn save_project_to_uri(_app: &mut super::app::YadawApp, _uri: &str) {
+    unreachable!("save_project_to_uri should not be called on desktop");
 }
 
 macro_rules! simple_dialog {
@@ -547,11 +558,6 @@ impl DialogManager {
 // Individual dialog implementations
 pub struct OpenDialog {
     closed: bool,
-    #[cfg(not(target_os = "android"))]
-    fd: FileDialog,
-    #[cfg(not(target_os = "android"))]
-    opened: bool,
-    #[cfg(target_os = "android")]
     picker_rx: Option<Picker<PickedFile>>,
 }
 
@@ -559,63 +565,36 @@ impl OpenDialog {
     pub fn new() -> Self {
         Self {
             closed: false,
-            #[cfg(not(target_os = "android"))]
-            fd: FileDialog::new()
-                .title("Open Project")
-                .add_file_filter_extensions("YADAW Project", ["yadaw", "ydw"].to_vec())
-                .add_file_filter_extensions("All Files", ["*"].to_vec()),
-            #[cfg(not(target_os = "android"))]
-            opened: false,
-            #[cfg(target_os = "android")]
             picker_rx: None,
         }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        #[cfg(target_os = "android")]
         let _ = ctx;
 
-        #[cfg(target_os = "android")]
-        {
-            if self.picker_rx.is_none() {
-                self.picker_rx = Some(crate::file_picker::pick_open_file(
-                    "Open Project",
-                    &[PROJECT_EXTENSION, PROJECT_ALT_EXTENSION],
-                ));
-            }
-
-            if let Some(mut picker) = self.picker_rx.take() {
-                if let Some(result) = picker.poll() {
-                    match result {
-                        Ok(Some(file)) => match file {
-                            PickedFile::Uri(uri) => load_project_from_uri(app, &uri),
-                            PickedFile::Path(path) => app.load_project_from_path(&path),
-                        },
-                        Ok(None) => self.closed = true,
-                        Err(e) => {
-                            app.dialogs
-                                .show_error(&format!("Open project picker failed: {e}"));
-                            self.closed = true;
-                        }
-                    }
-                } else {
-                    self.picker_rx = Some(picker);
-                }
-            }
-
-            return;
+        if self.picker_rx.is_none() {
+            self.picker_rx = Some(crate::file_picker::pick_open_file(
+                "Open Project",
+                &[PROJECT_EXTENSION, PROJECT_ALT_EXTENSION],
+            ));
         }
 
-        #[cfg(not(target_os = "android"))]
-        {
-            if !self.opened {
-                self.fd.pick_file();
-                self.opened = true;
-            }
-            self.fd.update(ctx);
-            if let Some(path) = self.fd.take_picked() {
-                app.load_project_from_path(&path);
-                self.closed = true;
+        if let Some(mut picker) = self.picker_rx.take() {
+            if let Some(result) = picker.poll() {
+                match result {
+                    Ok(Some(file)) => match file {
+                        PickedFile::Uri(uri) => load_project_from_uri(app, &uri),
+                        PickedFile::Path(path) => app.load_project_from_path(&path),
+                    },
+                    Ok(None) => self.closed = true,
+                    Err(e) => {
+                        app.dialogs
+                            .show_error(&format!("Open project picker failed: {e}"));
+                        self.closed = true;
+                    }
+                }
+            } else {
+                self.picker_rx = Some(picker);
             }
         }
     }
@@ -627,11 +606,6 @@ impl OpenDialog {
 
 pub struct SaveDialog {
     closed: bool,
-    #[cfg(not(target_os = "android"))]
-    fd: FileDialog,
-    #[cfg(not(target_os = "android"))]
-    opened: bool,
-    #[cfg(target_os = "android")]
     picker_rx: Option<Picker<PickedFile>>,
 }
 
@@ -639,72 +613,44 @@ impl SaveDialog {
     pub fn new() -> Self {
         Self {
             closed: false,
-            #[cfg(not(target_os = "android"))]
-            fd: FileDialog::new()
-                .title("Save Project")
-                .default_file_name("untitled.yadaw")
-                .add_file_filter_extensions("YADAW Project", ["yadaw"].to_vec())
-                .allow_file_overwrite(true),
-            #[cfg(not(target_os = "android"))]
-            opened: false,
-            #[cfg(target_os = "android")]
             picker_rx: None,
         }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        #[cfg(target_os = "android")]
         let _ = ctx;
 
-        #[cfg(target_os = "android")]
-        {
-            if self.picker_rx.is_none() {
-                let suggested = app
-                    .project_path
-                    .as_ref()
-                    .and_then(|p| Path::new(p).file_name().and_then(|s| s.to_str()))
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| "untitled.yadaw".to_string());
+        if self.picker_rx.is_none() {
+            let suggested = app
+                .project_path
+                .as_ref()
+                .and_then(|p| Path::new(p).file_name().and_then(|s| s.to_str()))
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| "untitled.yadaw".to_string());
 
-                self.picker_rx = Some(crate::file_picker::pick_save_file(
-                    "Save Project",
-                    &suggested,
-                    "yadaw",
-                ));
-            }
-
-            if let Some(mut picker) = self.picker_rx.take() {
-                if let Some(result) = picker.poll() {
-                    match result {
-                        Ok(Some(file)) => match file {
-                            PickedFile::Uri(uri) => save_project_to_uri(app, &uri),
-                            PickedFile::Path(path) => app.save_project_to_path(&path),
-                        },
-                        Ok(None) => self.closed = true,
-                        Err(e) => {
-                            app.dialogs
-                                .show_error(&format!("Save project picker failed: {e}"));
-                            self.closed = true;
-                        }
-                    }
-                } else {
-                    self.picker_rx = Some(picker);
-                }
-            }
-
-            return;
+            self.picker_rx = Some(crate::file_picker::pick_save_file(
+                "Save Project",
+                &suggested,
+                "yadaw",
+            ));
         }
 
-        #[cfg(not(target_os = "android"))]
-        {
-            if !self.opened {
-                self.fd.save_file();
-                self.opened = true;
-            }
-            self.fd.update(ctx);
-            if let Some(path) = self.fd.take_picked() {
-                app.save_project_to_path(&path);
-                self.closed = true;
+        if let Some(mut picker) = self.picker_rx.take() {
+            if let Some(result) = picker.poll() {
+                match result {
+                    Ok(Some(file)) => match file {
+                        PickedFile::Uri(uri) => save_project_to_uri(app, &uri),
+                        PickedFile::Path(path) => app.save_project_to_path(&path),
+                    },
+                    Ok(None) => self.closed = true,
+                    Err(e) => {
+                        app.dialogs
+                            .show_error(&format!("Save project picker failed: {e}"));
+                        self.closed = true;
+                    }
+                }
+            } else {
+                self.picker_rx = Some(picker);
             }
         }
     }
@@ -1568,7 +1514,8 @@ impl ShortcutsEditorDialog {
                             match input_mgr.save_shortcuts(&temp_path) {
                                 Ok(()) => {
                                     let target = PlatformFile::from_uri(uri);
-                                    if let Err(e) = RlobKit::write_file_from_path(&target, &temp_path)
+                                    if let Err(e) =
+                                        RlobKit::write_file_from_path(&target, &temp_path)
                                     {
                                         eprintln!("Shortcuts export failed: {}", e);
                                     }
@@ -1761,9 +1708,7 @@ enum ExportRange {
 pub struct ExportDialog {
     closed: bool,
     path: PathBuf,
-    #[cfg(target_os = "android")]
     export_uri: Option<String>,
-    #[cfg(target_os = "android")]
     picker_rx: Option<Picker<PickedFile>>,
     format: ExportFormat,
     bit_depth: u16,
@@ -1788,9 +1733,7 @@ impl ExportDialog {
                     PathBuf::from("untitled.wav")
                 }
             },
-            #[cfg(target_os = "android")]
             export_uri: None,
-            #[cfg(target_os = "android")]
             picker_rx: None,
             format: ExportFormat::Wav,
             bit_depth: 24,
@@ -1874,18 +1817,16 @@ impl ExportDialog {
                     #[cfg(not(target_os = "android"))]
                     if ui.button("Browse...").clicked() {
                         if self.picker_rx.is_none() {
-                            let ext = self.path.extension()
-                                .and_then(|e| e.to_str())
-                                .unwrap_or("wav");
-                            let name = self.path.file_stem()
+                            let name = self
+                                .path
+                                .file_stem()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("export");
                             self.picker_rx = Some(crate::file_picker::pick_save_file(
                                 "Export Audio",
                                 name,
-                                ext,
+                                self.format.default_extension(),
                             ));
-                            self.picker_opened = true;
                         }
                     }
 
@@ -1902,33 +1843,33 @@ impl ExportDialog {
                                 self.format.default_extension(),
                             ));
                         }
+                    }
 
-                        if let Some(mut picker) = self.picker_rx.take() {
-                            if let Some(result) = picker.poll() {
-                                match result {
-                                    Ok(Some(file)) => match file {
-                                        PickedFile::Uri(uri) => {
-                                            self.export_uri = Some(uri.to_string());
-                                            self.path = crate::paths::cache_dir().join(format!(
-                                                "export_{}.{}",
-                                                chrono::Local::now().format("%Y%m%d_%H%M%S"),
-                                                self.format.default_extension()
-                                            ));
-                                        }
-                                        PickedFile::Path(path) => {
-                                            self.export_uri = None;
-                                            self.path = path.to_path_buf();
-                                        }
-                                    },
-                                    Ok(None) => {}
-                                    Err(err) => {
-                                        app.dialogs
-                                            .show_error(&format!("Export picker failed: {err}"));
+                    if let Some(mut picker) = self.picker_rx.take() {
+                        if let Some(result) = picker.poll() {
+                            match result {
+                                Ok(Some(file)) => match file {
+                                    PickedFile::Uri(uri) => {
+                                        self.export_uri = Some(uri.to_string());
+                                        self.path = crate::paths::cache_dir().join(format!(
+                                            "export_{}.{}",
+                                            chrono::Local::now().format("%Y%m%d_%H%M%S"),
+                                            self.format.default_extension()
+                                        ));
                                     }
+                                    PickedFile::Path(path) => {
+                                        self.export_uri = None;
+                                        self.path = path.to_path_buf();
+                                    }
+                                },
+                                Ok(None) => {}
+                                Err(err) => {
+                                    app.dialogs
+                                        .show_error(&format!("Export picker failed: {err}"));
                                 }
-                            } else {
-                                self.picker_rx = Some(picker);
                             }
+                        } else {
+                            self.picker_rx = Some(picker);
                         }
                     }
                 });

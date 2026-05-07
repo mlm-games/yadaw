@@ -54,6 +54,7 @@ pub fn pick_save_file(title: &str, suggested_name: &str, extension: &str) -> cra
                 extension: Some(ext),
                 title: Some(title.to_string()),
                 initial_directory: None,
+                file_type: None,
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -119,9 +120,12 @@ pub fn pick_directory(title: &str) -> crate::file_picker::Picker<PickedFile> {
 }
 
 pub fn write_file_to_uri(source_path: &std::path::PathBuf, uri: &str) -> Result<(), String> {
-    rlobkit_dialogs::take_writable_fd_for_uri(uri)
-        .and_then(|fd| {
-            std::fs::write(&fd, std::fs::read(source_path)?).map_err(|e| e.to_string())
-        })
-        .map_err(|e| e.to_string())
+    let fd = rlobkit_dialogs::take_writable_fd_for_uri(uri)
+        .ok_or_else(|| "Failed to get writable file descriptor".to_string())?;
+    
+    use std::os::fd::IntoRawFd;
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    std::io::copy(&mut std::io::BufReader::new(std::fs::File::open(source_path).map_err(|e| e.to_string())?), &mut file)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }

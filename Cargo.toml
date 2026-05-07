@@ -74,7 +74,7 @@ tokio = { version = "1", features = ["rt"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 winit = "0.30.12"
-rfd = "0.17.2"
+egui-file-dialog = "0.13"
 rlobkit-dialogs = { path = "../rlobkit/rlobkit-dialogs" }
 tokio = { version = "1", features = ["rt"] }
 
