@@ -1,6 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use crate::file_picker::{PickedFile, Picker};
+#[cfg(target_os = "android")]
+use crate::file_picker::{PlatformFile, RlobKit};
+use crate::file_picker::{
+    PickedFile, Picker,
+    OpenFileOptions, OpenDirectoryOptions, SaveFileOptions,
+    RlobKitMode, RlobKitType,
+};
 
 #[cfg(not(target_os = "android"))]
 use egui_file_dialog::FileDialog;
@@ -38,11 +44,14 @@ fn load_project_from_uri(app: &mut super::app::YadawApp, uri: &str) {
         "open_project_{}.yadaw",
         chrono::Local::now().format("%Y%m%d_%H%M%S")
     );
-    match crate::android_saf::copy_from_content_uri_to_internal(uri, &temp_name) {
-        Ok(local) => app.load_project_from_path(&local),
-        Err(e) => app
-            .dialogs
-            .show_error(&format!("Failed to open selected project: {e}")),
+    let temp_path = crate::paths::cache_dir().join(&temp_name);
+    let pf = PlatformFile::from_uri(uri);
+    match RlobKit::read_file_to_path(&pf, &temp_path) {
+        Ok(()) => {
+            app.load_project_from_path(&temp_path);
+            let _ = std::fs::remove_file(&temp_path);
+        }
+        Err(e) => app.dialogs.show_error(&format!("Failed to open selected project: {e}")),
     }
 }
 
@@ -1454,14 +1463,14 @@ impl ShortcutsEditorDialog {
                                     "shortcuts_import_{}.json",
                                     chrono::Local::now().format("%Y%m%d_%H%M%S")
                                 );
-                                match crate::android_saf::copy_from_content_uri_to_internal(
-                                    uri, &temp_name,
-                                ) {
-                                    Ok(path) => {
-                                        if let Err(e) = input_mgr.load_shortcuts(&path) {
+                                let temp_path = crate::paths::cache_dir().join(&temp_name);
+                                let pf = PlatformFile::from_uri(uri);
+                                match RlobKit::read_file_to_path(&pf, &temp_path) {
+                                    Ok(()) => {
+                                        if let Err(e) = input_mgr.load_shortcuts(&temp_path) {
                                             eprintln!("Shortcuts import failed: {}", e);
                                         }
-                                        let _ = std::fs::remove_file(path);
+                                        let _ = std::fs::remove_file(&temp_path);
                                     }
                                     Err(e) => {
                                         eprintln!("Shortcuts import failed: {}", e);
@@ -1500,6 +1509,7 @@ impl ShortcutsEditorDialog {
                         extension: Some("json".to_string()),
                         title: Some("Export Shortcuts".to_string()),
                         initial_directory: None,
+                        file_type: None,
                     })
                     .await
                 });
@@ -2272,10 +2282,11 @@ impl ImportAudioDialog {
                                                     .map(|e| format!(".{e}"))
                                                     .unwrap_or_default()
                                             );
-                                            crate::android_saf::copy_from_content_uri_to_internal(
-                                                &uri_str, &dest_name,
-                                            )
-                                            .map_err(|e| e.to_string())
+                                            let temp_path = crate::paths::cache_dir().join(&dest_name);
+                                            let pf = PlatformFile::from_uri(&uri_str);
+                                            RlobKit::read_file_to_path(&pf, &temp_path)
+                                                .map_err(|e| e.to_string())
+                                                .map(|()| temp_path)
                                         }
                                         PickedFile::Path(path) => Ok(path),
                                     };
@@ -2333,10 +2344,10 @@ impl ImportAudioDialog {
                                         chrono::Local::now().format("%H%M%S"),
                                         file_name
                                     );
-                                    crate::android_saf::copy_from_content_uri_to_internal(
-                                        uri_str, &dest_name,
-                                    )
-                                    .map_err(anyhow::Error::from)
+                                    let temp_path = crate::paths::cache_dir().join(&dest_name);
+                                    let pf = PlatformFile::from_uri(uri_str);
+                                    RlobKit::read_file_to_path(&pf, &temp_path)
+                                        .map_err(anyhow::Error::from)
                                 } else {
                                     Ok(path_buf)
                                 }

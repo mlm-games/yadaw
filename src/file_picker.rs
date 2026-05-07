@@ -54,11 +54,8 @@ pub fn write_file_to_uri(_source_path: &PathBuf, _uri: &str) -> Result<(), Strin
     Err("write_file_to_uri not needed on desktop".into())
 }
 
-#[cfg(target_os = "android")]
 pub use rlobkit_dialogs::{PlatformFile, RlobKit};
 
-#[cfg(target_os = "android")]
 pub use rlobkit_dialogs::picker::{OpenDirectoryOptions, OpenFileOptions, SaveFileOptions};
 
-#[cfg(target_os = "android")]
 pub use rlobkit_dialogs::{RlobKitMode, RlobKitType};
