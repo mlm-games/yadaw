@@ -401,7 +401,7 @@ impl TimelineView {
 
     fn draw_grid(&self, painter: &egui::Painter, rect: egui::Rect, _bpm: f32) {
         let ruler_h = 18.0;
-        let visuals = painter.ctx().style().visuals.clone();
+        let visuals = painter.ctx().global_style().visuals.clone();
         let bg = visuals.widgets.noninteractive.bg_fill;
         let grid_fg = visuals.widgets.noninteractive.fg_stroke.color;
         let bar_fg =
@@ -1703,7 +1703,7 @@ impl TimelineView {
                     };
                     if is_midi {
                         let mut beat = self.x_to_beat(response.rect, pos.x);
-                beat = if self.grid_snap > 0.0 && ui.input(|i| i.modifiers.shift) {
+                        beat = if self.grid_snap > 0.0 && ui.input(|i| i.modifiers.shift) {
                             (beat / self.grid_snap as f64).round() * self.grid_snap as f64
                         } else {
                             beat

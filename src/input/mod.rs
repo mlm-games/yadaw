@@ -42,7 +42,7 @@ impl InputManager {
     /// Process input and return triggered actions
     pub fn poll_actions(&mut self, ctx: &Context) -> Vec<AppAction> {
         // Don't process shortcuts when text input has focus (dialogs, BPM field, etc.)
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             if ctx.input(|i| i.key_pressed(Key::Escape)) {
                 return vec![AppAction::Escape];
             }

@@ -24,8 +24,8 @@ yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = fals
 # Audio Backend
 cpal = "0.17.3"
 chrono = { version = "0.4", features = ["serde"] }
-egui = "0.34.1"
-eframe = { version = "0.34.1", features = ["wgpu"] }
+egui = "0.34.2"
+eframe = { version = "0.34.2", features = ["wgpu"] }
 egui-file-dialog = "0.13.0"
 # Utilities
 rtrb = "0.3"
@@ -48,11 +48,11 @@ dissonia = { git = "https://github.com/MLM-Stuff/dissonia", features = [
 symphonia = { version = "0.5", features = ["all"] }
 dashmap = "6.1"
 parking_lot = "0.12"
-rand = "0.10.0"
+rand = "0.10"
 midir = "0.11.1"
 midly = "0.5"
-lru = "0.16"
-rayon = "1.11.0"
+lru = "0.18"
+rayon = "1.12"
 num_cpus = "1.17.0"
 
 # LV2 Plugin Hosting
@@ -62,7 +62,7 @@ log = "0.4"
 clack = "0.1.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
-rlobkit-dialogs = { path = "../rlobkit/rlobkit-dialogs" }
+rlobkit-dialogs = { path = "../rlobkit/rlobkit-dialogs" } #NEED TO CONVERT TO github.com/mlm-games/rlobkit packages
 android_logger = "0.15.1"
 android-activity = { version = "0.6.0", features = ["native-activity"] }
 winit = { version = "0.30.12", default-features = false, features = [
