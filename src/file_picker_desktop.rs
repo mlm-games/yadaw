@@ -49,9 +49,9 @@ pub fn pick_save_file(title: &str, suggested_name: &str, extension: &str) -> cra
         block_on_runtime(async {
             let result = RlobKit::open_file_saver(SaveFileOptions {
                 suggested_name: Some(suggested),
-                extension: None,
+                extension: Some(ext.clone()),
                 file_type: Some(RlobKitType::Custom {
-                    extensions: vec!["wav".to_string(), "flac".to_string(), "ogg".to_string()],
+                    extensions: vec![ext],
                     mime_types: vec![],
                 }),
                 title: Some(title.to_string()),
