@@ -9,7 +9,7 @@ use crate::constants::DEFAULT_MIDI_CLIP_LEN;
 use crate::messages::AudioCommand;
 use crate::model::MidiNote;
 use crate::project::AppState;
-use crate::ui::piano_roll::{PianoRoll, PianoRollAction};
+use crate::ui::piano_roll::{InteractionState, PianoRoll, PianoRollAction};
 
 pub struct PianoRollView {
     pub piano_roll: PianoRoll,
@@ -124,28 +124,36 @@ impl PianoRollView {
                     },
                 );
 
-                if lane_resp.hovered() {
-                    let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
-                    if ui.input(|i| i.modifiers.ctrl) {
-                        let old = self.piano_roll.zoom_x;
-                        self.piano_roll.zoom_x = (self.piano_roll.zoom_x
-                            * (1.0 + scroll_delta.y * 0.01))
-                            .clamp(10.0, 500.0);
-                        if (self.piano_roll.zoom_x - old).abs() > f32::EPSILON
-                            && let Some(pos) = lane_resp.hover_pos()
-                        {
-                            let grid_left = lane_rect.left() + crate::constants::PIANO_KEY_WIDTH;
-                            let cx = (pos.x - grid_left + self.piano_roll.scroll_x) / old;
+                if lane_resp.hovered()
+                    && matches!(self.piano_roll.interaction_state, InteractionState::Idle)
+                {
+                    let touch_active = ui.input(|i| {
+                        i.events
+                            .iter()
+                            .any(|e| matches!(e, egui::Event::Touch { .. }))
+                    });
+                    if !touch_active {
+                        let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
+                        if ui.input(|i| i.modifiers.ctrl) {
+                            let old = self.piano_roll.zoom_x;
+                            self.piano_roll.zoom_x = (self.piano_roll.zoom_x
+                                * (1.0 + scroll_delta.y * 0.01))
+                                .clamp(10.0, 500.0);
+                            if (self.piano_roll.zoom_x - old).abs() > f32::EPSILON
+                                && let Some(pos) = lane_resp.hover_pos()
+                            {
+                                let grid_left =
+                                    lane_rect.left() + crate::constants::PIANO_KEY_WIDTH;
+                                let cx = (pos.x - grid_left + self.piano_roll.scroll_x) / old;
+                                self.piano_roll.scroll_x =
+                                    (cx * self.piano_roll.zoom_x - (pos.x - grid_left)).max(0.0);
+                            }
+                        } else {
                             self.piano_roll.scroll_x =
-                                (cx * self.piano_roll.zoom_x - (pos.x - grid_left)).max(0.0);
+                                (self.piano_roll.scroll_x - scroll_delta.x).max(0.0);
                         }
-                    } else {
-                        self.piano_roll.scroll_x =
-                            (self.piano_roll.scroll_x - scroll_delta.x).max(0.0);
                     }
                 }
-
-                self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
             }
         });
     }
@@ -646,30 +654,23 @@ impl PianoRollView {
         let id_centroid = egui::Id::new(("pr_gesture", id_salt, "centroid"));
         let id_dist = egui::Id::new(("pr_gesture", id_salt, "dist"));
 
-        // Gather touch points inside region only
-        let points: Vec<egui::Pos2> = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|e| {
-                    if let egui::Event::Touch { pos, phase, .. } = e {
-                        match phase {
-                            egui::TouchPhase::Start | egui::TouchPhase::Move => {
-                                if region.contains(*pos) {
-                                    Some(*pos)
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => None,
+        //NOTE: On Android a single frame may contain multiple Event::Touch entries
+        let mut seen: std::collections::HashMap<u64, egui::Pos2> = ctx.input(|i| {
+            let mut map = std::collections::HashMap::new();
+            for e in &i.events {
+                if let egui::Event::Touch { id, pos, phase, .. } = e {
+                    matches!(phase, egui::TouchPhase::Start | egui::TouchPhase::Move).then(|| {
+                        if region.contains(*pos) {
+                            map.insert(id.0, *pos);
                         }
-                    } else {
-                        None
-                    }
-                })
-                .collect()
+                    });
+                }
+            }
+            map
         });
 
-        if points.len() < 2 {
+        // Two-finger pinch/pan requires at least two distinct touch points.
+        if seen.len() < 2 {
             ctx.memory_mut(|m| {
                 m.data.remove::<egui::Pos2>(id_centroid);
                 m.data.remove::<f32>(id_dist);
@@ -677,53 +678,48 @@ impl PianoRollView {
             return;
         }
 
-        if points.len() >= 2 {
-            let centroid = egui::pos2(
-                (points[0].x + points[1].x) * 0.5,
-                (points[0].y + points[1].y) * 0.5,
-            );
-            let dist = (points[0] - points[1]).length();
+        // Pop two arbitrary points for the centroid / distance calculation.
+        let p1 = seen.values().next().copied().unwrap();
+        seen.remove(&seen.keys().next().copied().unwrap());
+        let p2 = seen.values().next().copied().unwrap();
 
-            let (prev_centroid, prev_dist) = ctx.memory(|m| {
-                (
-                    m.data.get_temp::<egui::Pos2>(id_centroid),
-                    m.data.get_temp::<f32>(id_dist),
-                )
-            });
+        let centroid = egui::pos2((p1.x + p2.x) * 0.5, (p1.y + p2.y) * 0.5);
+        let dist = (p1 - p2).length();
 
-            if let (Some(pc), Some(pd)) = (prev_centroid, prev_dist) {
-                // Pan by delta in region space
-                let delta = centroid - pc;
-                self.piano_roll.scroll_x = (self.piano_roll.scroll_x - delta.x).max(0.0);
-                if id_salt == "roll" {
-                    self.piano_roll.scroll_y = (self.piano_roll.scroll_y - delta.y).max(0.0);
-                }
+        let (prev_centroid, prev_dist) = ctx.memory(|m| {
+            (
+                m.data.get_temp::<egui::Pos2>(id_centroid),
+                m.data.get_temp::<f32>(id_dist),
+            )
+        });
 
-                // Pinch zoom horizontally around centroid
-                if pd > 1.0 {
-                    let scale = (dist / pd).clamp(0.5, 2.0);
-                    let old_zoom_x = self.piano_roll.zoom_x;
-                    self.piano_roll.zoom_x = (self.piano_roll.zoom_x * scale).clamp(10.0, 500.0);
-
-                    if (self.piano_roll.zoom_x - old_zoom_x).abs() > f32::EPSILON {
-                        let grid_left = region.left() + crate::constants::PIANO_KEY_WIDTH;
-                        let cx = (centroid.x - grid_left + self.piano_roll.scroll_x) / old_zoom_x;
-                        self.piano_roll.scroll_x =
-                            (cx * self.piano_roll.zoom_x - (centroid.x - grid_left)).max(0.0);
-                    }
-                }
+        if let (Some(pc), Some(pd)) = (prev_centroid, prev_dist) {
+            // Pan by delta in region space
+            let delta = centroid - pc;
+            self.piano_roll.scroll_x = (self.piano_roll.scroll_x - delta.x).max(0.0);
+            if id_salt == "roll" {
+                self.piano_roll.scroll_y = (self.piano_roll.scroll_y - delta.y).max(0.0);
             }
 
-            ctx.memory_mut(|m| {
-                m.data.insert_temp(id_centroid, centroid);
-                m.data.insert_temp(id_dist, dist);
-            });
-        } else {
-            ctx.memory_mut(|m| {
-                m.data.remove::<egui::Pos2>(id_centroid);
-                m.data.remove::<f32>(id_dist);
-            });
+            // Pinch zoom horizontally around centroid/
+            if pd > 1.0 {
+                let scale = (dist / pd).clamp(0.5, 2.0);
+                let old_zoom_x = self.piano_roll.zoom_x;
+                self.piano_roll.zoom_x = (self.piano_roll.zoom_x * scale).clamp(10.0, 500.0);
+
+                if (self.piano_roll.zoom_x - old_zoom_x).abs() > f32::EPSILON {
+                    let grid_left = region.left() + crate::constants::PIANO_KEY_WIDTH;
+                    let cx = (centroid.x - grid_left + self.piano_roll.scroll_x) / old_zoom_x;
+                    self.piano_roll.scroll_x =
+                        (cx * self.piano_roll.zoom_x - (centroid.x - grid_left)).max(0.0);
+                }
+            }
         }
+
+        ctx.memory_mut(|m| {
+            m.data.insert_temp(id_centroid, centroid);
+            m.data.insert_temp(id_dist, dist);
+        });
     }
 
     pub fn copy_selected_notes(

@@ -14,7 +14,7 @@ pub struct PianoRoll {
     pub selected_note_ids: Vec<u64>,
     pub temp_selected_indices: Vec<usize>,
     pub grid_snap: f32,
-    interaction_state: InteractionState,
+    pub(super) interaction_state: InteractionState,
     hover_note: Option<usize>,
     hover_edge: Option<ResizeEdge>,
 }
@@ -37,7 +37,7 @@ impl Default for PianoRoll {
 }
 
 #[derive(Clone)]
-enum InteractionState {
+pub(super) enum InteractionState {
     Idle,
     DraggingNotes {
         note_indices: Vec<usize>,
@@ -681,14 +681,20 @@ impl PianoRoll {
             // Disable scroll while interacting to prevent the canvas drifting under your finger
             let interacting = !matches!(self.interaction_state, InteractionState::Idle);
             if !interacting {
-                let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
-                if ui.input(|i| i.modifiers.ctrl) {
-                    self.zoom_x *= 1.0 + scroll_delta.y * 0.01;
-                    self.zoom_x = self.zoom_x.clamp(10.0, 500.0);
-                } else {
-                    self.scroll_x = (self.scroll_x - scroll_delta.x).max(0.0);
-                    self.scroll_y = (self.scroll_y - scroll_delta.y)
-                        .clamp(0.0, 127.0 * self.zoom_y - available_rect.height());
+                // On touch devices, ignore smooth_scroll_delta to prevent touch-drag
+                // from both interacting with notes AND scrolling the view. Touch pan/zoom
+                // is handled separately via handle_touch_pan_zoom (two-finger gestures).
+                let touch_active = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })));
+                if !touch_active {
+                    let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
+                    if ui.input(|i| i.modifiers.ctrl) {
+                        self.zoom_x *= 1.0 + scroll_delta.y * 0.01;
+                        self.zoom_x = self.zoom_x.clamp(10.0, 500.0);
+                    } else {
+                        self.scroll_x = (self.scroll_x - scroll_delta.x).max(0.0);
+                        self.scroll_y = (self.scroll_y - scroll_delta.y)
+                            .clamp(0.0, 127.0 * self.zoom_y - available_rect.height());
+                    }
                 }
             }
         }

@@ -115,15 +115,15 @@ impl GestureRecognizer {
     fn update_touch_points(&mut self, ctx: &egui::Context) {
         self.touch_points.clear();
 
+        // Use a local map iinstead to deduplicate touch IDs
+        let mut seen: std::collections::HashMap<u64, egui::Pos2> = std::collections::HashMap::new();
+
         ctx.input(|i| {
             for event in &i.events {
                 if let egui::Event::Touch { id, pos, phase, .. } = event {
                     match phase {
                         egui::TouchPhase::Start | egui::TouchPhase::Move => {
-                            self.touch_points.push(TouchPoint {
-                                id: id.0,
-                                pos: *pos,
-                            });
+                            seen.insert(id.0, *pos);
 
                             // Track press start for long-press
                             if *phase == egui::TouchPhase::Start && self.press_start.is_none() {
@@ -147,6 +147,11 @@ impl GestureRecognizer {
                 }
             }
         });
+
+        // Flatten back
+        for (id, pos) in seen {
+            self.touch_points.push(TouchPoint { id, pos });
+        }
     }
 
     fn detect_pinch(&mut self) -> Option<GestureAction> {

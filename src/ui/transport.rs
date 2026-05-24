@@ -39,7 +39,7 @@ impl TransportUI {
         egui::TopBottomPanel::bottom("transport").show(ctx, |ui| {
             egui::ScrollArea::horizontal()
                 .id_salt("tbp_tool_strip")
-                .scroll_source(ScrollSource::ALL)
+                .scroll_source(ScrollSource::MOUSE_WHEEL)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         // Transport buttons
