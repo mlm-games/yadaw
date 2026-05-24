@@ -65,10 +65,9 @@ Exports to WAV only.
 
 ## Android Notes
 
-- Use internal storage folders for saving (access is limited)
 - Touch gestures work for zoom/pan
-- Connect MIDI controllers via USB for better control
-- Some features are limited compared to desktop
+- Can connect MIDI controllers via USB (adapters)
+- Some features are limited compared to desktop (plugin manager path hanlding, for example, doesn't work on android)
 
 ## Troubleshooting
 
