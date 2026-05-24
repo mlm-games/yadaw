@@ -296,9 +296,6 @@ impl TimelineView {
             self.timeline_interaction = None;
         }
         self.last_pointer_pos = response.hover_pos().or(self.last_pointer_pos);
-        if ui.ctx().input(|i| i.pointer.any_released()) {
-            self.last_pointer_pos = None;
-        }
 
         // Draw the grid and horizontal ruler
         let rect = response.rect;
@@ -397,6 +394,10 @@ impl TimelineView {
         }
 
         self.handle_timeline_interaction(&response, &ruler_resp, ui, app);
+
+        if ui.ctx().input(|i| i.pointer.any_released()) {
+            self.last_pointer_pos = None;
+        }
     }
 
     fn draw_grid(&self, painter: &egui::Painter, rect: egui::Rect, _bpm: f32) {
@@ -1287,7 +1288,7 @@ impl TimelineView {
         // END DRAG
         let pointer_released = ui.ctx().input(|i| i.pointer.any_released());
         if pointer_released {
-            if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()) {
+            if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()).or(self.last_pointer_pos) {
                 if let Some(interaction) = self.timeline_interaction.clone() {
                     match interaction {
                         TimelineInteraction::DragClip {
@@ -2195,7 +2196,7 @@ impl TimelineView {
             ..
         }) = &self.timeline_interaction
         {
-            if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+            if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()).or(self.last_pointer_pos) {
                 let current = self.x_to_beat(rect, pos.x);
                 let mut delta = current - *start_drag_beat;
                 let ref_original_start = clip_ids_and_starts
