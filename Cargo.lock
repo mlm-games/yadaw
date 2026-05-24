@@ -1285,12 +1285,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "dunce"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
-
-[[package]]
 name = "ecolor"
 version = "0.34.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1352,19 +1346,6 @@ dependencies = [
  "profiling",
  "smallvec",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "egui-file-dialog"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b530b58f428bcffb58281ad1c3a59ee559ffd2354aa54d5bf1a2ef418fdcebb3"
-dependencies = [
- "directories",
- "dunce",
- "egui",
- "serde",
- "sysinfo",
 ]
 
 [[package]]
@@ -2993,16 +2974,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "objc2-io-kit"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
-dependencies = [
- "libc",
- "objc2-core-foundation",
-]
-
-[[package]]
 name = "objc2-io-surface"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4302,18 +4273,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "sysinfo"
-version = "0.38.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ab6a2f8bfe508deb3c6406578252e491d299cbbf3bc0529ecc3313aee4a52f"
-dependencies = [
- "libc",
- "objc2-core-foundation",
- "objc2-io-kit",
- "windows",
 ]
 
 [[package]]
@@ -5793,7 +5752,6 @@ dependencies = [
  "dissonia",
  "eframe",
  "egui",
- "egui-file-dialog",
  "env_logger",
  "glob",
  "hound",

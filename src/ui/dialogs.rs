@@ -1,24 +1,14 @@
 use std::path::{Path, PathBuf};
 
+use crate::file_picker::{PickedFile, Picker};
 #[cfg(target_os = "android")]
 use crate::file_picker::{PlatformFile, RlobKit};
-use crate::file_picker::{
-    PickedFile, Picker,
-    OpenFileOptions, OpenDirectoryOptions, SaveFileOptions,
-    RlobKitMode, RlobKitType,
-};
-
-#[cfg(not(target_os = "android"))]
-use egui_file_dialog::FileDialog;
 
 use serde::{Deserialize, Serialize};
 
 use super::*;
 use crate::audio_export::ExportFormat;
-use crate::constants::{
-    AUDIO_IMPORT_EXTENSIONS, EXPORT_EXTENSIONS, PROJECT_ALT_EXTENSION, PROJECT_EXTENSION,
-    is_audio_extension,
-};
+use crate::constants::{PROJECT_ALT_EXTENSION, PROJECT_EXTENSION};
 use crate::error::UserNotification;
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
@@ -29,14 +19,6 @@ use crate::plugin::categorize_plugin;
 use crate::ui::theme;
 use yadaw_plugin_api::{BackendKind, HostConfig};
 use yadaw_plugin_host::HostFacade;
-
-#[cfg(target_os = "android")]
-fn block_on_android<T>(future: impl std::future::Future<Output = T>) -> Result<T, String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .map_err(|e| format!("Failed to create async runtime: {e}"))?;
-    Ok(runtime.block_on(future))
-}
 
 #[cfg(target_os = "android")]
 fn load_project_from_uri(app: &mut super::app::YadawApp, uri: &str) {
@@ -51,7 +33,9 @@ fn load_project_from_uri(app: &mut super::app::YadawApp, uri: &str) {
             app.load_project_from_path(&temp_path);
             let _ = std::fs::remove_file(&temp_path);
         }
-        Err(e) => app.dialogs.show_error(&format!("Failed to open selected project: {e}")),
+        Err(e) => app
+            .dialogs
+            .show_error(&format!("Failed to open selected project: {e}")),
     }
 }
 
@@ -1264,14 +1248,8 @@ pub struct ShortcutsEditorDialog {
     filter_context: Option<ActionContext>,
     search_query: String,
 
-    #[cfg(not(target_os = "android"))]
-    import_fd: FileDialog,
-    #[cfg(not(target_os = "android"))]
-    export_fd: FileDialog,
-    #[cfg(not(target_os = "android"))]
-    import_opened: bool,
-    #[cfg(not(target_os = "android"))]
-    export_opened: bool,
+    import_picker: Option<Picker<PickedFile>>,
+    export_picker: Option<Picker<PickedFile>>,
 }
 
 impl ShortcutsEditorDialog {
@@ -1282,20 +1260,8 @@ impl ShortcutsEditorDialog {
             capture_buffer: None,
             filter_context: None,
             search_query: String::new(),
-            #[cfg(not(target_os = "android"))]
-            import_fd: FileDialog::new()
-                .title("Import Shortcuts")
-                .add_file_filter_extensions("JSON", ["json"].to_vec())
-                .add_file_filter_extensions("All Files", ["*"].to_vec()),
-            #[cfg(not(target_os = "android"))]
-            export_fd: FileDialog::new()
-                .title("Export Shortcuts")
-                .add_file_filter_extensions("JSON", ["json"].to_vec())
-                .allow_file_overwrite(true),
-            #[cfg(not(target_os = "android"))]
-            import_opened: false,
-            #[cfg(not(target_os = "android"))]
-            export_opened: false,
+            import_picker: None,
+            export_picker: None,
         }
     }
 
@@ -1315,25 +1281,77 @@ impl ShortcutsEditorDialog {
 
         self.open = open;
 
-        #[cfg(not(target_os = "android"))]
-        if self.import_opened {
-            self.import_fd.update(ctx);
-            if let Some(path) = self.import_fd.take_picked() {
-                if let Err(e) = input_mgr.load_shortcuts(&path) {
-                    //TODO: app.dialogs.show_warning(&format!("Failed to import: {}", e));
-                    eprintln!("Shortcuts import failed: {}", e);
+        if let Some(mut picker) = self.import_picker.take() {
+            if let Some(result) = picker.poll() {
+                match result {
+                    Ok(Some(PickedFile::Path(path))) => {
+                        if let Err(e) = input_mgr.load_shortcuts(&path) {
+                            eprintln!("Shortcuts import failed: {}", e);
+                        }
+                    }
+                    Ok(Some(PickedFile::Uri(_uri))) => {
+                        #[cfg(target_os = "android")]
+                        {
+                            let temp_name = format!(
+                                "shortcuts_import_{}.json",
+                                chrono::Local::now().format("%Y%m%d_%H%M%S")
+                            );
+                            let temp_path = crate::paths::cache_dir().join(&temp_name);
+                            let pf = PlatformFile::from_uri(_uri);
+                            match RlobKit::read_file_to_path(&pf, &temp_path) {
+                                Ok(()) => {
+                                    if let Err(e) = input_mgr.load_shortcuts(&temp_path) {
+                                        eprintln!("Shortcuts import failed: {}", e);
+                                    }
+                                    let _ = std::fs::remove_file(&temp_path);
+                                }
+                                Err(e) => eprintln!("Shortcuts import failed: {}", e),
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("Shortcuts import failed: {}", e),
                 }
-                self.import_opened = false;
+            } else {
+                self.import_picker = Some(picker);
             }
         }
-        #[cfg(not(target_os = "android"))]
-        if self.export_opened {
-            self.export_fd.update(ctx);
-            if let Some(path) = self.export_fd.take_picked() {
-                if let Err(e) = input_mgr.save_shortcuts(&path) {
-                    eprintln!("Shortcuts export failed: {}", e);
+        if let Some(mut picker) = self.export_picker.take() {
+            if let Some(result) = picker.poll() {
+                match result {
+                    Ok(Some(PickedFile::Path(path))) => {
+                        if let Err(e) = input_mgr.save_shortcuts(&path) {
+                            eprintln!("Shortcuts export failed: {}", e);
+                        }
+                    }
+                    Ok(Some(PickedFile::Uri(_uri))) => {
+                        #[cfg(target_os = "android")]
+                        {
+                            let temp_path = crate::paths::cache_dir().join(format!(
+                                "shortcuts_export_{}.json",
+                                chrono::Local::now().format("%Y%m%d_%H%M%S")
+                            ));
+                            match input_mgr.save_shortcuts(&temp_path) {
+                                Ok(()) => {
+                                    let target = PlatformFile::from_uri(_uri);
+                                    if let Err(e) =
+                                        RlobKit::write_file_from_path(&target, &temp_path)
+                                    {
+                                        eprintln!("Shortcuts export failed: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Shortcuts export failed: {}", e);
+                                }
+                            }
+                            let _ = std::fs::remove_file(temp_path);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("Shortcuts export failed: {}", e),
                 }
-                self.export_opened = false;
+            } else {
+                self.export_picker = Some(picker);
             }
         }
     }
@@ -1434,123 +1452,19 @@ impl ShortcutsEditorDialog {
                 *input_mgr.shortcuts_mut() = crate::input::shortcuts::ShortcutRegistry::default();
             }
 
-            #[cfg(not(target_os = "android"))]
             if ui.button("Import...").clicked() {
-                self.import_fd.pick_file();
-                self.import_opened = true;
-            }
-            #[cfg(target_os = "android")]
-            if ui.button("Import...").clicked() {
-                log::info!("yadaw: shortcuts import button clicked");
-                let picker_result = block_on_android(async {
-                    RlobKit::open_file_picker(OpenFileOptions {
-                        file_type: RlobKitType::Custom {
-                            extensions: vec!["json".to_string()],
-                            mime_types: vec!["application/json".to_string(), "*/*".to_string()],
-                        },
-                        mode: RlobKitMode::Single,
-                        title: Some("Import Shortcuts".to_string()),
-                        initial_directory: None,
-                    })
-                    .await
-                });
-
-                match picker_result {
-                    Ok(Ok(Some(files))) => {
-                        if let Some(file) = files.into_iter().next() {
-                            if let Some(uri) = file.uri() {
-                                let temp_name = format!(
-                                    "shortcuts_import_{}.json",
-                                    chrono::Local::now().format("%Y%m%d_%H%M%S")
-                                );
-                                let temp_path = crate::paths::cache_dir().join(&temp_name);
-                                let pf = PlatformFile::from_uri(uri);
-                                match RlobKit::read_file_to_path(&pf, &temp_path) {
-                                    Ok(()) => {
-                                        if let Err(e) = input_mgr.load_shortcuts(&temp_path) {
-                                            eprintln!("Shortcuts import failed: {}", e);
-                                        }
-                                        let _ = std::fs::remove_file(&temp_path);
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Shortcuts import failed: {}", e);
-                                    }
-                                }
-                            } else if let Some(path) = file.path() {
-                                if let Err(e) = input_mgr.load_shortcuts(path) {
-                                    eprintln!("Shortcuts import failed: {}", e);
-                                }
-                            } else {
-                                eprintln!("Shortcuts import picker returned an empty selection");
-                            }
-                        }
-                    }
-                    Ok(Ok(None)) => {}
-                    Ok(Err(e)) => {
-                        eprintln!("Shortcuts import picker failed: {}", e);
-                    }
-                    Err(e) => {
-                        eprintln!("Shortcuts import picker failed: {}", e);
-                    }
-                }
+                self.import_picker = Some(crate::file_picker::pick_open_file(
+                    "Import Shortcuts",
+                    &["json"],
+                ));
             }
 
-            #[cfg(not(target_os = "android"))]
             if ui.button("Export...").clicked() {
-                self.export_fd.save_file();
-                self.export_opened = true;
-            }
-            #[cfg(target_os = "android")]
-            if ui.button("Export...").clicked() {
-                log::info!("yadaw: shortcuts export button clicked");
-                let picker_result = block_on_android(async {
-                    RlobKit::open_file_saver(SaveFileOptions {
-                        suggested_name: Some("shortcuts.json".to_string()),
-                        extension: Some("json".to_string()),
-                        title: Some("Export Shortcuts".to_string()),
-                        initial_directory: None,
-                        file_type: None,
-                    })
-                    .await
-                });
-
-                match picker_result {
-                    Ok(Ok(Some(file))) => {
-                        if let Some(uri) = file.uri() {
-                            let temp_path = crate::paths::cache_dir().join(format!(
-                                "shortcuts_export_{}.json",
-                                chrono::Local::now().format("%Y%m%d_%H%M%S")
-                            ));
-                            match input_mgr.save_shortcuts(&temp_path) {
-                                Ok(()) => {
-                                    let target = PlatformFile::from_uri(uri);
-                                    if let Err(e) =
-                                        RlobKit::write_file_from_path(&target, &temp_path)
-                                    {
-                                        eprintln!("Shortcuts export failed: {}", e);
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("Shortcuts export failed: {}", e);
-                                }
-                            }
-                            let _ = std::fs::remove_file(temp_path);
-                        } else if let Some(path) = file.path() {
-                            if let Err(e) = input_mgr.save_shortcuts(path) {
-                                eprintln!("Shortcuts export failed: {}", e);
-                            }
-                        } else {
-                            eprintln!("Shortcuts export picker returned an empty destination");
-                        }
-                    }
-                    Ok(Ok(None)) => {}
-                    Ok(Err(e)) => {
-                        eprintln!("Shortcuts export picker failed: {}", e);
-                    }
-                    Err(e) => {
-                        eprintln!("Shortcuts export picker failed: {}", e);
-                    }
-                }
+                self.export_picker = Some(crate::file_picker::pick_save_file(
+                    "Export Shortcuts",
+                    "shortcuts.json",
+                    "json",
+                ));
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2014,16 +1928,10 @@ pub struct PluginManagerDialog {
     closed: bool,
     scan_paths: Vec<String>,
     new_path: String,
-    #[cfg(not(target_os = "android"))]
-    browse_fd: FileDialog,
-    #[cfg(not(target_os = "android"))]
-    browse_opened: bool,
+    browse_picker: Option<Picker<PickedFile>>,
 }
 impl PluginManagerDialog {
     pub fn new() -> Self {
-        #[cfg(not(target_os = "android"))]
-        let browse_fd = FileDialog::new().title("Select Plugin Directory");
-
         let scan_paths = crate::config::Config::load()
             .map(|c| {
                 c.paths
@@ -2046,10 +1954,7 @@ impl PluginManagerDialog {
             closed: false,
             scan_paths,
             new_path: String::new(),
-            #[cfg(not(target_os = "android"))]
-            browse_fd,
-            #[cfg(not(target_os = "android"))]
-            browse_opened: false,
+            browse_picker: None,
         }
     }
 
@@ -2092,43 +1997,10 @@ impl PluginManagerDialog {
                         self.new_path.clear();
                     }
 
-                    #[cfg(not(target_os = "android"))]
                     if ui.button("Browse...").clicked() {
-                        self.browse_fd.pick_directory();
-                        self.browse_opened = true;
-                    }
-
-                    #[cfg(target_os = "android")]
-                    if ui.button("Browse...").clicked() {
-                        log::info!("yadaw: plugin manager browse button clicked");
-                        let picker_result = block_on_android(async {
-                            RlobKit::open_directory_picker(OpenDirectoryOptions {
-                                title: Some("Select Plugin Directory".to_string()),
-                                initial_directory: None,
-                            })
-                            .await
-                        });
-
-                        match picker_result {
-                            Ok(Ok(Some(directory))) => {
-                                let selected = directory.path().to_string_lossy().to_string();
-                                if selected.starts_with("content://") {
-                                    app.dialogs.show_warning(
-                                        "Selected directory is a content URI; plugin scan currently requires a filesystem path. Enter the path manually.",
-                                    );
-                                } else {
-                                    self.scan_paths.push(selected);
-                                }
-                            }
-                            Ok(Ok(None)) => {}
-                            Ok(Err(e)) => {
-                                app.dialogs
-                                    .show_warning(&format!("Directory picker failed: {}", e));
-                            }
-                            Err(e) => {
-                                app.dialogs.show_warning(&e);
-                            }
-                        }
+                        self.browse_picker = Some(crate::file_picker::pick_directory(
+                            "Select Plugin Directory",
+                        ));
                     }
                 });
 
@@ -2173,12 +2045,37 @@ impl PluginManagerDialog {
                 }
             });
 
-        #[cfg(not(target_os = "android"))]
-        if self.browse_opened {
-            self.browse_fd.update(ctx);
-            if let Some(path) = self.browse_fd.take_picked() {
-                self.scan_paths.push(path.to_string_lossy().to_string());
-                self.browse_opened = false;
+        if let Some(mut picker) = self.browse_picker.take() {
+            if let Some(result) = picker.poll() {
+                match result {
+                    Ok(Some(PickedFile::Path(path))) => {
+                        let selected = path.to_string_lossy().to_string();
+                        if selected.starts_with("content://") {
+                            app.dialogs.show_warning(
+                                "Selected directory is a content URI; plugin scan currently requires a filesystem path. Enter the path manually.",
+                            );
+                        } else {
+                            self.scan_paths.push(selected);
+                        }
+                    }
+                    Ok(Some(PickedFile::Uri(uri))) => {
+                        let selected = uri.to_string();
+                        if selected.starts_with("content://") {
+                            app.dialogs.show_warning(
+                                "Selected directory is a content URI; plugin scan currently requires a filesystem path. Enter the path manually.",
+                            );
+                        } else {
+                            self.scan_paths.push(selected);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        app.dialogs
+                            .show_warning(&format!("Directory picker failed: {e}"));
+                    }
+                }
+            } else {
+                self.browse_picker = Some(picker);
             }
         }
 
@@ -2193,37 +2090,20 @@ impl PluginManagerDialog {
 }
 
 pub struct ImportAudioDialog {
-    #[cfg(not(target_os = "android"))]
-    fd: FileDialog,
-    opened: bool,
-    #[cfg(target_os = "android")]
     picker_rx: Option<Picker<Vec<PickedFile>>>,
+    opened: bool,
 }
 
 impl ImportAudioDialog {
     pub fn new() -> Self {
-        #[cfg(not(target_os = "android"))]
-        {
-            let fd = FileDialog::new()
-                .title("Import Audio")
-                .add_file_filter_extensions("Audio/MIDI Files", AUDIO_IMPORT_EXTENSIONS.to_vec())
-                .add_file_filter_extensions("All Files", ["*"].to_vec());
-
-            return Self { fd, opened: false };
-        }
-
-        #[cfg(target_os = "android")]
-        {
-            Self {
-                opened: false,
-                picker_rx: None,
-            }
+        Self {
+            opened: false,
+            picker_rx: None,
         }
     }
 
     pub fn open(&mut self) {
-        #[cfg(not(target_os = "android"))]
-        self.fd.pick_multiple();
+        self.picker_rx = Some(crate::file_picker::pick_multiple_audio());
         self.opened = true;
     }
 
@@ -2232,28 +2112,26 @@ impl ImportAudioDialog {
             return;
         }
 
-        #[cfg(target_os = "android")]
         let _ = ctx;
 
-        #[cfg(target_os = "android")]
-        {
-            if self.picker_rx.is_none() {
-                log::info!("yadaw: import audio picker requested");
-                self.picker_rx = Some(crate::file_picker::pick_multiple_audio());
-            }
+        if self.picker_rx.is_none() {
+            self.picker_rx = Some(crate::file_picker::pick_multiple_audio());
+        }
 
-            if let Some(mut picker) = self.picker_rx.take() {
-                if let Some(result) = picker.poll() {
-                    match result {
-                        Ok(Some(files)) => {
-                            app.push_undo();
-                            let bpm = app.audio_state.bpm.load();
+        if let Some(mut picker) = self.picker_rx.take() {
+            if let Some(result) = picker.poll() {
+                match result {
+                    Ok(Some(files)) => {
+                        app.push_undo();
+                        let bpm = app.audio_state.bpm.load();
 
-                            for file in files {
-                                let processing_path_result: Result<std::path::PathBuf, String> =
-                                    match file {
-                                        PickedFile::Uri(uri_str) => {
-                                            let ext_from_uri = uri_str
+                        for file in files {
+                            let processing_path_result: Result<std::path::PathBuf, String> =
+                                match file {
+                                    PickedFile::Uri(_uri_str) => {
+                                        #[cfg(target_os = "android")]
+                                        {
+                                            let ext_from_uri = _uri_str
                                                 .rsplit('.')
                                                 .next()
                                                 .map(|s| s.to_ascii_lowercase())
@@ -2272,7 +2150,7 @@ impl ImportAudioDialog {
                                                 });
                                             let ext = ext_from_uri.or_else(|| {
                                                 crate::android_saf::guess_extension_for_content_uri(
-                                                    &uri_str,
+                                                    &_uri_str,
                                                 )
                                             });
                                             let dest_name = format!(
@@ -2282,97 +2160,45 @@ impl ImportAudioDialog {
                                                     .map(|e| format!(".{e}"))
                                                     .unwrap_or_default()
                                             );
-                                            let temp_path = crate::paths::cache_dir().join(&dest_name);
-                                            let pf = PlatformFile::from_uri(&uri_str);
+                                            let temp_path =
+                                                crate::paths::cache_dir().join(&dest_name);
+                                            let pf = PlatformFile::from_uri(_uri_str);
                                             RlobKit::read_file_to_path(&pf, &temp_path)
                                                 .map_err(|e| e.to_string())
                                                 .map(|()| temp_path)
                                         }
-                                        PickedFile::Path(path) => Ok(path),
-                                    };
+                                        #[cfg(not(target_os = "android"))]
+                                        {
+                                            Err("Unexpected URI on non-Android platform".into())
+                                        }
+                                    }
+                                    PickedFile::Path(path) => Ok(path),
+                                };
 
-                                match processing_path_result {
-                                    Ok(path) => {
-                                        self.import_file(&path, app, bpm as f64);
-                                    }
-                                    Err(e) => {
-                                        app.dialogs
-                                            .show_error(&format!("Failed to import file: {}", e));
-                                    }
+                            match processing_path_result {
+                                Ok(path) => {
+                                    self.import_file(&path, app, bpm as f64);
+                                }
+                                Err(e) => {
+                                    app.dialogs
+                                        .show_error(&format!("Failed to import file: {}", e));
                                 }
                             }
+                        }
 
-                            self.opened = false;
-                        }
-                        Ok(None) => {
-                            self.opened = false;
-                        }
-                        Err(e) => {
-                            app.dialogs
-                                .show_error(&format!("Import picker failed: {}", e));
-                            self.opened = false;
-                        }
+                        self.opened = false;
                     }
-                } else {
-                    self.picker_rx = Some(picker);
-                }
-            }
-
-            return;
-        }
-
-        #[cfg(not(target_os = "android"))]
-        {
-            self.fd.update(ctx);
-
-            if let Some(picked_paths) = self.fd.take_picked_multiple() {
-                app.push_undo();
-                let bpm = app.audio_state.bpm.load();
-
-                for path_buf in picked_paths {
-                    let processing_path_result: Result<std::path::PathBuf, anyhow::Error> = {
-                        #[cfg(target_os = "android")]
-                        {
-                            if let Some(uri_str) = path_buf.to_str() {
-                                if uri_str.starts_with("content://") {
-                                    let file_name = path_buf
-                                        .file_name()
-                                        .unwrap_or_else(|| std::ffi::OsStr::new("imported_audio"))
-                                        .to_string_lossy();
-                                    let dest_name = format!(
-                                        "import_{}_{}",
-                                        chrono::Local::now().format("%H%M%S"),
-                                        file_name
-                                    );
-                                    let temp_path = crate::paths::cache_dir().join(&dest_name);
-                                    let pf = PlatformFile::from_uri(uri_str);
-                                    RlobKit::read_file_to_path(&pf, &temp_path)
-                                        .map_err(anyhow::Error::from)
-                                } else {
-                                    Ok(path_buf)
-                                }
-                            } else {
-                                Ok(path_buf) // Non-unicode path
-                            }
-                        }
-                        #[cfg(not(target_os = "android"))]
-                        {
-                            Ok(path_buf)
-                        }
-                    };
-
-                    match processing_path_result {
-                        Ok(path) => {
-                            self.import_file(&path, app, bpm as f64);
-                        }
-                        Err(e) => {
-                            app.dialogs
-                                .show_error(&format!("Failed to import file: {}", e));
-                        }
+                    Ok(None) => {
+                        self.opened = false;
+                    }
+                    Err(e) => {
+                        app.dialogs
+                            .show_error(&format!("Import picker failed: {}", e));
+                        self.opened = false;
                     }
                 }
-
-                self.opened = false;
+            } else {
+                self.picker_rx = Some(picker);
             }
         }
     }

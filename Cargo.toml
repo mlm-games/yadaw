@@ -26,7 +26,6 @@ cpal = "0.17.3"
 chrono = { version = "0.4", features = ["serde"] }
 egui = "0.34.2"
 eframe = { version = "0.34.2", features = ["wgpu"] }
-egui-file-dialog = "0.13.0"
 # Utilities
 rtrb = "0.3"
 crossbeam-channel = "0.5"
@@ -74,7 +73,6 @@ tokio = { version = "1", features = ["rt"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 winit = "0.30.12"
-egui-file-dialog = "0.13"
 rlobkit-dialogs = { path = "../rlobkit/rlobkit-dialogs" }
 tokio = { version = "1", features = ["rt"] }
 
