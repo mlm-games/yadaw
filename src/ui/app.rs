@@ -2036,6 +2036,52 @@ impl eframe::App for YadawApp {
             self.handle_action(action);
         }
 
+        let dropped_files: Vec<egui::DroppedFile> = ctx.input(|i| i.raw.dropped_files.clone());
+        for dropped in &dropped_files {
+            if let Some(path) = &dropped.path {
+                let extension = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|s| s.to_lowercase());
+
+                log::info!("Dropped file: {:?} (ext: {:?})", path, extension);
+
+                match extension.as_deref() {
+                    Some("mid") | Some("midi") => {
+                        self.import_midi_file_to_new_track(path);
+                    }
+                    Some("yadaw") | Some("ydw") => match std::env::current_exe() {
+                        Ok(exe) => match std::process::Command::new(&exe).arg(path).spawn() {
+                            Ok(_) => {
+                                log::info!("Launched new YADAW instance for project: {:?}", path);
+                            }
+                            Err(e) => {
+                                log::error!("Failed to launch new YADAW instance: {}", e);
+                                self.dialogs.show_error(&format!(
+                                    "Failed to open project in new window: {}",
+                                    e
+                                ));
+                            }
+                        },
+                        Err(e) => {
+                            log::error!("Failed to get current executable path: {}", e);
+                        }
+                    },
+                    Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a")
+                    | Some("aac") => {
+                        self.import_audio_file_to_new_track(path);
+                    }
+                    _ => {
+                        log::warn!("Unknown file type dropped: {:?}", path);
+                        self.dialogs.show_warning(&format!(
+                            "Cannot open dropped file: unknown type '{}'",
+                            extension.unwrap_or_default()
+                        ));
+                    }
+                }
+            }
+        }
+
         let mut menu_bar = std::mem::take(&mut self.menu_bar);
         menu_bar.show(ctx, self);
         self.menu_bar = menu_bar;
