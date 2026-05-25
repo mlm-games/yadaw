@@ -35,7 +35,7 @@ env:
   ANDROID_NDK_VERSION: "28.2.13676358"
   CARGO_RAPK_PAGE_SIZE_KB: "16"
   ANDROID_TARGET: "aarch64-linux-android"
-  CARGO_RAPK_VERSION: "0.15.1"
+  CARGO_RAPK_VERSION: "0.15.3"
 
 jobs:
   prepare-version:
