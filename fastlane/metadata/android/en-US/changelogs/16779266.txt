@@ -1,0 +1,7 @@
+- Android file picker improvements
+- Windows/Mac/Linux X11 drag-drop support
+- android: release last pointer pos on release (fix timeline drag)
+- fix android egui drag issue
+- misc file picker fixes
+- save 1
+- rlobkit works with a lot of bloat, needs to be handled better
