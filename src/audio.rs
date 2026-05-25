@@ -315,11 +315,11 @@ pub fn run_audio_thread(
             if let Ok(input_stream) = input_device.build_input_stream(
                 &input_config.config(),
                 input_callback,
-                |err| eprintln!("Input stream error: {}", err),
+                |err| log::error!("Input stream error: {}", err),
                 None,
             ) {
                 if let Err(e) = input_stream.play() {
-                    eprintln!("Failed to play input stream: {}", e);
+                    log::error!("Failed to play input stream: {}", e);
                 }
                 std::thread::park();
             }
@@ -498,7 +498,7 @@ pub fn run_audio_thread(
         .build_output_stream(
             &config.into(),
             audio_callback,
-            |err| eprintln!("Audio stream error: {}", err),
+            |err| log::error!("Audio stream error: {}", err),
             None,
         )
         .expect("Failed to create audio stream");
@@ -625,9 +625,10 @@ impl AudioEngine {
                         proc.plugin_order.push(plugin_id);
                     }
                     Err(e) => {
-                        eprintln!(
+                        log::error!(
                             "Offline Render: Failed to instantiate plugin {}: {}",
-                            plugin_snapshot.uri, e
+                            plugin_snapshot.uri,
+                            e
                         );
                         // Create a disabled placeholder to avoid breaking the chain
                         let placeholder = PluginProcessorUnified {
@@ -785,7 +786,7 @@ impl AudioEngine {
                     }
                     Err(e) => {
                         let msg = format!("Failed to instantiate plugin {}: {}", uri, e);
-                        eprintln!("{}", msg);
+                        log::error!("{}", msg);
                         let _ = self.updates.try_send(UIUpdate::Error(msg));
                     }
                 }
@@ -2246,11 +2247,11 @@ fn debug_print_midi_events(uri: &str, events: &[(u8, u8, u8, i64)]) {
         return;
     }
     if events.is_empty() {
-        println!("[LV2][{}] MIDI: none this block", uri);
+        log::debug!("[LV2][{}] MIDI: none this block", uri);
         return;
     }
     let show: Vec<_> = events.iter().take(8).copied().collect();
-    println!(
+    log::debug!(
         "[LV2][{}] MIDI: {} events (showing {}): {:?}",
         uri,
         events.len(),
@@ -2268,7 +2269,7 @@ fn debug_print_output_peak(uri: &str, left: &[f32], right: &[f32]) {
     }
     let lp = left.iter().fold(0.0_f32, |a, &s| a.max(s.abs()));
     let rp = right.iter().fold(0.0_f32, |a, &s| a.max(s.abs()));
-    println!("[LV2][{}] OUT peak: L={:.6} R={:.6}", uri, lp, rp);
+    log::debug!("[LV2][{}] OUT peak: L={:.6} R={:.6}", uri, lp, rp);
 }
 
 impl Drop for AudioEngine {

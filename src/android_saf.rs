@@ -1,5 +1,5 @@
 #![cfg(target_os = "android")]
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::jint;
 use jni::{JNIEnv, JavaVM};
@@ -38,7 +38,9 @@ fn map_jni_error(env: &mut JNIEnv<'_>, stage: &str, error: jni::errors::Error) -
                         let rendered_jstr = JString::from(obj);
                         match env.get_string(&rendered_jstr) {
                             Ok(value) => anyhow!("{stage}: {}", value.to_string_lossy()),
-                            Err(err) => anyhow!("{stage}: failed to decode throwable string: {err}"),
+                            Err(err) => {
+                                anyhow!("{stage}: failed to decode throwable string: {err}")
+                            }
                         }
                     }
                     Ok(_) => anyhow!("{stage}: toString returned null"),
@@ -56,10 +58,13 @@ where
     F: for<'a> FnOnce(&mut JNIEnv<'a>, JObject<'a>) -> Result<R>,
 {
     let ctx = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|_| anyhow!("VM not available"))?;
+    let vm =
+        unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|_| anyhow!("VM not available"))?;
     let mut env = vm.attach_current_thread()?;
     let raw_context = unsafe { JObject::from_raw(ctx.context().cast()) };
-    let context = env.new_local_ref(&raw_context).map_err(|e| anyhow!("Failed to create local ref: {e}"))?;
+    let context = env
+        .new_local_ref(&raw_context)
+        .map_err(|e| anyhow!("Failed to create local ref: {e}"))?;
     std::mem::forget(raw_context);
     f(&mut env, context)
 }
@@ -67,19 +72,36 @@ where
 pub fn guess_extension_for_content_uri(content_uri: &str) -> Option<String> {
     with_env(|env, context| {
         let resolver = env
-            .call_method(&context, "getContentResolver", "()Landroid/content/ContentResolver;", &[])?
+            .call_method(
+                &context,
+                "getContentResolver",
+                "()Landroid/content/ContentResolver;",
+                &[],
+            )?
             .l()?;
 
-        let juri_class: JClass = env.find_class("android/net/Uri").map_err(|e| map_jni_error(env, "find_class(Uri)", e))?;
+        let juri_class: JClass = env
+            .find_class("android/net/Uri")
+            .map_err(|e| map_jni_error(env, "find_class(Uri)", e))?;
         let jstr: JString = env.new_string(content_uri)?;
         let juri = env
-            .call_static_method(juri_class, "parse", "(Ljava/lang/String;)Landroid/net/Uri;", &[JValue::Object(&jstr.into())])
+            .call_static_method(
+                juri_class,
+                "parse",
+                "(Ljava/lang/String;)Landroid/net/Uri;",
+                &[JValue::Object(&jstr.into())],
+            )
             .map_err(|e| map_jni_error(env, "Uri.parse", e))?
             .l()
             .map_err(|e| anyhow!("Uri.parse returned invalid: {e}"))?;
 
         let mime_obj = env
-            .call_method(&resolver, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", &[JValue::Object(&juri)])
+            .call_method(
+                &resolver,
+                "getType",
+                "(Landroid/net/Uri;)Ljava/lang/String;",
+                &[JValue::Object(&juri)],
+            )
             .map_err(|e| map_jni_error(env, "ContentResolver.getType", e))?
             .l()
             .map_err(|e| anyhow!("getType returned invalid: {e}"))?;
@@ -88,7 +110,13 @@ pub fn guess_extension_for_content_uri(content_uri: &str) -> Option<String> {
             return Ok(None);
         }
 
-        let mime = env.get_string(&JString::from(mime_obj)).map_err(|e| anyhow!("Failed to decode MIME: {e}"))?.to_string_lossy().to_lowercase();
+        let mime = env
+            .get_string(&JString::from(mime_obj))
+            .map_err(|e| anyhow!("Failed to decode MIME: {e}"))?
+            .to_string_lossy()
+            .to_lowercase();
         Ok(extension_from_mime(&mime).map(str::to_owned))
-    }).ok().flatten()
+    })
+    .ok()
+    .flatten()
 }

@@ -10,12 +10,12 @@ use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
 use crate::model::clip::MidiPattern;
 use crate::model::track::TrackType;
-use crate::model::{AudioClip, MidiClip, MidiNote, PluginDescriptor, Track};
+use crate::model::{AudioClip, MidiClip, MidiNote, Track};
 use crate::paths::{current_theme_path, custom_themes_path, shortcuts_path};
 use crate::performance::PerformanceMonitor;
 use crate::project::{AppState, AppStateSnapshot, ClipLocation};
 use crate::project_manager::ProjectManager;
-use yadaw_plugin_api::{BackendKind, UnifiedPluginInfo};
+use yadaw_plugin_api::UnifiedPluginInfo;
 
 use crate::track_manager::{TrackManager, UITrackType};
 use crate::transport::Transport;

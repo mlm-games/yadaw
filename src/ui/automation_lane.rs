@@ -65,8 +65,7 @@ impl AutomationLaneWidget {
 
         // Curve (polyline)
         if pts_screen.len() >= 2 {
-            let mut pts_for_line = pts_screen.iter().map(|(_, p)| *p).collect::<Vec<_>>();
-            pts_for_line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+            let pts_for_line: Vec<_> = pts_screen.iter().map(|(_, p)| *p).collect();
             ui.painter().add(egui::Shape::line(
                 pts_for_line,
                 egui::Stroke::new(1.5, lane_color),

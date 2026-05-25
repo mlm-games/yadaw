@@ -3,7 +3,6 @@ mod clap_impl {
     use anyhow::{Result, anyhow};
     use clack_host::utils::Cookie;
     use std::collections::HashMap;
-    use std::mem::MaybeUninit;
     use std::path::Path;
 
     use clack_host::entry::PluginEntry;
