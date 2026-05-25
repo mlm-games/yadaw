@@ -13,6 +13,7 @@ use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
 use crate::model::track::TrackType;
 use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor, TrackGroup};
+#[cfg(feature = "lv2-legacy")]
 use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::{AppState, ClipLocation, ClipRef};
 use crate::time_utils::quick::samples_to_beats;
@@ -384,12 +385,15 @@ fn process_command(
             if let Some(uri) = uri_opt {
                 // Only clamp for LV2, CLAP plugins handle their own bounds
                 let v = match backend {
+                    #[cfg(feature = "lv2-legacy")]
                     BackendKind::Lv2 => {
                         let (min, max) = get_control_port_info(&uri, &param_name)
                             .map(|m| (m.min, m.max))
                             .unwrap_or((0.0, 1.0));
                         value.clamp(min, max)
                     }
+                    #[cfg(not(feature = "lv2-legacy"))]
+                    BackendKind::Lv2 => value,
                     BackendKind::Clap => value,
                 };
 
@@ -556,6 +560,7 @@ fn process_command(
                 let mut state = app_state.lock().unwrap();
                 let plugin_id = idgen::next();
 
+                #[cfg(feature = "lv2-legacy")]
                 let mut desc = create_plugin_instance(&uri, audio_state.sample_rate.load())
                     .unwrap_or_else(|_| PluginDescriptor {
                         id: 0,
@@ -567,6 +572,17 @@ fn process_command(
                         preset_name: None,
                         custom_name: None,
                     });
+                #[cfg(not(feature = "lv2-legacy"))]
+                let mut desc = PluginDescriptor {
+                    id: 0,
+                    uri: uri.clone(),
+                    name: display_name.clone(),
+                    backend,
+                    bypass: false,
+                    params: std::collections::HashMap::new(),
+                    preset_name: None,
+                    custom_name: None,
+                };
                 desc.backend = backend;
                 desc.id = plugin_id;
                 desc.name = display_name.clone();

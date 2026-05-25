@@ -11,11 +11,13 @@ use crate::{
 use crate::{audio_state::AudioGraphSnapshot, project};
 use std::sync::{Arc, Mutex};
 use yadaw_plugin_api::HostConfig;
-use yadaw_plugin_host::{HostFacade, legacy::init as plugin_host_init};
+use yadaw_plugin_host::HostFacade;
+#[cfg(feature = "lv2-legacy")]
+use yadaw_plugin_host::legacy::init as plugin_host_init;
 
 #[cfg(target_os = "android")]
 use android_activity::AndroidApp;
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "lv2-legacy"))]
 use yadaw_plugin_host::plugin_host;
 
 #[cfg(not(target_os = "android"))]
@@ -59,6 +61,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded::<AudioGraphSnapshot>(1);
 
     // Initialize the global LV2 plugin host with current audio settings
+    #[cfg(feature = "lv2-legacy")]
     plugin_host_init(host_sample_rate as f64, constants::MAX_BUFFER_SIZE)?;
 
     log::info!("Scanning for plugins...");
@@ -197,6 +200,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     import_clap_bundles_from_external();
 
     // Initialize plugin host
+    #[cfg(feature = "lv2-legacy")]
     plugin_host::init(host_sample_rate as f64, constants::MAX_BUFFER_SIZE)?;
 
     log::info!("Scanning for plugins...");

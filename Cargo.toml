@@ -54,8 +54,6 @@ lru = "0.18"
 rayon = "1.12"
 num_cpus = "1.17.0"
 
-# LV2 Plugin Hosting
-livi = "0.8.0"
 smallvec = "1.15.1"
 log = "0.4"
 clack = "0.1.0"

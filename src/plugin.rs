@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow};
 use crate::messages::AudioCommand;
 use crate::model::plugin::PluginDescriptor;
 use yadaw_plugin_api::{BackendKind, UnifiedPluginInfo};
+#[cfg(feature = "lv2-legacy")]
 use yadaw_plugin_host::legacy::{ControlPortInfo, PluginInfo, get_available_plugins, with_host};
 
 pub trait PluginCategorizationInfo {
@@ -14,6 +15,7 @@ pub trait PluginCategorizationInfo {
     fn has_midi(&self) -> bool;
 }
 
+#[cfg(feature = "lv2-legacy")]
 impl PluginCategorizationInfo for PluginInfo {
     fn name(&self) -> &str {
         &self.name
@@ -56,7 +58,7 @@ impl PluginCategorizationInfo for UnifiedPluginInfo {
     }
 }
 
-/// Create a plugin descriptor from URI
+#[cfg(feature = "lv2-legacy")]
 pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDescriptor> {
     let list = get_available_plugins()?;
     let plugin_info = list
@@ -120,6 +122,7 @@ pub enum PluginKind {
     Unknown,
 }
 
+#[cfg(feature = "lv2-legacy")]
 pub fn classify_plugin_uri(uri: &str) -> Option<PluginKind> {
     let list = get_available_plugins().ok()?;
     list.into_iter().find(|p| p.uri == uri).map(|info| {
@@ -172,6 +175,7 @@ pub fn categorize_plugin(p: &impl PluginCategorizationInfo) -> Vec<String> {
     categories
 }
 
+#[cfg(feature = "lv2-legacy")]
 pub fn get_control_port_info(uri: &str, symbol: &str) -> Option<ControlPortInfo> {
     with_host(|h| {
         h.get_available_plugins()
