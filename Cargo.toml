@@ -135,3 +135,6 @@ lv2_raw = { git = "https://github.com/mlm-games/lv2_raw" }
 lilv-sys = { git = "https://github.com/mlm-games/lilv-sys-rs", branch = "main" }
 midir = { git = "https://github.com/mlm-games/midir" }
 midly = { git = "https://github.com/mlm-games/midly" }
+
+# [patch."https://github.com/MLM-Stuff/dissonia"]
+# dissonia = { path = "../dissonia/dissonia" }
