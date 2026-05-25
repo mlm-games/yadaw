@@ -126,7 +126,7 @@ icon = "@drawable/ic_launcher_monochrome"
 [package.metadata.android.sdk]
 version_code = 16779266
 min_sdk_version = 29
-target_sdk_version = 35
+target_sdk_version = 36
 
 [patch.crates-io]
 livi = { git = "https://github.com/mlm-games/livi-rs", branch = "main" }
