@@ -125,7 +125,7 @@ jobs:
           set -e
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add Cargo.toml fastlane/metadata/android/en-US/changelogs || true
+          git add Cargo.toml fastlane/metadata/android/en-US/changelogs others/flathub || true
           git commit -m "chore: bump to v${{ steps.bump.outputs.version_name }} (code ${{ steps.bump.outputs.version_code }}) [skip ci]" || true
           git push
           echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
