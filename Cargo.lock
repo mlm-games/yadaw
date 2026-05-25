@@ -3680,6 +3680,7 @@ dependencies = [
 [[package]]
 name = "rlobkit-core"
 version = "0.1.0"
+source = "git+https://github.com/mlm-games/rlobkit#0ae35674115961b606ef3f75041ac1ea2c4e0fce"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3692,6 +3693,7 @@ dependencies = [
 [[package]]
 name = "rlobkit-dialogs"
 version = "0.1.0"
+source = "git+https://github.com/mlm-games/rlobkit#0ae35674115961b606ef3f75041ac1ea2c4e0fce"
 dependencies = [
  "async-trait",
  "bytes",
