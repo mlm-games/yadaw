@@ -1,17 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>io.github.mlm_games.yadaw</id>
-
   <name>YADAW</name>
   <summary>Digital Audio Workstation for prototyping</summary>
-
   <developer id="io.github.mlm_games">
     <name>MLM Games</name>
   </developer>
-
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-or-later</project_license>
-
   <description>
     <p>
       Yadaw is a minimal rust-based digital audio workstation built to not crash as much as the alternatives. It mainly depends on external plugins,
@@ -31,20 +27,16 @@
       No MP3/FLAC export (WAV only).
     </p>
   </description>
-
   <launchable type="desktop-id">io.github.mlm_games.yadaw.desktop</launchable>
-
   <url type="homepage">https://github.com/mlm-games/yadaw</url>
   <url type="bugtracker">https://github.com/mlm-games/yadaw/issues</url>
   <url type="vcs-browser">https://github.com/mlm-games/yadaw</url>
   <url type="donation">https://github.com/sponsors/mlm-games</url>
   <url type="help">https://github.com/mlm-games/yadaw/blob/master/quick_start.md</url>
-
   <branding>
     <color type="primary" scheme_preference="light">#4a90d9</color>
     <color type="primary" scheme_preference="dark">#1c4a7e</color>
   </branding>
-
   <screenshots>
     <screenshot type="default">
       <caption>Main interface</caption>
@@ -59,8 +51,15 @@
       <image>https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/tvScreenshots/1.png</image>
     </screenshot>
   </screenshots>
-
   <releases>
+    <release version="0.8.3" date="2026-05-25" type="stable">
+      <description>
+        <ul>
+          <li>bump to api 36</li>
+          <li>use the updated dissonia ver (0.1.2) to fix flac out (fix #7)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.1" date="2026-01-25">
       <description>
         <ul>
@@ -87,28 +86,22 @@
       </description>
     </release>
   </releases>
-
   <content_rating type="oars-1.1"/>
-
   <requires>
     <display_length compare="ge">768</display_length>
   </requires>
-
   <recommends>
     <control>keyboard</control>
     <control>pointing</control>
   </recommends>
-
   <supports>
     <control>touch</control>
   </supports>
-
   <provides>
     <binary>yadaw</binary>
     <mediatype>audio/wav</mediatype>
     <mediatype>audio/x-wav</mediatype>
   </provides>
-
   <keywords>
     <keyword>audio</keyword>
     <keyword>DAW</keyword>

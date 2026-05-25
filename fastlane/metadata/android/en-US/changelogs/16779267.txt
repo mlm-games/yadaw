@@ -1,0 +1,2 @@
+- bump to api 36
+- use the updated dissonia ver (0.1.2) to fix flac out (fix #7)
