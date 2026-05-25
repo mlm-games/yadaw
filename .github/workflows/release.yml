@@ -32,9 +32,9 @@ env:
   APP_SLUG: "yadaw"
   ANDROID_API: "35"
   ANDROID_BUILD_TOOLS: "35.0.0"
-  ANDROID_NDK_VERSION: "27.0.12077973"
+  ANDROID_NDK_VERSION: "28.2.13676358"
   ANDROID_TARGET: "aarch64-linux-android"
-  CARGO_RAPK_VERSION: "0.14.1"
+  CARGO_RAPK_VERSION: "0.15.1"
 
 jobs:
   prepare-version:
