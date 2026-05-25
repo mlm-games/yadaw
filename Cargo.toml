@@ -1,6 +1,6 @@
 [package]
 name = "yadaw"
-version = "0.7.11"
+version = "0.8.1"
 edition = "2024"
 
 [[bin]]
