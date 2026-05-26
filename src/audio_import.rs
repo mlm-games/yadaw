@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::path::Path;
 
 use crate::model::clip::AudioClip;
@@ -100,12 +100,12 @@ fn import_wav(path: &Path, bpm: f32) -> Result<AudioClip> {
 }
 
 fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
-    use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::DecoderOptions;
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
     use symphonia::core::formats::FormatOptions;
+    use symphonia::core::formats::TrackType;
+    use symphonia::core::formats::probe::Hint;
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
 
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -115,58 +115,58 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
         hint.with_extension(ext);
     }
 
-    let probed = symphonia::default::get_probe().format(
+    let mut format = symphonia::default::get_probe().probe(
         &hint,
         mss,
-        &FormatOptions::default(),
-        &MetadataOptions::default(),
+        FormatOptions::default(),
+        MetadataOptions::default(),
     )?;
-
-    let mut format = probed.format;
     let track = format
-        .default_track()
+        .default_track(TrackType::Audio)
         .ok_or_else(|| anyhow!("No audio tracks found"))?;
     let track_id = track.id;
-    let codec_params = track.codec_params.clone();
+    let codec_params = track
+        .codec_params
+        .clone()
+        .ok_or_else(|| anyhow!("Track has no codec parameters"))?;
+    let audio_params = codec_params
+        .audio()
+        .ok_or_else(|| anyhow!("Track is not an audio track"))?;
 
-    let sample_rate = codec_params
+    let sample_rate = audio_params
         .sample_rate
         .ok_or_else(|| anyhow!("Unknown sample rate"))?;
-    let channels = codec_params.channels.map(|c| c.count()).unwrap_or(1);
+    let channels = audio_params
+        .channels
+        .clone()
+        .map(|c| c.count())
+        .unwrap_or(1);
 
-    let mut decoder =
-        crate::audio_codecs::get_codecs().make(&codec_params, &DecoderOptions::default())?;
+    let mut decoder = crate::audio_codecs::get_codecs()
+        .make_audio_decoder(audio_params, &AudioDecoderOptions::default())?;
 
     let mut all_samples = Vec::new();
-    let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
     loop {
         match format.next_packet() {
-            Ok(packet) => {
-                if packet.track_id() != track_id {
+            Ok(Some(packet)) => {
+                if packet.track_id != track_id {
                     continue;
                 }
                 match decoder.decode(&packet) {
                     Ok(decoded) => {
-                        if sample_buf.is_none() {
-                            let spec = *decoded.spec();
-                            sample_buf =
-                                Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
-                        }
-                        if let Some(buf) = &mut sample_buf {
-                            buf.copy_interleaved_ref(decoded);
-                            all_samples.extend_from_slice(buf.samples());
-                        }
+                        let mut packet_samples = Vec::new();
+                        decoded.copy_to_vec_interleaved(&mut packet_samples);
+                        all_samples.extend_from_slice(&packet_samples);
                     }
-                    Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
-                    Err(e) => return Err(e.into()),
+                    Err(symphonia::core::errors::Error::DecodeError(e)) => {
+                        log::warn!("decode error: {e}");
+                        continue;
+                    }
+                    Err(e) => return Err(anyhow!("Opus decode failed: {}", e)),
                 }
             }
-            Err(symphonia::core::errors::Error::IoError(e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
+            Ok(None) => break,
             Err(symphonia::core::errors::Error::ResetRequired) => break,
             Err(e) => return Err(e.into()),
         }
