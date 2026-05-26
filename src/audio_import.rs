@@ -135,7 +135,7 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
     let channels = codec_params.channels.map(|c| c.count()).unwrap_or(1);
 
     let mut decoder =
-        symphonia::default::get_codecs().make(&codec_params, &DecoderOptions::default())?;
+        crate::audio_codecs::get_codecs().make(&codec_params, &DecoderOptions::default())?;
 
     let mut all_samples = Vec::new();
     let mut sample_buf: Option<SampleBuffer<f32>> = None;

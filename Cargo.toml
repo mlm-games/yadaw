@@ -45,6 +45,7 @@ dissonia = { git = "https://github.com/MLM-Stuff/dissonia", features = [
     "opus",
 ] }
 symphonia = { version = "0.5", features = ["all"] }
+symphonia-adapter-mousiki = { git = "https://github.com/mlm-games/symphonia-adapter-mousiki" }
 dashmap = "6.1"
 parking_lot = "0.12"
 rand = "0.10"
