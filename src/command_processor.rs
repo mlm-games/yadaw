@@ -2039,6 +2039,15 @@ fn process_command(
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
+        AudioCommand::RemoveAutomationLane(track_id, lane_idx) => {
+            let mut st = app_state.lock().unwrap();
+            if let Some(t) = st.tracks.get_mut(&track_id) {
+                if lane_idx < t.automation_lanes.len() {
+                    t.automation_lanes.remove(lane_idx);
+                }
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
         AudioCommand::PunchOutAudioClip {
             clip_id,
             start_beat,

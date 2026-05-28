@@ -160,6 +160,7 @@ pub enum AudioCommand {
     },
     SetAutomationMode(u64, usize, AutomationMode),
     ClearAutomationLane(u64, usize),
+    RemoveAutomationLane(u64, usize),
 
     // Preview (track ID)
     PreviewNote(u64, u8),
