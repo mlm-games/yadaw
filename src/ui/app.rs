@@ -1266,6 +1266,7 @@ impl YadawApp {
                     let mut state = self.state.lock().unwrap();
                     if let Some(track) = state.tracks.get_mut(&track_id) {
                         if let Some(plugin) = track.plugin_chain.get_mut(plugin_idx) {
+                            plugin.params.clear();
                             for param_info in &params {
                                 plugin
                                     .params
