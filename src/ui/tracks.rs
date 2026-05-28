@@ -693,6 +693,31 @@ impl TracksPanel {
                         default_v,
                     ));
                 }
+
+                if ui
+                    .weak("⚡")
+                    .on_hover_text("Insert automation keyframe at current position")
+                    .clicked()
+                {
+                    let position = app.audio_state.get_position();
+                    let sample_rate = app.audio_state.sample_rate.load();
+                    let bpm = app.audio_state.bpm.load();
+                    let current_beat = if sample_rate > 0.0 && bpm > 0.0 {
+                        (position / sample_rate as f64) * (bpm as f64 / 60.0)
+                    } else {
+                        0.0
+                    };
+                    let target = AutomationTarget::PluginParam {
+                        plugin_id,
+                        param_name: pname.clone(),
+                    };
+                    let _ = app.command_tx.send(AudioCommand::AddAutomationPoint(
+                        track_id,
+                        target,
+                        current_beat,
+                        v,
+                    ));
+                }
             });
         }
     }
@@ -877,7 +902,30 @@ impl TracksPanel {
                     }
 
                     if pinfo.is_automatable {
-                        ui.weak("⚡").on_hover_text("Automatable");
+                        if ui
+                            .weak("⚡")
+                            .on_hover_text("Insert automation keyframe at current position")
+                            .clicked()
+                        {
+                            let position = app.audio_state.get_position();
+                            let sample_rate = app.audio_state.sample_rate.load();
+                            let bpm = app.audio_state.bpm.load();
+                            let current_beat = if sample_rate > 0.0 && bpm > 0.0 {
+                                (position / sample_rate as f64) * (bpm as f64 / 60.0)
+                            } else {
+                                0.0
+                            };
+                            let target = AutomationTarget::PluginParam {
+                                plugin_id,
+                                param_name: pinfo.name.clone(),
+                            };
+                            let _ = app.command_tx.send(AudioCommand::AddAutomationPoint(
+                                track_id,
+                                target,
+                                current_beat,
+                                v,
+                            ));
+                        }
                     }
                 });
             };
