@@ -1929,6 +1929,7 @@ pub struct PluginManagerDialog {
     scan_paths: Vec<String>,
     new_path: String,
     browse_picker: Option<Picker<PickedFile>>,
+    import_picker: Option<Picker<PickedFile>>,
 }
 impl PluginManagerDialog {
     pub fn new() -> Self {
@@ -1955,6 +1956,7 @@ impl PluginManagerDialog {
             scan_paths,
             new_path: String::new(),
             browse_picker: None,
+            import_picker: None,
         }
     }
 
@@ -2007,35 +2009,14 @@ impl PluginManagerDialog {
                 ui.separator();
 
                 if ui.button("Scan for Plugins").clicked() {
-                    if let Ok(mut config) = crate::config::Config::load() {
-                        config.paths.plugin_scan_paths = self
-                            .scan_paths
-                            .iter()
-                            .map(|s| std::path::PathBuf::from(s))
-                            .collect();
-                        let _ = config.save();
-                    }
+                    self.perform_scan(app);
+                }
 
-                    let host_cfg = HostConfig {
-                        sample_rate: app.audio_state.sample_rate.load() as f64,
-                        max_block: crate::constants::MAX_BUFFER_SIZE,
-                        plugin_scan_paths: self
-                            .scan_paths
-                            .iter()
-                            .map(|s| std::path::PathBuf::from(s))
-                            .collect(),
-                    };
-                    match HostFacade::new(host_cfg).and_then(|f| f.scan()) {
-                        Ok(list) => {
-                            app.available_plugins =
-                                list.into_iter().map(|p| (p.uri.clone(), p)).collect();
-                            app.dialogs.show_message("Plugin scan complete.");
-                        }
-                        Err(e) => {
-                            app.dialogs
-                                .show_warning(&format!("Plugin scan failed: {}", e));
-                        }
-                    }
+                if ui.button("Import .clap Bundle").clicked() {
+                    self.import_picker = Some(crate::file_picker::pick_open_file(
+                        "Import .clap Plugin Bundle",
+                        &["clap"],
+                    ));
                 }
 
                 ui.separator();
@@ -2079,8 +2060,115 @@ impl PluginManagerDialog {
             }
         }
 
+        if let Some(mut picker) = self.import_picker.take() {
+            if let Some(result) = picker.poll() {
+                match result {
+                    Ok(Some(PickedFile::Path(path))) => {
+                        let dst = crate::paths::plugins_dir()
+                            .join(path.file_name().unwrap_or_default());
+                        match std::fs::copy(&path, &dst) {
+                            Ok(_) => {
+                                self.ensure_plugins_dir_in_scan_paths();
+                                self.perform_scan(app);
+                                app.dialogs.show_message(&format!(
+                                    "Imported {:?}",
+                                    path.file_name().unwrap_or_default()
+                                ));
+                            }
+                            Err(e) => {
+                                app.dialogs.show_warning(&format!(
+                                    "Failed to import plugin: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    }
+                    #[cfg(target_os = "android")]
+                    Ok(Some(PickedFile::Uri(uri))) => {
+
+                        let filename = uri
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("plugin.clap");
+                        let dst = crate::paths::plugins_dir().join(filename);
+                        let pf = PlatformFile::from_uri(&uri);
+                        match RlobKit::read_file_to_path(&pf, &dst) {
+                            Ok(_) => {
+                                self.ensure_plugins_dir_in_scan_paths();
+                                self.perform_scan(app);
+                                app.dialogs.show_message(&format!(
+                                    "Imported {}",
+                                    filename
+                                ));
+                            }
+                            Err(e) => {
+                                app.dialogs.show_warning(&format!(
+                                    "Failed to import plugin: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    Ok(Some(PickedFile::Uri(_))) => {
+                        app.dialogs.show_warning(
+                            "URI-based import not supported on this platform",
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        app.dialogs
+                            .show_warning(&format!("Plugin import failed: {e}"));
+                    }
+                }
+            } else {
+                self.import_picker = Some(picker);
+            }
+        }
+
         if !open {
             self.closed = true;
+        }
+    }
+
+    fn ensure_plugins_dir_in_scan_paths(&mut self) {
+        let dir = crate::paths::plugins_dir()
+            .to_string_lossy()
+            .to_string();
+        if !self.scan_paths.contains(&dir) {
+            self.scan_paths.push(dir);
+        }
+    }
+
+    fn perform_scan(&self, app: &mut YadawApp) {
+        if let Ok(mut config) = crate::config::Config::load() {
+            config.paths.plugin_scan_paths = self
+                .scan_paths
+                .iter()
+                .map(|s| std::path::PathBuf::from(s))
+                .collect();
+            let _ = config.save();
+        }
+
+        let host_cfg = HostConfig {
+            sample_rate: app.audio_state.sample_rate.load() as f64,
+            max_block: crate::constants::MAX_BUFFER_SIZE,
+            plugin_scan_paths: self
+                .scan_paths
+                .iter()
+                .map(|s| std::path::PathBuf::from(s))
+                .collect(),
+        };
+        match HostFacade::new(host_cfg).and_then(|f| f.scan()) {
+            Ok(list) => {
+                app.available_plugins =
+                    list.into_iter().map(|p| (p.uri.clone(), p)).collect();
+                app.dialogs.show_message("Plugin scan complete.");
+            }
+            Err(e) => {
+                app.dialogs
+                    .show_warning(&format!("Plugin scan failed: {}", e));
+            }
         }
     }
 

@@ -88,7 +88,7 @@ pub fn presets_dir() -> PathBuf {
 }
 
 #[cfg(target_os = "android")]
-fn files_dir_pathbuf() -> PathBuf {
+pub fn files_dir_pathbuf() -> PathBuf {
     use anyhow::Context;
     crate::android_saf::with_env(|env, context| {
         let file_obj = env
