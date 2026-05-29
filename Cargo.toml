@@ -97,8 +97,8 @@ default-features = false
 features = ["params", "clack-host"]
 
 [package.metadata.android]
-package = "com.yadaw.app"
-label = "YADAW"
+package = "org.mlm.yadaw"
+label = "Yadaw"
 build_targets = ["aarch64-linux-android"]
 resources = "others/packaging/res"
 
