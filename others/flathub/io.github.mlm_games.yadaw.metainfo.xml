@@ -52,6 +52,18 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.8.5" date="2026-05-29" type="stable">
+      <description>
+        <ul>
+          <li>Update Android package name and label in Cargo.toml</li>
+          <li>clear duplicate params from the listings</li>
+          <li>feat: Add automation points with the current value on clicking the automatable param button</li>
+          <li>add an option to remove automation param lanes</li>
+          <li>fix it to import properly, and also update symphonia to 0.6</li>
+          <li>update to support opus for import</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.4" date="2026-05-29" type="stable">
       <description>
         <ul>
