@@ -1,0 +1,5 @@
+- clear duplicate params from the listings
+- feat: Add automation points with the current value on clicking the automatable param button
+- add an option to remove automation param lanes
+- fix it to import properly, and also update symphonia to 0.6
+- update to support opus for import
