@@ -1,0 +1,4 @@
+- Revert "chore: bump to v0.8.7 (code 16779271) [skip ci]"
+- bump cargo-rapk ver
+- Revert "chore: bump to v0.8.7 (code 16779271) [skip ci]"
+- Migrate import logic to plugin manager for .clap bundles (on android)
