@@ -52,6 +52,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.8.6" date="2026-06-01" type="stable">
+      <description>
+        <ul/>
+      </description>
+    </release>
     <release version="0.8.5" date="2026-05-29" type="stable">
       <description>
         <ul>
