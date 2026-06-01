@@ -7,7 +7,7 @@ use crate::messages::{ExportState, UIUpdate};
 use crate::project::AppState;
 use crate::time_utils::TimeConverter;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use crossbeam_channel::Sender;
 use dissonia::prelude::*;
 #[cfg(target_os = "android")]
@@ -206,6 +206,7 @@ fn run_export(
                 .and_then(|n| n.to_str())
                 .unwrap_or("export.bin"),
             uri.as_str(),
+            None,
             None,
         );
         rlobkit_dialogs::RlobKit::write_file_from_path(&target, &output_path)

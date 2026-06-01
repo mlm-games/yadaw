@@ -2225,11 +2225,10 @@ impl ImportAudioDialog {
                             let processing_path_result: Result<std::path::PathBuf, String> =
                                 if let Some(path) = file.path() {
                                     Ok(path.to_path_buf())
-                                } else if let Some(uri) = file.uri() {
+                                } else if file.uri().is_some() {
                                     #[cfg(target_os = "android")]
                                     {
-                                        let uri_str = uri.to_string();
-                                        let ext_from_name = file
+                                        let ext = file
                                             .extension()
                                             .map(|s| s.to_ascii_lowercase())
                                             .filter(|s| {
@@ -2245,31 +2244,6 @@ impl ImportAudioDialog {
                                                         | "midi"
                                                 )
                                             });
-                                        let ext_from_uri = ext_from_name
-                                            .or_else(|| {
-                                                uri_str
-                                                    .rsplit('.')
-                                                    .next()
-                                                    .map(|s| s.to_ascii_lowercase())
-                                                    .filter(|s| {
-                                                        matches!(
-                                                            s.as_str(),
-                                                            "wav"
-                                                                | "mp3"
-                                                                | "flac"
-                                                                | "ogg"
-                                                                | "m4a"
-                                                                | "aac"
-                                                                | "mid"
-                                                                | "midi"
-                                                        )
-                                                    })
-                                            });
-                                        let ext = ext_from_uri.or_else(|| {
-                                            crate::android_saf::guess_extension_for_content_uri(
-                                                &uri_str,
-                                            )
-                                        });
                                         let dest_name = format!(
                                             "import_{}{}",
                                             chrono::Local::now().format("%H%M%S"),
