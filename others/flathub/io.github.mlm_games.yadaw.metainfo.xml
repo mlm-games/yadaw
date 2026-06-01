@@ -52,13 +52,6 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="0.8.7" date="2026-06-01" type="stable">
-      <description>
-        <ul>
-          <li>Migrate import logic to plugin manager for .clap bundles (on android)</li>
-        </ul>
-      </description>
-    </release>
     <release version="0.8.6" date="2026-06-01" type="stable">
       <description>
         <ul/>
