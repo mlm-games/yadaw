@@ -243,7 +243,7 @@ jobs:
             mingw-w64-x86_64-sratom
             mingw-w64-x86_64-sord
             mingw-w64-x86_64-serd
-            mingw-w64-x86_64-suil
+            # mingw-w64-x86_64-suil
 
       - name: Configure pkg-config and PATH (Windows)
         if: runner.os == 'Windows'
