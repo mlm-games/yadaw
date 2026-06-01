@@ -33,7 +33,8 @@ pub fn pick_open_file(title: &str, extensions: &[&str]) -> crate::file_picker::P
             Ok(result.and_then(|mut files| {
                 files.pop().and_then(|f| {
                     if let Some(uri) = f.uri() {
-                        Some(PickedFile::Uri(uri.to_string()))
+                        let name = f.name();
+                        Some(PickedFile::Uri(uri.to_string(), name))
                     } else {
                         f.path().map(|p| PickedFile::Path(p.to_path_buf()))
                     }
@@ -65,7 +66,8 @@ pub fn pick_save_file(
             .map_err(|e| e.to_string())?;
             Ok(result.and_then(|f| {
                 if let Some(uri) = f.uri() {
-                    Some(PickedFile::Uri(uri.to_string()))
+                    let name = f.name();
+                    Some(PickedFile::Uri(uri.to_string(), name))
                 } else {
                     f.path().map(|p| PickedFile::Path(p.to_path_buf()))
                 }
@@ -98,7 +100,8 @@ pub fn pick_multiple_audio() -> crate::file_picker::Picker<Vec<PickedFile>> {
                     .into_iter()
                     .filter_map(|f| {
                         if let Some(uri) = f.uri() {
-                            Some(PickedFile::Uri(uri.to_string()))
+                            let name = f.name();
+                            Some(PickedFile::Uri(uri.to_string(), name))
                         } else {
                             f.path().map(|p| PickedFile::Path(p.to_path_buf()))
                         }

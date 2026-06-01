@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
 pub enum PickedFile {
-    Uri(String),
+    Uri(String, Option<String>),
     Path(PathBuf),
 }
 

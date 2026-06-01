@@ -576,7 +576,7 @@ impl OpenDialog {
             if let Some(result) = picker.poll() {
                 match result {
                     Ok(Some(file)) => match file {
-                        PickedFile::Uri(uri) => load_project_from_uri(app, &uri),
+                        PickedFile::Uri(uri, ..) => load_project_from_uri(app, &uri),
                         PickedFile::Path(path) => app.load_project_from_path(&path),
                     },
                     Ok(None) => self.closed = true,
@@ -632,7 +632,7 @@ impl SaveDialog {
             if let Some(result) = picker.poll() {
                 match result {
                     Ok(Some(file)) => match file {
-                        PickedFile::Uri(uri) => save_project_to_uri(app, &uri),
+                        PickedFile::Uri(uri, ..) => save_project_to_uri(app, &uri),
                         PickedFile::Path(path) => app.save_project_to_path(&path),
                     },
                     Ok(None) => self.closed = true,
@@ -1289,7 +1289,7 @@ impl ShortcutsEditorDialog {
                             eprintln!("Shortcuts import failed: {}", e);
                         }
                     }
-                    Ok(Some(PickedFile::Uri(_uri))) => {
+                    Ok(Some(PickedFile::Uri(_uri, ..))) => {
                         #[cfg(target_os = "android")]
                         {
                             let temp_name = format!(
@@ -1324,7 +1324,7 @@ impl ShortcutsEditorDialog {
                             eprintln!("Shortcuts export failed: {}", e);
                         }
                     }
-                    Ok(Some(PickedFile::Uri(_uri))) => {
+                    Ok(Some(PickedFile::Uri(_uri, ..))) => {
                         #[cfg(target_os = "android")]
                         {
                             let temp_path = crate::paths::cache_dir().join(format!(
@@ -1773,7 +1773,7 @@ impl ExportDialog {
                         if let Some(result) = picker.poll() {
                             match result {
                                 Ok(Some(file)) => match file {
-                                    PickedFile::Uri(uri) => {
+                                    PickedFile::Uri(uri, ..) => {
                                         self.export_uri = Some(uri.to_string());
                                         self.path = crate::paths::cache_dir().join(format!(
                                             "export_{}.{}",
@@ -2039,7 +2039,7 @@ impl PluginManagerDialog {
                             self.scan_paths.push(selected);
                         }
                     }
-                    Ok(Some(PickedFile::Uri(uri))) => {
+                    Ok(Some(PickedFile::Uri(uri, ..))) => {
                         let selected = uri.to_string();
                         if selected.starts_with("content://") {
                             app.dialogs.show_warning(
@@ -2084,13 +2084,12 @@ impl PluginManagerDialog {
                         }
                     }
                     #[cfg(target_os = "android")]
-                    Ok(Some(PickedFile::Uri(uri))) => {
+                    Ok(Some(PickedFile::Uri(uri, name))) => {
 
-                        let filename = uri
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or("plugin.clap");
-                        let dst = crate::paths::plugins_dir().join(filename);
+                        let filename = name
+                            .or_else(|| uri.rsplit('/').next().map(|s| s.to_string()))
+                            .unwrap_or_else(|| "plugin.clap".to_string());
+                        let dst = crate::paths::plugins_dir().join(&filename);
                         let pf = PlatformFile::from_uri(&uri);
                         match RlobKit::read_file_to_path(&pf, &dst) {
                             Ok(_) => {
@@ -2110,7 +2109,7 @@ impl PluginManagerDialog {
                         }
                     }
                     #[cfg(not(target_os = "android"))]
-                    Ok(Some(PickedFile::Uri(_))) => {
+                    Ok(Some(PickedFile::Uri(_, ..))) => {
                         app.dialogs.show_warning(
                             "URI-based import not supported on this platform",
                         );
@@ -2216,7 +2215,7 @@ impl ImportAudioDialog {
                         for file in files {
                             let processing_path_result: Result<std::path::PathBuf, String> =
                                 match file {
-                                    PickedFile::Uri(_uri_str) => {
+                                    PickedFile::Uri(_uri_str, ..) => {
                                         #[cfg(target_os = "android")]
                                         {
                                             let ext_from_uri = _uri_str
