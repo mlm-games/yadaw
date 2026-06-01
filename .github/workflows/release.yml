@@ -36,6 +36,8 @@ env:
   CARGO_RAPK_PAGE_SIZE_KB: "16"
   ANDROID_TARGET: "aarch64-linux-android"
   CARGO_RAPK_VERSION: "0.15.3"
+  JAVA_VERSION: "21"
+  JAVA_DISTRIBUTION: "temurin"
 
 jobs:
   prepare-version:
@@ -148,27 +150,18 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            toolchain: stable
             target: ""
           - os: ubuntu-latest
-            toolchain: stable
-            target: "aarch64-unknown-linux-gnu" # Linux ARM64
+            target: "aarch64-unknown-linux-gnu"
           - os: macos-latest
-            toolchain: stable
             target: ""
           - os: windows-latest
-            toolchain: stable
             target: "x86_64-pc-windows-gnu"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare-version.outputs.commit_sha }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ matrix.toolchain }}
 
       - name: Add Rust target (when cross-compiling)
         if: matrix.target != ''
@@ -331,6 +324,11 @@ jobs:
             echo "Missing $LILV_TERMUX_LIB/pkgconfig/lilv-0.pc (ensure termux libs are committed or provided)"; exit 1;
           fi
 
+      - uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
       - name: Set up Android SDK/NDK
         uses: android-actions/setup-android@v3
 
@@ -343,10 +341,7 @@ jobs:
             "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" \
             "ndk;${{ env.ANDROID_NDK_VERSION }}"
 
-      - name: Install Rust (host)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Add Android target
+      - name: Rust (host) Android target
         run: rustup target add ${{ env.ANDROID_TARGET }}
 
       - name: Install cargo-rapk

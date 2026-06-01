@@ -12,6 +12,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
+  JAVA_VERSION: "21"
+  JAVA_DISTRIBUTION: "temurin"
 
 jobs:
   check-and-test:
@@ -23,19 +25,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            toolchain: stable
           - os: macos-latest
-            toolchain: stable
           # - os: windows-latest
           #   toolchain: stable-x86_64-pc-windows-gnu
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ matrix.toolchain }}
-          components: clippy,rustfmt
+      - run: rustup component add clippy rustfmt
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -101,7 +97,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux dependencies
         run: |
@@ -122,11 +117,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Replace with your actual MSRV, and keep this job failing if it breaks
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable # Get it from the cargo.toml file
-
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -142,7 +132,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-hack }
 
@@ -194,6 +183,11 @@ jobs:
             echo "Missing $LILV_TERMUX_LIB/pkgconfig/lilv-0.pc (ensure termux libs are committed or downloaded)"; exit 1;
           fi
 
+      - uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
       - name: Set up Android SDK/NDK
         uses: android-actions/setup-android@v3
 
@@ -206,10 +200,7 @@ jobs:
             "ndk;28.2.13676358"
 
       - name: Install Rust (host) + Android target
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.90.0
-          targets: aarch64-linux-android
+        run: rustup target add aarch64-linux-android
 
       - name: Install cargo-rapk
         run: cargo install cargo-rapk --locked
