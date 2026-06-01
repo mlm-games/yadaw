@@ -397,7 +397,9 @@ jobs:
           TAG: ${{ needs.prepare-version.outputs.version_name }}
         run: |
           set -euo pipefail
+          export ANDROID_NDK="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
 
           cargo rapk build --release --target ${{ env.ANDROID_TARGET }} --lib
           OUT_DIR="target/release/apk"
@@ -412,7 +414,9 @@ jobs:
           TAG: ${{ needs.prepare-version.outputs.version_name }}
         run: |
           set -euo pipefail
+          export ANDROID_NDK="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
 
           cargo rapk build --release --deterministic --target ${{ env.ANDROID_TARGET }} --lib \
             --no-default-features --features android,clap-host
