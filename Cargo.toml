@@ -137,5 +137,9 @@ lilv-sys = { git = "https://github.com/mlm-games/lilv-sys-rs", branch = "main" }
 midir = { git = "https://github.com/mlm-games/midir" }
 midly = { git = "https://github.com/mlm-games/midly" }
 
-# [patch."https://github.com/MLM-Stuff/dissonia"]
 # dissonia = { path = "../dissonia/dissonia" }
+
+[profile.release] # try fix fdroid release
+opt-level = 3
+lto = "fat"
+codegen-units = 1
