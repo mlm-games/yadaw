@@ -415,7 +415,7 @@ jobs:
           set -euo pipefail
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
 
-          cargo rapk build --release --target ${{ env.ANDROID_TARGET }} --lib \
+          cargo rapk build --release --deterministic --target ${{ env.ANDROID_TARGET }} --lib \
             --no-default-features --features android,clap-host
           OUT_DIR="target/release/apk"
           APK_SRC=$(ls -1t "$OUT_DIR"/*.apk | head -n1)
