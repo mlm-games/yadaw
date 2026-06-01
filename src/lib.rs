@@ -58,6 +58,18 @@ fn android_main(app: android_activity::AndroidApp) {
 
     log::info!("Starting YADAW on Android...");
 
+    if let Ok(home) = crate::android_saf::files_dir_path() {
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &home);
+            std::env::set_var("HOME", &home);
+            std::env::set_var("XDG_CACHE_HOME", &home);
+            std::env::set_var("XDG_CONFIG_HOME", &home);
+        }
+        log::info!("yadaw: set XDG_*/HOME to {}", home.display());
+    } else {
+        log::warn!("yadaw: failed to resolve files dir; plugin storage may be read-only");
+    }
+
     rlobkit_dialogs::init();
 
     // Start your app. If it errors, log it rather than abort.
