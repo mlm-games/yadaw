@@ -13,8 +13,8 @@ pub mod edit_actions;
 pub mod entry;
 pub mod error;
 pub mod file_picker;
-mod file_picker_desktop;
 mod file_picker_android;
+mod file_picker_desktop;
 pub mod idgen;
 pub mod input;
 pub mod level_meter;
@@ -71,6 +71,20 @@ fn android_main(app: android_activity::AndroidApp) {
     }
 
     rlobkit_dialogs::init();
+    rlobkit_dialogs::init_shared_pending_state();
+
+    // Publish the JavaVM/Context pointers so dlopen'd CLAP plugins (for ex.
+    // check mampler) can initialize their own copy of ndk-context.
+    unsafe {
+        std::env::set_var(
+            "RLOBKIT_ANDROID_VM",
+            format!("0x{:x}", app.vm_as_ptr() as usize),
+        );
+        std::env::set_var(
+            "RLOBKIT_ANDROID_CTX",
+            format!("0x{:x}", app.activity_as_ptr() as usize),
+        );
+    }
 
     // Start your app. If it errors, log it rather than abort.
     if let Err(e) = crate::entry::run_app_android(app) {
