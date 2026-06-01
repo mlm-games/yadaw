@@ -1,10 +1,4 @@
-use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
-
-pub enum PickedFile {
-    Uri(String, Option<String>),
-    Path(PathBuf),
-}
 
 pub struct Picker<T> {
     rx: Option<Receiver<Result<Option<T>, String>>>,
@@ -50,7 +44,7 @@ pub use crate::file_picker_desktop::{pick_open_file, pick_save_file, pick_multip
 pub use crate::file_picker_android::{pick_open_file, pick_save_file, pick_multiple_audio, pick_directory, write_file_to_uri};
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", target_arch = "wasm32"))]
-pub fn write_file_to_uri(_source_path: &PathBuf, _uri: &str) -> Result<(), String> {
+pub fn write_file_to_uri(_source_path: &std::path::Path, _uri: &str) -> Result<(), String> {
     Err("write_file_to_uri not needed on desktop".into())
 }
 

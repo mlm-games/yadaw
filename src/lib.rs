@@ -58,6 +58,8 @@ fn android_main(app: android_activity::AndroidApp) {
 
     log::info!("Starting YADAW on Android...");
 
+    rlobkit_dialogs::init();
+
     // Start your app. If it errors, log it rather than abort.
     if let Err(e) = crate::entry::run_app_android(app) {
         log::error!("android_main error: {e}");

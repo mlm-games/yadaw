@@ -139,9 +139,9 @@ midly = { git = "https://github.com/mlm-games/midly" }
 
 # dissonia = { path = "../dissonia/dissonia" }
 
-[patch."https://github.com/mlm-games/rlobkit"]
-rlobkit-dialogs = { path = "../rlobkit/rlobkit-dialogs" }
-rlobkit-core = { path = "../rlobkit/rlobkit-core" }
+# [patch."https://github.com/mlm-games/rlobkit"]
+# rlobkit-dialogs = { path = "../rlobkit/rlobkit-dialogs" }
+# rlobkit-core = { path = "../rlobkit/rlobkit-core" }
 
 [profile.release] # try fix fdroid release
 opt-level = 3

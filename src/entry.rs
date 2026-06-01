@@ -27,6 +27,8 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(target_os = "android"))]
     env_logger::init();
 
+    rlobkit_dialogs::init();
+
     log::info!("Starting YADAW...");
 
     let file_to_open: Option<String> = std::env::args().nth(1).and_then(|arg| {

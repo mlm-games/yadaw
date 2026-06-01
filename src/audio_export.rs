@@ -200,7 +200,14 @@ fn run_export(
 
     #[cfg(target_os = "android")]
     if let Some(uri) = &config.export_uri {
-        let target = PlatformFile::from_uri(uri.as_str());
+        let target = PlatformFile::from_uri(
+            std::path::Path::new(uri.as_str())
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("export.bin"),
+            uri.as_str(),
+            None,
+        );
         rlobkit_dialogs::RlobKit::write_file_from_path(&target, &output_path)
             .map_err(|e| anyhow!("Failed to write exported file to SAF URI '{uri}': {e}"))?;
         let _ = std::fs::remove_file(&output_path);

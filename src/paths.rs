@@ -134,6 +134,22 @@ pub fn current_theme_path() -> PathBuf {
     dir.join("current_theme.json")
 }
 
+pub fn set_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mut perms = metadata.permissions();
+            perms.set_mode(perms.mode() | 0o755);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 pub fn open_path_in_file_manager(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {

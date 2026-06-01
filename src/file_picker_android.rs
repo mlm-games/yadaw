@@ -1,9 +1,8 @@
 #![cfg(target_os = "android")]
 
 use crate::constants::AUDIO_IMPORT_EXTENSIONS;
-use crate::file_picker::PickedFile;
 use rlobkit_dialogs::picker::{OpenFileOptions, SaveFileOptions};
-use rlobkit_dialogs::{RlobKit, RlobKitMode, RlobKitType};
+use rlobkit_dialogs::{PlatformFile, RlobKit, RlobKitMode, RlobKitType};
 use std::os::fd::FromRawFd;
 
 fn block_on_runtime<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -13,7 +12,7 @@ fn block_on_runtime<T>(future: impl std::future::Future<Output = T>) -> T {
     runtime.block_on(future)
 }
 
-pub fn pick_open_file(title: &str, extensions: &[&str]) -> crate::file_picker::Picker<PickedFile> {
+pub fn pick_open_file(title: &str, extensions: &[&str]) -> crate::file_picker::Picker<PlatformFile> {
     let title = title.to_string();
     let exts: Vec<String> = extensions.iter().map(|s| s.to_string()).collect();
 
@@ -30,16 +29,7 @@ pub fn pick_open_file(title: &str, extensions: &[&str]) -> crate::file_picker::P
             })
             .await
             .map_err(|e| e.to_string())?;
-            Ok(result.and_then(|mut files| {
-                files.pop().and_then(|f| {
-                    if let Some(uri) = f.uri() {
-                        let name = f.name();
-                        Some(PickedFile::Uri(uri.to_string(), name))
-                    } else {
-                        f.path().map(|p| PickedFile::Path(p.to_path_buf()))
-                    }
-                })
-            }))
+            Ok(result.and_then(|mut files| files.pop()))
         })
     })
 }
@@ -48,7 +38,7 @@ pub fn pick_save_file(
     title: &str,
     suggested_name: &str,
     extension: &str,
-) -> crate::file_picker::Picker<PickedFile> {
+) -> crate::file_picker::Picker<PlatformFile> {
     let title = title.to_string();
     let suggested = suggested_name.to_string();
     let ext = extension.to_string();
@@ -64,19 +54,12 @@ pub fn pick_save_file(
             })
             .await
             .map_err(|e| e.to_string())?;
-            Ok(result.and_then(|f| {
-                if let Some(uri) = f.uri() {
-                    let name = f.name();
-                    Some(PickedFile::Uri(uri.to_string(), name))
-                } else {
-                    f.path().map(|p| PickedFile::Path(p.to_path_buf()))
-                }
-            }))
+            Ok(result)
         })
     })
 }
 
-pub fn pick_multiple_audio() -> crate::file_picker::Picker<Vec<PickedFile>> {
+pub fn pick_multiple_audio() -> crate::file_picker::Picker<Vec<PlatformFile>> {
     let extensions: Vec<String> = AUDIO_IMPORT_EXTENSIONS
         .iter()
         .map(|s| s.to_string())
@@ -95,24 +78,12 @@ pub fn pick_multiple_audio() -> crate::file_picker::Picker<Vec<PickedFile>> {
             })
             .await
             .map_err(|e| e.to_string())?;
-            Ok(result.map(|files| {
-                files
-                    .into_iter()
-                    .filter_map(|f| {
-                        if let Some(uri) = f.uri() {
-                            let name = f.name();
-                            Some(PickedFile::Uri(uri.to_string(), name))
-                        } else {
-                            f.path().map(|p| PickedFile::Path(p.to_path_buf()))
-                        }
-                    })
-                    .collect()
-            }))
+            Ok(result)
         })
     })
 }
 
-pub fn pick_directory(title: &str) -> crate::file_picker::Picker<PickedFile> {
+pub fn pick_directory(title: &str) -> crate::file_picker::Picker<PlatformFile> {
     let title = title.to_string();
 
     crate::file_picker::Picker::new(move || {
@@ -124,12 +95,12 @@ pub fn pick_directory(title: &str) -> crate::file_picker::Picker<PickedFile> {
                 })
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(result.map(|dir| PickedFile::Path(dir.path().to_path_buf())))
+            Ok(result.map(|dir| PlatformFile::from_path(dir.name().unwrap_or_default(), dir.path().to_path_buf())))
         })
     })
 }
 
-pub fn write_file_to_uri(source_path: &std::path::PathBuf, uri: &str) -> Result<(), String> {
+pub fn write_file_to_uri(source_path: &std::path::Path, uri: &str) -> Result<(), String> {
     let fd = rlobkit_dialogs::take_writable_fd_for_uri(uri)
         .ok_or_else(|| "Failed to get writable file descriptor".to_string())?;
 
