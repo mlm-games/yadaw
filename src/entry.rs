@@ -137,7 +137,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let initial_file = file_to_open.clone();
 
     eframe::run_native(
-        "YADAW - Yet Another DAW",
+        "Yadaw",
         native_options,
         Box::new(move |_cc| {
             let ui_midi_handler = midi_input_handler.clone();
@@ -267,7 +267,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     };
 
     eframe::run_native(
-        "YADAW - Yet Another DAW",
+        "Yadaw",
         native_options,
         Box::new(move |_cc| {
             let ui_midi_handler = midi_input_handler.clone();
