@@ -1,8 +1,9 @@
-A basic DAW for sound effects and music production. Built with Rust and egui.
+A basic DAW for sound effects and music production. Would recommend using it with a connected keyboard or mouse, as drag and keyboard shortcuts play a major role here.  
 
-Uses CLAP and LV2 plugins - no built-in effects to keep it minimal and lightweight.
+Uses CLAP and LV2 plugins (not on fdroid) - no built-in effects to keep it minimal and lightweight.
 
 Features:
+
 - Multi-track audio recording and editing
 - MIDI input with piano roll editor
 - Plugin hosting (CLAP/LV2 instruments and effects)
@@ -11,7 +12,5 @@ Features:
 - Mixer with track controls
 - WAV import/export
 - Cross-platform: Linux, Windows, macOS, Android
+- Lightweight, is under 20MB in apk size.
 
-Under 20MB binary size.
-
-Open source under AGPL-3.0.
