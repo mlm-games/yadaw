@@ -52,6 +52,14 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.8.9" date="2026-06-02" type="stable">
+      <description>
+        <ul>
+          <li>bump cargo-rapk</li>
+          <li>Update and rename long_description.txt to full_description.txt</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.8" date="2026-06-02" type="stable">
       <description>
         <ul>
