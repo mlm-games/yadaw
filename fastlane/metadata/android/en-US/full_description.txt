@@ -1,6 +1,6 @@
-A basic DAW for sound effects and music production. Would recommend using it with a connected keyboard or mouse, as drag and keyboard shortcuts play a major role here.  
+A basic DAW for sound effects and music production. Would recommend using it with a connected keyboard and/or mouse, as drag and keyboard shortcuts play a major role here.
 
-Uses CLAP and LV2 plugins (not on fdroid) - no built-in effects to keep it minimal and lightweight.
+Uses CLAP and LV2 (not on fdroid) plugins - no built-in effects to keep it minimal and lightweight.
 
 Features:
 
@@ -10,7 +10,6 @@ Features:
 - Automation lanes for parameter control
 - Timeline-based arrangement
 - Mixer with track controls
-- WAV import/export
+- WAV/Ogg/Flac import/export
 - Cross-platform: Linux, Windows, macOS, Android
 - Lightweight, is under 20MB in apk size.
-
