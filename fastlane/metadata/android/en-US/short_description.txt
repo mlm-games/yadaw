@@ -1,0 +1,1 @@
+A multiplatform sfx creator with no plugin GUI
