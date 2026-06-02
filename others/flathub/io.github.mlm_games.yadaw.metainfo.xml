@@ -52,6 +52,14 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.8.8" date="2026-06-02" type="stable">
+      <description>
+        <ul>
+          <li>bump cargo-rapk</li>
+          <li>bump cargo-rapk too</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.7" date="2026-06-01" type="stable">
       <description>
         <ul>
