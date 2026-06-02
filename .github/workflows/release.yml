@@ -33,6 +33,7 @@ env:
   ANDROID_API: "36"
   ANDROID_BUILD_TOOLS: "36.0.0"
   ANDROID_NDK_VERSION: "28.2.13676358"
+  ANDROID_D8_VERSION: "8.10.9-dev"
   CARGO_RAPK_PAGE_SIZE_KB: "16"
   ANDROID_TARGET: "aarch64-linux-android"
   CARGO_RAPK_VERSION: "0.15.5"
@@ -346,6 +347,14 @@ jobs:
       - name: Install cargo-rapk
         shell: bash
         run: cargo install cargo-rapk@${{ env.CARGO_RAPK_VERSION }} --locked
+
+      - name: Download pinned D8 jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/d8.jar" \
+            "https://storage.googleapis.com/r8-releases/raw/${{ env.ANDROID_D8_VERSION }}/r8.jar"
+          echo "ANDROID_D8_JAR=$RUNNER_TEMP/d8.jar" >> "$GITHUB_ENV"
 
       - name: Prepare release keystore
         shell: bash
