@@ -313,7 +313,7 @@ pub fn run_audio_thread(
             };
 
             if let Ok(input_stream) = input_device.build_input_stream(
-                &input_config.config(),
+                input_config.config(),
                 input_callback,
                 |err| log::error!("Input stream error: {}", err),
                 None,
@@ -496,7 +496,7 @@ pub fn run_audio_thread(
 
     let stream = device
         .build_output_stream(
-            &config.into(),
+            config.into(),
             audio_callback,
             |err| log::error!("Audio stream error: {}", err),
             None,
