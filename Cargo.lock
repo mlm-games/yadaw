@@ -3147,6 +3147,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "oporus"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a6e57342fbf0d69472e56a00c870b3e052062139e0b0da33eb502b2c6e13582"
+dependencies = [
+ "bitflags 2.11.1",
+ "cfg-if",
+ "libm",
+ "log",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4160,12 +4172,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "symphonia-adapter-mousiki"
-version = "0.1.1"
-source = "git+https://github.com/mlm-games/symphonia-adapter-mousiki#53ec055676641314ccea5ce49fe2863c34ea8948"
+name = "symphonia-adapter-oporus"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2c9fc1c54fac0729f76075ec6cb4143d50233ba2af47be169e341e964c27aa"
 dependencies = [
  "log",
- "mousiki",
+ "oporus",
  "symphonia-core",
 ]
 
@@ -5808,7 +5821,7 @@ dependencies = [
  "shellexpand",
  "smallvec",
  "symphonia",
- "symphonia-adapter-mousiki",
+ "symphonia-adapter-oporus",
  "tokio",
  "winit",
  "yadaw-plugin-api",
