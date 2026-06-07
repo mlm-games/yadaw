@@ -89,18 +89,7 @@ pub fn presets_dir() -> PathBuf {
 
 #[cfg(target_os = "android")]
 pub fn files_dir_pathbuf() -> PathBuf {
-    use anyhow::Context;
-    crate::android_saf::with_env(|env, context| {
-        let file_obj = env
-            .call_method(&context, "getFilesDir", "()Ljava/io/File;", &[])?
-            .l()?;
-        let jpath = env
-            .call_method(&file_obj, "getAbsolutePath", "()Ljava/lang/String;", &[])?
-            .l()?;
-        let s: String = env.get_string(&jni::objects::JString::from(jpath))?.into();
-        Ok(PathBuf::from(s))
-    })
-    .expect("getFilesDir failed")
+    crate::android_saf::files_dir_path().expect("getFilesDir failed")
 }
 
 #[cfg(not(target_os = "android"))]

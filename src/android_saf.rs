@@ -1,34 +1,47 @@
 #![cfg(target_os = "android")]
-use anyhow::{Result, anyhow};
-use jni::objects::JObject;
-use jni::{JNIEnv, JavaVM};
+
+use jni::{
+    objects::JObject,
+    signature::RuntimeMethodSignature,
+    strings::JNIString,
+    Env, JavaVM,
+};
 use std::path::PathBuf;
 
-pub fn with_env<F, R>(f: F) -> Result<R>
+pub fn with_env<F, R>(f: F) -> Result<R, jni::errors::Error>
 where
-    F: for<'a> FnOnce(&mut JNIEnv<'a>, JObject<'a>) -> Result<R>,
+    F: FnOnce(&mut Env, &JObject) -> Result<R, jni::errors::Error>,
 {
     let ctx = ndk_context::android_context();
-    let vm =
-        unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|_| anyhow!("VM not available"))?;
-    let mut env = vm.attach_current_thread()?;
-    let raw_context = unsafe { JObject::from_raw(ctx.context().cast()) };
-    let context = env
-        .new_local_ref(&raw_context)
-        .map_err(|e| anyhow!("Failed to create local ref: {e}"))?;
-    std::mem::forget(raw_context);
-    f(&mut env, context)
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+    let raw_context = ctx.context().cast::<jni::sys::_jobject>();
+
+    vm.attach_current_thread(|env| {
+        let context = unsafe { JObject::from_raw(env, raw_context) };
+        f(env, &context)
+    })
 }
 
-pub fn files_dir_path() -> Result<PathBuf> {
+pub fn files_dir_path() -> Result<PathBuf, jni::errors::Error> {
     with_env(|env, context| {
         let file_obj = env
-            .call_method(&context, "getFilesDir", "()Ljava/io/File;", &[])?
+            .call_method(
+                context,
+                JNIString::from("getFilesDir"),
+                RuntimeMethodSignature::from_str("()Ljava/io/File;")?.method_signature(),
+                &[],
+            )?
             .l()?;
         let jpath = env
-            .call_method(&file_obj, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+            .call_method(
+                &file_obj,
+                JNIString::from("getAbsolutePath"),
+                RuntimeMethodSignature::from_str("()Ljava/lang/String;")?.method_signature(),
+                &[],
+            )?
             .l()?;
-        let s: String = env.get_string(&jni::objects::JString::from(jpath))?.into();
+        let jstr = env.cast_local::<jni::objects::JString>(jpath)?;
+        let s = jstr.try_to_string(&*env)?;
         Ok(PathBuf::from(s))
     })
 }
