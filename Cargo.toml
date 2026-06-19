@@ -2,9 +2,10 @@
 name = "yadaw"
 version = "0.8.9"
 edition = "2024"
+default-run = "yadaw-desktop"
 
 [[bin]]
-name = "yadaw"
+name = "yadaw-desktop"
 path = "src/main.rs"
 
 [lib]
