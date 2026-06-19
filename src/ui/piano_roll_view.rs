@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use flume::Sender;
 use egui::scroll_area::ScrollSource;
 use egui::{Sense, UiBuilder};
+use flume::Sender;
 
 use crate::audio_state::AudioState;
 use crate::constants::DEFAULT_MIDI_CLIP_LEN;
@@ -80,10 +80,11 @@ impl PianoRollView {
                     self.draw_piano_roll(ui, app);
 
                     // Draw playhead
-                    if let Some(current_beat) = ui
-                        .ctx()
-                        .memory(|m| m.data.get_temp::<f64>(egui::Id::new("current_beat")))
-                    {
+                    let position = app.audio_state.get_position();
+                    let sample_rate = app.audio_state.sample_rate.load();
+                    let bpm = app.audio_state.bpm.load();
+                    if sample_rate > 0.0 && bpm > 0.0 {
+                        let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
                         let x = grid_left_roll
                             + (current_beat as f32 * self.piano_roll.zoom_x
                                 - self.piano_roll.scroll_x);

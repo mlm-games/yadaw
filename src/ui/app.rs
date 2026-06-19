@@ -1165,16 +1165,10 @@ impl YadawApp {
         }
     }
 
-    fn process_ui_update(&mut self, update: UIUpdate, ctx: &egui::Context) {
+    fn process_ui_update(&mut self, update: UIUpdate) {
         match update {
-            UIUpdate::Position(pos) => {
-                if let Ok(state) = self.state.lock() {
-                    let current_beat = state.position_to_beats(pos);
-                    ctx.memory_mut(|mem| {
-                        mem.data
-                            .insert_temp(egui::Id::new("current_beat"), current_beat);
-                    });
-                }
+            UIUpdate::Position(_pos) => {
+                // NOTE: Read from AudioState directly now
             }
             UIUpdate::TrackLevels(levels) => {
                 self.tracks_ui.update_levels(levels);
@@ -2025,7 +2019,7 @@ impl eframe::App for YadawApp {
         self.theme_manager.apply_theme(ctx);
 
         while let Ok(update) = self.ui_rx.try_recv() {
-            self.process_ui_update(update, ctx);
+            self.process_ui_update(update);
         }
 
         if self.is_selected_track_midi() {

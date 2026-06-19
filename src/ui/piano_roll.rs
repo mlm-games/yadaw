@@ -659,23 +659,6 @@ impl PianoRoll {
             }
         }
 
-        // in-roll playhead
-        if let Some(current_beat) = ui
-            .ctx()
-            .memory(|mem| mem.data.get_temp::<f64>(egui::Id::new("current_beat")))
-        {
-            let playhead_x = grid_rect.min.x + (current_beat as f32 * self.zoom_x - self.scroll_x);
-            if playhead_x >= grid_rect.min.x && playhead_x <= grid_rect.max.x {
-                ui.painter().line_segment(
-                    [
-                        egui::pos2(playhead_x, grid_rect.min.y),
-                        egui::pos2(playhead_x, grid_rect.max.y),
-                    ],
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 100, 100)),
-                );
-            }
-        }
-
         // Scroll/zoom
         if response.hovered() {
             // Disable scroll while interacting to prevent the canvas drifting under your finger
