@@ -2,9 +2,17 @@ use anyhow::{Result, anyhow};
 
 use crate::messages::AudioCommand;
 use crate::model::plugin::PluginDescriptor;
-use yadaw_plugin_api::{BackendKind, UnifiedPluginInfo};
+use yadaw_plugin_api::UnifiedPluginInfo;
 #[cfg(feature = "lv2-legacy")]
-use yadaw_plugin_host::legacy::{ControlPortInfo, PluginInfo, get_available_plugins, with_host};
+use yadaw_plugin_api::BackendKind;
+#[cfg(feature = "lv2-legacy")]
+use yadaw_plugin_host::legacy::{PluginInfo, get_available_plugins, with_host};
+
+pub struct ControlPortRange {
+    pub min: f32,
+    pub max: f32,
+    pub default: f32,
+}
 
 pub trait PluginCategorizationInfo {
     fn name(&self) -> &str;
@@ -58,29 +66,36 @@ impl PluginCategorizationInfo for UnifiedPluginInfo {
     }
 }
 
-#[cfg(feature = "lv2-legacy")]
-pub fn create_plugin_instance(uri: &str, _sample_rate: f32) -> Result<PluginDescriptor> {
-    let list = get_available_plugins()?;
-    let plugin_info = list
-        .into_iter()
-        .find(|p| p.uri == uri)
-        .ok_or_else(|| anyhow!("Plugin not found: {}", uri))?;
+#[allow(unused_variables)]
+pub fn create_plugin_instance(uri: &str, sample_rate: f32) -> Result<PluginDescriptor> {
+    #[cfg(feature = "lv2-legacy")]
+    {
+        let list = get_available_plugins()?;
+        let plugin_info = list
+            .into_iter()
+            .find(|p| p.uri == uri)
+            .ok_or_else(|| anyhow!("Plugin not found: {}", uri))?;
 
-    let mut params = std::collections::HashMap::new();
-    for port in &plugin_info.control_ports {
-        params.insert(port.symbol.clone(), port.default);
+        let mut params = std::collections::HashMap::new();
+        for port in &plugin_info.control_ports {
+            params.insert(port.symbol.clone(), port.default);
+        }
+
+        Ok(PluginDescriptor {
+            id: 0,
+            uri: uri.to_string(),
+            name: plugin_info.name.clone(),
+            backend: BackendKind::Lv2,
+            bypass: false,
+            params,
+            preset_name: None,
+            custom_name: None,
+        })
     }
-
-    Ok(PluginDescriptor {
-        id: 0,
-        uri: uri.to_string(),
-        name: plugin_info.name.clone(),
-        backend: BackendKind::Lv2,
-        bypass: false,
-        params,
-        preset_name: None,
-        custom_name: None,
-    })
+    #[cfg(not(feature = "lv2-legacy"))]
+    {
+        Err(anyhow!("Plugin hosting disabled"))
+    }
 }
 
 pub struct PluginParameterUpdate {
@@ -122,22 +137,29 @@ pub enum PluginKind {
     Unknown,
 }
 
-#[cfg(feature = "lv2-legacy")]
+#[allow(unused_variables)]
 pub fn classify_plugin_uri(uri: &str) -> Option<PluginKind> {
-    let list = get_available_plugins().ok()?;
-    list.into_iter().find(|p| p.uri == uri).map(|info| {
-        if info.is_instrument {
-            PluginKind::Instrument
-        } else if info.has_midi && info.audio_outputs > 0 {
-            PluginKind::Instrument
-        } else if info.audio_inputs > 0 && info.audio_outputs > 0 {
-            PluginKind::Effect
-        } else if info.has_midi && info.audio_inputs == 0 && info.audio_outputs == 0 {
-            PluginKind::MidiFx
-        } else {
-            PluginKind::Unknown
-        }
-    })
+    #[cfg(feature = "lv2-legacy")]
+    {
+        let list = get_available_plugins().ok()?;
+        list.into_iter().find(|p| p.uri == uri).map(|info| {
+            if info.is_instrument {
+                PluginKind::Instrument
+            } else if info.has_midi && info.audio_outputs > 0 {
+                PluginKind::Instrument
+            } else if info.audio_inputs > 0 && info.audio_outputs > 0 {
+                PluginKind::Effect
+            } else if info.has_midi && info.audio_inputs == 0 && info.audio_outputs == 0 {
+                PluginKind::MidiFx
+            } else {
+                PluginKind::Unknown
+            }
+        })
+    }
+    #[cfg(not(feature = "lv2-legacy"))]
+    {
+        None
+    }
 }
 
 /// Categorizes plugin (based on name for effect subtypes)
@@ -175,15 +197,30 @@ pub fn categorize_plugin(p: &impl PluginCategorizationInfo) -> Vec<String> {
     categories
 }
 
-#[cfg(feature = "lv2-legacy")]
-pub fn get_control_port_info(uri: &str, symbol: &str) -> Option<ControlPortInfo> {
-    with_host(|h| {
-        h.get_available_plugins()
-            .iter()
-            .find(|p| p.uri == uri)
-            .and_then(|p| p.control_ports.iter().find(|c| c.symbol == symbol))
-            .cloned()
-    })
-    .ok()
-    .flatten()
+#[allow(unused_variables)]
+pub fn get_control_port_info(uri: &str, symbol: &str) -> Option<ControlPortRange> {
+    #[cfg(feature = "lv2-legacy")]
+    {
+        with_host(|h| {
+            h.get_available_plugins()
+                .iter()
+                .find(|p| p.uri == uri)
+                .and_then(|p| {
+                    p.control_ports
+                        .iter()
+                        .find(|c| c.symbol == symbol)
+                        .map(|c| ControlPortRange {
+                            min: c.min,
+                            max: c.max,
+                            default: c.default,
+                        })
+                })
+        })
+        .ok()
+        .flatten()
+    }
+    #[cfg(not(feature = "lv2-legacy"))]
+    {
+        None
+    }
 }

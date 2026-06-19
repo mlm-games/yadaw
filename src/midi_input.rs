@@ -1,14 +1,9 @@
 use anyhow::{Result, anyhow};
-use crossbeam_channel::Sender;
+use flume::Sender;
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiInputPort};
-use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct RawMidiMessage {
-    pub timestamp_us: u64,
-    pub message: [u8; 3],
-}
+use crate::messages::RawMidiMessage;
 
 pub struct MidiInputHandler {
     midi_in: Arc<Mutex<MidiInput>>,
@@ -50,8 +45,8 @@ impl MidiInputHandler {
         let command_tx_clone = self.command_tx.clone();
         let connected_port_name_clone = self.connected_port_name.clone();
 
-        let initial_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let initial_time = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .unwrap()
             .as_micros() as u64;
 
@@ -68,7 +63,7 @@ impl MidiInputHandler {
                             message: [message[0], message[1], message[2]],
                         };
                         let _ = command_tx_clone
-                            .try_send(crate::messages::AudioCommand::MidiInput(raw_message));
+                            .send(crate::messages::AudioCommand::MidiInput(raw_message));
                     }
                 },
                 (),

@@ -4,8 +4,10 @@ use crate::audio_state::{
 };
 use crate::audio_utils::{calculate_stereo_gains, soft_clip};
 use crate::constants::{
-    DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION, RECORDING_BUFFER_SIZE,
+    DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::constants::RECORDING_BUFFER_SIZE;
 use crate::messages::{PluginParamInfo, UIUpdate};
 use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::ChannelStrip;
@@ -16,14 +18,14 @@ use yadaw_plugin_api::{BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEven
 use yadaw_plugin_host::HostFacade;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossbeam_channel::{Receiver, Sender};
+use flume::{Receiver, Sender};
 use dashmap::DashMap;
 use rtrb::{Consumer, RingBuffer};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use web_time::Instant;
 
 use yadaw_plugin_api::PluginInstance as UnifiedInstance;
 
@@ -60,6 +62,7 @@ pub struct AudioEngine {
     xrun_count: u64,
     paused_last: bool,
     host_facade: HostFacade,
+    last_ui_meter_update: Instant,
 
     free_running_samples: f64,
 }
@@ -209,125 +212,14 @@ pub fn resolve_output_sample_rate(preferred_sample_rate: f32) -> f32 {
     choose_output_stream_config(&device, preferred_sample_rate).sample_rate() as f32
 }
 
-pub fn run_audio_thread(
-    audio_state: Arc<AudioState>,
+fn build_audio_callback(
+    mut engine: AudioEngine,
+    channels: usize,
     realtime_commands: Receiver<RealtimeCommand>,
-    updates: Sender<UIUpdate>,
     snapshot_rx: Receiver<AudioGraphSnapshot>,
-    preferred_sample_rate: f32,
-) {
-    let host = cpal::default_host();
-    let device = host.default_output_device().expect("No output device");
-    let config = choose_output_stream_config(&device, preferred_sample_rate);
-
-    let requested_rate = if preferred_sample_rate.is_finite() && preferred_sample_rate > 0.0 {
-        preferred_sample_rate.round() as u32
-    } else {
-        config.sample_rate()
-    };
-
-    if requested_rate != config.sample_rate() {
-        log::warn!(
-            "Requested sample rate {} Hz is unavailable on the default output; using {} Hz instead",
-            requested_rate,
-            config.sample_rate()
-        );
-    }
-
-    log::info!(
-        "Audio output configured: {} channels @ {} Hz",
-        config.channels(),
-        config.sample_rate()
-    );
-
-    let sample_rate = config.sample_rate() as f64;
-    let channels = config.channels() as usize;
-
-    audio_state.sample_rate.store(sample_rate as f32);
-
-    let host_cfg = HostConfig {
-        sample_rate,
-        max_block: MAX_BUFFER_SIZE,
-        plugin_scan_paths: Vec::new(), // Same as previous
-    };
-    let host_facade = HostFacade::new(host_cfg).expect("HostFacade init failed");
-
-    // Create recording buffer
-    let (recording_producer, recording_consumer) = RingBuffer::<f32>::new(RECORDING_BUFFER_SIZE);
-
-    // Initialize engine
-
-    let mut engine = AudioEngine {
-        graph_snapshot: AudioGraphSnapshot::default(),
-        audio_state: audio_state.clone(),
-        track_processors: HashMap::new(),
-        plugin_instances: HashMap::new(),
-        recording_state: RecordingState {
-            is_recording: false,
-            recording_track: None,
-            recording_consumer,
-            recording_start_position: 0.0,
-            accumulated_samples: Vec::new(),
-            monitor_queue: Vec::new(),
-        },
-        preview_note: None,
-        sample_rate,
-        updates: updates.clone(),
-        channel_strips: HashMap::new(),
-        xrun_count: 0,
-        paused_last: false,
-        host_facade,
-        free_running_samples: 0.0,
-    };
-
-    // Start recording input thread
-    let recording_producer = Arc::new(parking_lot::Mutex::new(recording_producer));
-    let updates_clone = updates.clone();
-
-    std::thread::spawn(move || {
-        let host = cpal::default_host();
-        if let Some(input_device) = host.default_input_device()
-            && let Ok(input_config) = input_device.default_input_config()
-        {
-            let channels = input_config.channels() as usize;
-            let recording_producer = recording_producer.clone();
-
-            let mut last_meter = std::time::Instant::now();
-            let mut peak_acc: f32 = 0.0;
-
-            let input_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let mut producer = recording_producer.lock();
-                for frame in data.chunks(channels) {
-                    let mono_sample = frame.iter().sum::<f32>() / channels as f32;
-                    let _ = producer.push(mono_sample);
-                    peak_acc = peak_acc.max(mono_sample.abs());
-                }
-
-                let elapsed = last_meter.elapsed();
-                if elapsed >= std::time::Duration::from_millis(50) {
-                    let level = peak_acc;
-                    peak_acc = 0.0;
-                    last_meter = std::time::Instant::now();
-                    let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
-                }
-            };
-
-            if let Ok(input_stream) = input_device.build_input_stream(
-                input_config.config(),
-                input_callback,
-                |err| log::error!("Input stream error: {}", err),
-                None,
-            ) {
-                if let Err(e) = input_stream.play() {
-                    log::error!("Failed to play input stream: {}", e);
-                }
-                std::thread::park();
-            }
-        }
-    });
-
-    // Audio callback
-    let audio_callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+    updates: Sender<UIUpdate>,
+) -> impl FnMut(&mut [f32], &cpal::OutputCallbackInfo) {
+    move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         if let Err(panic) = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let num_frames = data.len() / channels;
             let cb_start = Instant::now();
@@ -338,7 +230,6 @@ pub fn run_audio_thread(
             let should_be_recording = engine.audio_state.recording.load(Ordering::Relaxed);
             let is_actually_recording = engine.recording_state.is_recording;
 
-            // Drain RT commands at block start
             while let Ok(cmd) = realtime_commands.try_recv() {
                 engine.process_realtime_command(cmd);
             }
@@ -347,17 +238,14 @@ pub fn run_audio_thread(
                 engine.apply_new_snapshot(new_snapshot);
             }
 
-            // Cap monitor queue
             if engine.recording_state.monitor_queue.len() > 2 * MAX_BUFFER_SIZE {
                 let drop_n = engine.recording_state.monitor_queue.len() - 2 * MAX_BUFFER_SIZE;
                 engine.recording_state.monitor_queue.drain(0..drop_n);
             }
 
             if is_playing && should_be_recording && !is_actually_recording {
-                // START RECORDING
                 if engine.recording_state.recording_track.is_some() {
                     engine.recording_state.is_recording = true;
-                    // Capture the precise start position in samples
                     engine.recording_state.recording_start_position =
                         engine.audio_state.get_position();
                     engine.recording_state.accumulated_samples.clear();
@@ -366,9 +254,8 @@ pub fn run_audio_thread(
                         .try_send(UIUpdate::RecordingStateChanged(true));
                 }
             } else if (!is_playing || !should_be_recording) && is_actually_recording {
-                // STOP RECORDING
                 engine.recording_state.is_recording = false;
-                engine.audio_state.recording.store(false, Ordering::Relaxed); // Sync atomic back
+                engine.audio_state.recording.store(false, Ordering::Relaxed);
                 let _ = engine
                     .updates
                     .try_send(UIUpdate::RecordingStateChanged(false));
@@ -382,12 +269,11 @@ pub fn run_audio_thread(
                         let start_beat = converter
                             .samples_to_beats(engine.recording_state.recording_start_position);
 
-                        // Calculate length from number of samples recorded
                         let num_samples = engine.recording_state.accumulated_samples.len();
                         let length_beats = converter.samples_to_beats(num_samples as f64);
 
                         let clip = AudioClip {
-                            id: 0, // Will be assigned by UI thread
+                            id: 0,
                             name: format!("Rec {}", chrono::Local::now().format("%H:%M:%S")),
                             start_beat,
                             length_beats,
@@ -398,20 +284,18 @@ pub fn run_audio_thread(
 
                         let _ = engine
                             .updates
-                            .send(UIUpdate::RecordingFinished(track_id, clip));
+                            .try_send(UIUpdate::RecordingFinished(track_id, clip));
                         engine.recording_state.accumulated_samples.clear();
                     }
                 }
             }
 
-            // Accumulate samples ONLY if actually recording
             if engine.recording_state.is_recording {
                 while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
                     engine.recording_state.accumulated_samples.push(sample);
                     engine.recording_state.monitor_queue.push(sample);
                 }
             } else {
-                // If not recording, just drain the consumer into the monitor queue
                 while let Ok(sample) = engine.recording_state.recording_consumer.pop() {
                     engine.recording_state.monitor_queue.push(sample);
                 }
@@ -468,15 +352,19 @@ pub fn run_audio_thread(
             let health = (1.0 - cpu).clamp(0.0, 1.0);
             let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
 
-            let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
-                cpu_usage: cpu,
-                buffer_fill: health,
-                xruns: engine.xrun_count as u32,
-                plugin_time_ms: plugin_time_ms_accum,
-                latency_ms,
-            });
+            let now = Instant::now();
+            if now - engine.last_ui_meter_update >= web_time::Duration::from_millis(16) {
+                engine.last_ui_meter_update = now;
+                let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
+                    cpu_usage: cpu,
+                    buffer_fill: health,
+                    xruns: engine.xrun_count as u32,
+                    plugin_time_ms: plugin_time_ms_accum,
+                    latency_ms,
+                });
 
-            let _ = engine.updates.try_send(UIUpdate::Position(next_position));
+                let _ = engine.updates.try_send(UIUpdate::Position(next_position));
+            }
         })) {
             data.fill(0.0);
 
@@ -489,10 +377,138 @@ pub fn run_audio_thread(
             };
 
             let _ = updates.try_send(UIUpdate::Error(msg));
-            // stop playback to prevent repeated panics
             engine.audio_state.playing.store(false, Ordering::Relaxed);
         }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_audio_thread(
+    audio_state: Arc<AudioState>,
+    realtime_commands: Receiver<RealtimeCommand>,
+    updates: Sender<UIUpdate>,
+    snapshot_rx: Receiver<AudioGraphSnapshot>,
+    preferred_sample_rate: f32,
+) {
+    let host = cpal::default_host();
+    let device = host.default_output_device().expect("No output device");
+    let config = choose_output_stream_config(&device, preferred_sample_rate);
+
+    let requested_rate = if preferred_sample_rate.is_finite() && preferred_sample_rate > 0.0 {
+        preferred_sample_rate.round() as u32
+    } else {
+        config.sample_rate()
     };
+
+    if requested_rate != config.sample_rate() {
+        log::warn!(
+            "Requested sample rate {} Hz is unavailable on the default output; using {} Hz instead",
+            requested_rate,
+            config.sample_rate()
+        );
+    }
+
+    log::info!(
+        "Audio output configured: {} channels @ {} Hz",
+        config.channels(),
+        config.sample_rate()
+    );
+
+    let sample_rate = config.sample_rate() as f64;
+    let channels = config.channels() as usize;
+
+    audio_state.sample_rate.store(sample_rate as f32);
+
+    let host_cfg = HostConfig {
+        sample_rate,
+        max_block: MAX_BUFFER_SIZE,
+        plugin_scan_paths: Vec::new(),
+    };
+    let host_facade = HostFacade::new(host_cfg).expect("HostFacade init failed");
+
+    // Create recording buffer
+    let (recording_producer, recording_consumer) = RingBuffer::<f32>::new(RECORDING_BUFFER_SIZE);
+
+    // Initialize engine
+
+    let mut engine = AudioEngine {
+        graph_snapshot: AudioGraphSnapshot::default(),
+        audio_state: audio_state.clone(),
+        track_processors: HashMap::new(),
+        plugin_instances: HashMap::new(),
+        recording_state: RecordingState {
+            is_recording: false,
+            recording_track: None,
+            recording_consumer,
+            recording_start_position: 0.0,
+            accumulated_samples: Vec::new(),
+            monitor_queue: Vec::new(),
+        },
+        preview_note: None,
+        sample_rate,
+        updates: updates.clone(),
+        channel_strips: HashMap::new(),
+        xrun_count: 0,
+        paused_last: false,
+        host_facade,
+        last_ui_meter_update: Instant::now(),
+        free_running_samples: 0.0,
+    };
+
+    // Start recording input thread (native only — wasm CPAL doesn't support input)
+    let recording_producer = Arc::new(parking_lot::Mutex::new(recording_producer));
+    let updates_clone = updates.clone();
+
+    std::thread::spawn(move || {
+        let host = cpal::default_host();
+        if let Some(input_device) = host.default_input_device()
+            && let Ok(input_config) = input_device.default_input_config()
+        {
+            let channels = input_config.channels() as usize;
+            let recording_producer = recording_producer.clone();
+
+            let mut last_meter = web_time::Instant::now();
+            let mut peak_acc: f32 = 0.0;
+
+            let input_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                let mut producer = recording_producer.lock();
+                for frame in data.chunks(channels) {
+                    let mono_sample = frame.iter().sum::<f32>() / channels as f32;
+                    let _ = producer.push(mono_sample);
+                    peak_acc = peak_acc.max(mono_sample.abs());
+                }
+
+                let elapsed = last_meter.elapsed();
+                if elapsed >= web_time::Duration::from_millis(50) {
+                    let level = peak_acc;
+                    peak_acc = 0.0;
+                    last_meter = web_time::Instant::now();
+                    let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
+                }
+            };
+
+            if let Ok(input_stream) = input_device.build_input_stream(
+                input_config.config(),
+                input_callback,
+                |err| log::error!("Input stream error: {}", err),
+                None,
+            ) {
+                if let Err(e) = input_stream.play() {
+                    log::error!("Failed to play input stream: {}", e);
+                }
+                std::thread::park();
+            }
+        }
+    });
+
+    // Audio callback
+    let audio_callback = build_audio_callback(
+        engine,
+        channels,
+        realtime_commands,
+        snapshot_rx,
+        updates.clone(),
+    );
 
     let stream = device
         .build_output_stream(
@@ -507,6 +523,101 @@ pub fn run_audio_thread(
     std::thread::park();
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn run_audio_wasm(
+    audio_state: Arc<AudioState>,
+    realtime_commands: Receiver<RealtimeCommand>,
+    updates: Sender<UIUpdate>,
+    snapshot_rx: Receiver<AudioGraphSnapshot>,
+    preferred_sample_rate: f32,
+) {
+    let host = cpal::default_host();
+    let device = host.default_output_device().expect("No output device");
+    let config = choose_output_stream_config(&device, preferred_sample_rate);
+
+    let requested_rate = if preferred_sample_rate.is_finite() && preferred_sample_rate > 0.0 {
+        preferred_sample_rate.round() as u32
+    } else {
+        config.sample_rate()
+    };
+
+    if requested_rate != config.sample_rate() {
+        log::warn!(
+            "Requested sample rate {} Hz is unavailable on the default output; using {} Hz instead",
+            requested_rate,
+            config.sample_rate()
+        );
+    }
+
+    log::info!(
+        "Audio output configured: {} channels @ {} Hz",
+        config.channels(),
+        config.sample_rate()
+    );
+
+    let sample_rate = config.sample_rate() as f64;
+    let channels = config.channels() as usize;
+
+    audio_state.sample_rate.store(sample_rate as f32);
+
+    let host_cfg = HostConfig {
+        sample_rate,
+        max_block: MAX_BUFFER_SIZE,
+        plugin_scan_paths: Vec::new(),
+    };
+    let host_facade = HostFacade::new(host_cfg).expect("HostFacade init failed");
+
+    // Create a dummy recording consumer (CPAL wasm backend doesn't support input)
+    let (_, recording_consumer) = RingBuffer::<f32>::new(1);
+
+    let mut engine = AudioEngine {
+        graph_snapshot: AudioGraphSnapshot::default(),
+        audio_state: audio_state.clone(),
+        track_processors: HashMap::new(),
+        plugin_instances: HashMap::new(),
+        recording_state: RecordingState {
+            is_recording: false,
+            recording_track: None,
+            recording_consumer,
+            recording_start_position: 0.0,
+            accumulated_samples: Vec::new(),
+            monitor_queue: Vec::new(),
+        },
+        preview_note: None,
+        sample_rate,
+        updates: updates.clone(),
+        channel_strips: HashMap::new(),
+        xrun_count: 0,
+        paused_last: false,
+        host_facade,
+        last_ui_meter_update: Instant::now(),
+        free_running_samples: 0.0,
+    };
+
+    let audio_callback = build_audio_callback(
+        engine,
+        channels,
+        realtime_commands,
+        snapshot_rx,
+        updates,
+    );
+
+    let stream = device
+        .build_output_stream(
+            config.into(),
+            audio_callback,
+            |err| log::error!("Audio stream error: {}", err),
+            None,
+        )
+        .expect("Failed to create audio stream");
+
+    stream.play().expect("Failed to start audio stream");
+
+    // Leak the stream so it lives for the lifetime of the page.
+    // Dropping it would close the AudioContext and stop audio.
+    std::mem::forget(stream);
+}
+
 impl AudioEngine {
     pub fn new_for_offline_render(
         initial_tracks: &[TrackSnapshot],
@@ -514,7 +625,7 @@ impl AudioEngine {
         export_sample_rate: f32,
     ) -> Result<Self, anyhow::Error> {
         // Create a dummy channel since we don't send UI updates
-        let (dummy_tx, _) = crossbeam_channel::unbounded();
+        let (dummy_tx, _) = flume::unbounded::<UIUpdate>();
 
         let host_cfg = HostConfig {
             sample_rate: export_sample_rate as f64,
@@ -553,6 +664,7 @@ impl AudioEngine {
             xrun_count: 0,
             paused_last: false,
             host_facade,
+            last_ui_meter_update: Instant::now(),
             free_running_samples: 0.0,
         };
 
@@ -1306,16 +1418,20 @@ impl AudioEngine {
             }
         }
 
-        // Send meters once per callback
-        let _ = self
-            .updates
-            .try_send(crate::messages::UIUpdate::TrackLevels(track_peaks));
-        let _ = self
-            .updates
-            .try_send(crate::messages::UIUpdate::MasterLevel(
-                master_peak_l,
-                master_peak_r,
-            ));
+        // Send meters at ~60 FPS
+        let now = Instant::now();
+        if now - self.last_ui_meter_update >= web_time::Duration::from_millis(16) {
+            self.last_ui_meter_update = now;
+            let _ = self
+                .updates
+                .try_send(crate::messages::UIUpdate::TrackLevels(track_peaks));
+            let _ = self
+                .updates
+                .try_send(crate::messages::UIUpdate::MasterLevel(
+                    master_peak_l,
+                    master_peak_r,
+                ));
+        }
 
         current_position
     }
@@ -1720,7 +1836,7 @@ impl AudioEngine {
                 loop_active,
             };
 
-            let t0 = std::time::Instant::now();
+            let t0 = web_time::Instant::now();
             let panicked = self
                 .with_plugin_mut(handle, |inst| {
                     std::panic::catch_unwind(AssertUnwindSafe(|| {

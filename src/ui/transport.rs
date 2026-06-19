@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use crossbeam_channel::Sender;
 use egui::scroll_area::ScrollSource;
+use flume::Sender;
 
 use crate::messages::AudioCommand;
 use crate::transport::Transport;

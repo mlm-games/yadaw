@@ -1,36 +1,28 @@
 #![cfg(target_os = "android")]
 
 use crate::constants::AUDIO_IMPORT_EXTENSIONS;
+use crate::file_picker::Picker;
 use rlobkit_dialogs::picker::{OpenFileOptions, SaveFileOptions};
 use rlobkit_dialogs::{PlatformFile, RlobKit, RlobKitMode, RlobKitType};
 use std::os::fd::FromRawFd;
 
-fn block_on_runtime<T>(future: impl std::future::Future<Output = T>) -> T {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("Failed to create async runtime");
-    runtime.block_on(future)
-}
-
-pub fn pick_open_file(title: &str, extensions: &[&str]) -> crate::file_picker::Picker<PlatformFile> {
+pub fn pick_open_file(title: &str, extensions: &[&str]) -> Picker<PlatformFile> {
     let title = title.to_string();
     let exts: Vec<String> = extensions.iter().map(|s| s.to_string()).collect();
 
-    crate::file_picker::Picker::new(move || {
-        block_on_runtime(async {
-            let result = RlobKit::open_file_picker(OpenFileOptions {
-                file_type: RlobKitType::Custom {
-                    extensions: exts,
-                    mime_types: vec!["*/*".to_string()],
-                },
-                mode: RlobKitMode::Single,
-                title: Some(title.to_string()),
-                initial_directory: None,
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-            Ok(result.and_then(|mut files| files.pop()))
+    Picker::new(move || async move {
+        let result = RlobKit::open_file_picker(OpenFileOptions {
+            file_type: RlobKitType::Custom {
+                extensions: exts,
+                mime_types: vec!["*/*".to_string()],
+            },
+            mode: RlobKitMode::Single,
+            title: Some(title.to_string()),
+            initial_directory: None,
         })
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result.and_then(|mut files| files.pop()))
     })
 }
 
@@ -38,65 +30,59 @@ pub fn pick_save_file(
     title: &str,
     suggested_name: &str,
     extension: &str,
-) -> crate::file_picker::Picker<PlatformFile> {
+) -> Picker<PlatformFile> {
     let title = title.to_string();
     let suggested = suggested_name.to_string();
     let ext = extension.to_string();
 
-    crate::file_picker::Picker::new(move || {
-        block_on_runtime(async {
-            let result = RlobKit::open_file_saver(SaveFileOptions {
-                suggested_name: Some(suggested),
-                extension: Some(ext),
-                title: Some(title.to_string()),
-                initial_directory: None,
-                file_type: None,
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-            Ok(result)
+    Picker::new(move || async move {
+        let result = RlobKit::open_file_saver(SaveFileOptions {
+            suggested_name: Some(suggested),
+            extension: Some(ext),
+            title: Some(title.to_string()),
+            initial_directory: None,
+            file_type: None,
         })
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result)
     })
 }
 
-pub fn pick_multiple_audio() -> crate::file_picker::Picker<Vec<PlatformFile>> {
+pub fn pick_multiple_audio() -> Picker<Vec<PlatformFile>> {
     let extensions: Vec<String> = AUDIO_IMPORT_EXTENSIONS
         .iter()
         .map(|s| s.to_string())
         .collect();
 
-    crate::file_picker::Picker::new(move || {
-        block_on_runtime(async {
-            let result = RlobKit::open_file_picker(OpenFileOptions {
-                file_type: RlobKitType::Custom {
-                    extensions: extensions.clone(),
-                    mime_types: vec!["*/*".to_string()],
-                },
-                mode: RlobKitMode::Multiple { limit: None },
-                title: Some("Import Audio".to_string()),
+    Picker::new(move || async move {
+        let result = RlobKit::open_file_picker(OpenFileOptions {
+            file_type: RlobKitType::Custom {
+                extensions: extensions.clone(),
+                mime_types: vec!["*/*".to_string()],
+            },
+            mode: RlobKitMode::Multiple { limit: None },
+            title: Some("Import Audio".to_string()),
+            initial_directory: None,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result)
+    })
+}
+
+pub fn pick_directory(title: &str) -> Picker<PlatformFile> {
+    let title = title.to_string();
+
+    Picker::new(move || async move {
+        let result =
+            RlobKit::open_directory_picker(rlobkit_dialogs::picker::OpenDirectoryOptions {
+                title: Some(title.to_string()),
                 initial_directory: None,
             })
             .await
             .map_err(|e| e.to_string())?;
-            Ok(result)
-        })
-    })
-}
-
-pub fn pick_directory(title: &str) -> crate::file_picker::Picker<PlatformFile> {
-    let title = title.to_string();
-
-    crate::file_picker::Picker::new(move || {
-        block_on_runtime(async {
-            let result =
-                RlobKit::open_directory_picker(rlobkit_dialogs::picker::OpenDirectoryOptions {
-                    title: Some(title.to_string()),
-                    initial_directory: None,
-                })
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok(result.map(|dir| PlatformFile::from_path(dir.name().unwrap_or_default(), dir.path().to_path_buf())))
-        })
+        Ok(result.map(|dir| PlatformFile::from_path(dir.name().unwrap_or_default(), dir.path().to_path_buf())))
     })
 }
 

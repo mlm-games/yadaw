@@ -1,40 +1,20 @@
-//! Contains the offline audio rendering engine and export logic.
-
 use crate::audio::AudioEngine;
 use crate::audio_state::AudioState;
 use crate::constants::MAX_BUFFER_SIZE;
-use crate::messages::{ExportState, UIUpdate};
+use crate::messages::{ExportConfig, ExportFormat, ExportState, UIUpdate};
 use crate::project::AppState;
 use crate::time_utils::TimeConverter;
 
 use anyhow::{Result, anyhow, bail};
-use crossbeam_channel::Sender;
 use dissonia::prelude::*;
 #[cfg(target_os = "android")]
 use rlobkit_dialogs::PlatformFile;
-use serde::{Deserialize, Serialize};
 
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread;
-
-#[cfg(target_os = "android")]
-fn export_through_cache_then_copy(config: &ExportConfig) -> ExportConfig {
-    let mut normalized = config.clone();
-    if normalized.export_uri.is_some() {
-        normalized.path = crate::paths::cache_dir().join("android_export_temp");
-    }
-    normalized
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ExportFormat {
-    Wav,
-    Flac,
-    Ogg,
-}
+use flume::Sender;
 
 impl ExportFormat {
     pub fn default_extension(self) -> &'static str {
@@ -46,17 +26,13 @@ impl ExportFormat {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportConfig {
-    pub path: PathBuf,
-    #[serde(default)]
-    pub export_uri: Option<String>,
-    pub format: Option<ExportFormat>,
-    pub sample_rate: f32,
-    pub bit_depth: u16,
-    pub start_beat: f64,
-    pub end_beat: f64,
-    pub normalize: bool,
+#[cfg(target_os = "android")]
+fn export_through_cache_then_copy(config: &ExportConfig) -> ExportConfig {
+    let mut normalized = config.clone();
+    if normalized.export_uri.is_some() {
+        normalized.path = crate::paths::cache_dir().join("android_export_temp");
+    }
+    normalized
 }
 
 impl ExportConfig {
@@ -95,7 +71,8 @@ impl AudioExporter {
         config: ExportConfig,
         ui_tx: Sender<UIUpdate>,
     ) {
-        thread::spawn(move || {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::runtime::RT.spawn_blocking(move || {
             let result = run_export(app_state, audio_state, &config, &ui_tx);
             match result {
                 Ok(path) => {
@@ -110,6 +87,8 @@ impl AudioExporter {
                 }
             }
         });
+        #[cfg(target_arch = "wasm32")]
+        let _ = (app_state, audio_state, config, ui_tx);
     }
 }
 

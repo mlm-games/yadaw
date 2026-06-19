@@ -7,6 +7,7 @@ pub mod audio_snapshot;
 pub mod audio_state;
 pub mod audio_utils;
 pub mod command_processor;
+pub mod runtime;
 pub mod config;
 pub mod constants;
 pub mod edit_actions;
@@ -36,6 +37,36 @@ pub mod track_manager;
 pub mod transport;
 pub mod ui;
 
+#[cfg(all(target_arch = "wasm32", feature = "clap-host"))]
+compile_error!("feature `clap-host` is not supported on wasm32");
+
+#[cfg(all(target_arch = "wasm32", feature = "lv2-legacy"))]
+compile_error!("feature `lv2-legacy` is not supported on wasm32");
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub async fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
+    console_error_panic_hook::set_once();
+    eframe::WebLogger::init(log::LevelFilter::Debug).ok();
+
+    let web_options = eframe::WebOptions::default();
+    let canvas = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("yadaw_canvas"))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+        .expect("canvas#yadaw_canvas not found");
+
+    eframe::WebRunner::new()
+        .start(
+            canvas,
+            web_options,
+            Box::new(|_cc| Ok(Box::new(entry::create_app()))),
+        )
+        .await
+}
 #[cfg(target_os = "android")]
 use android_activity::WindowManagerFlags;
 

@@ -1,5 +1,5 @@
 use egui::{Pos2, Vec2};
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Debug, Clone, Copy)]
 pub enum GestureAction {

@@ -2,7 +2,7 @@ use parking_lot::RwLock;
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {

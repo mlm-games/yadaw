@@ -19,7 +19,7 @@ use yadaw_plugin_api::UnifiedPluginInfo;
 
 use crate::track_manager::{TrackManager, UITrackType};
 use crate::transport::Transport;
-use crossbeam_channel::{Receiver, Sender};
+use flume::{Receiver, Sender};
 
 use eframe::egui;
 use egui::ahash::HashMap;
@@ -27,7 +27,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 pub enum ActiveEditTarget {
     Clips,
@@ -148,10 +148,9 @@ impl YadawApp {
             .map(|p| (p.uri.clone(), p))
             .collect();
 
-        let available_midi_ports = midi_input_handler
-            .as_ref()
-            .map(|h| h.list_ports())
-            .unwrap_or_default();
+        let available_midi_ports = {
+            midi_input_handler.as_ref().map(|h| h.list_ports()).unwrap_or_default()
+        };
 
         let mut input_manager = InputManager::new();
 
@@ -1106,6 +1105,7 @@ impl YadawApp {
     }
 
     pub fn export_audio_dialog(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         self.dialogs.show_export_dialog();
     }
 
@@ -1236,22 +1236,25 @@ impl YadawApp {
                     memory_usage: 0,
                     disk_streaming_rate: 0.0,
                     audio_buffer_health: buffer_fill,
-                    plugin_processing_time: std::time::Duration::from_secs_f32(
+                    plugin_processing_time: web_time::Duration::from_secs_f32(
                         plugin_time_ms / 1000.0,
                     ),
                     xruns: xruns as usize,
                     latency_ms,
                 };
                 self.performance_monitor.update_metrics(metrics);
-                self.last_real_metrics_at = Some(std::time::Instant::now());
+                self.last_real_metrics_at = Some(web_time::Instant::now());
             }
             UIUpdate::NotesCutToClipboard(notes) => {
                 self.note_clipboard = Some(notes);
             }
             UIUpdate::ExportStateUpdate(state) => {
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(dialog) = &mut self.dialogs.export_dialog {
                     dialog.set_state(state);
                 }
+                #[cfg(target_arch = "wasm32")]
+                let _ = state;
             }
             UIUpdate::PluginParamsDiscovered {
                 track_id,

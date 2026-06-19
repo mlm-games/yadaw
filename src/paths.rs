@@ -1,6 +1,26 @@
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 use std::process::Command;
+
+// On wasm32 there is no real filesystem — all path functions return dummy paths
+// and directory creation is skipped.
+#[cfg(target_arch = "wasm32")]
+pub fn projects_dir() -> PathBuf { PathBuf::from("/projects") }
+#[cfg(target_arch = "wasm32")]
+pub fn config_path() -> PathBuf { PathBuf::from("/config/config.json") }
+#[cfg(target_arch = "wasm32")]
+pub fn cache_dir() -> PathBuf { PathBuf::from("/cache") }
+#[cfg(target_arch = "wasm32")]
+pub fn plugins_dir() -> PathBuf { PathBuf::from("/plugins/clap") }
+#[cfg(target_arch = "wasm32")]
+pub fn presets_dir() -> PathBuf { PathBuf::from("/presets") }
+#[cfg(target_arch = "wasm32")]
+pub fn config_root_dir() -> PathBuf { PathBuf::from("/config") }
+
+#[cfg(target_arch = "wasm32")]
+pub fn open_path_in_file_manager(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "no filesystem on wasm32"))
+}
 
 #[cfg(target_os = "android")]
 pub fn projects_dir() -> PathBuf {
@@ -10,7 +30,7 @@ pub fn projects_dir() -> PathBuf {
     p
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn projects_dir() -> PathBuf {
     let dirs =
         directories::ProjectDirs::from("com", "yadaw", "yadaw").expect("ProjectDirs available");
@@ -26,7 +46,7 @@ pub fn config_path() -> PathBuf {
     p.join("config.json")
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn config_path() -> PathBuf {
     directories::ProjectDirs::from("com", "yadaw", "yadaw")
         .unwrap()
@@ -41,7 +61,7 @@ pub fn cache_dir() -> PathBuf {
     p.to_path_buf()
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn cache_dir() -> PathBuf {
     directories::ProjectDirs::from("com", "yadaw", "yadaw")
         .unwrap()
@@ -56,7 +76,7 @@ pub fn plugins_dir() -> PathBuf {
     dir
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn plugins_dir() -> PathBuf {
     // Next to the executable: <exedir>/plugins/clap
 
@@ -74,7 +94,7 @@ pub fn presets_dir() -> PathBuf {
     dir
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn presets_dir() -> PathBuf {
     if let Some(dirs) = directories::ProjectDirs::from("com", "yadaw", "yadaw") {
         let dir = dirs.config_dir().join("presets");
@@ -92,7 +112,7 @@ pub fn files_dir_pathbuf() -> PathBuf {
     crate::android_saf::files_dir_path().expect("getFilesDir failed")
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn config_root_dir() -> PathBuf {
     directories::ProjectDirs::from("com", "yadaw", "yadaw")
         .unwrap()
@@ -139,6 +159,7 @@ pub fn set_executable(path: &Path) {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub fn open_path_in_file_manager(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {

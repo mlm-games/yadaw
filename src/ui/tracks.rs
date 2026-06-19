@@ -7,7 +7,6 @@ use crate::messages::{AudioCommand, PluginParamInfo};
 use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
 use crate::model::track::TrackType;
-#[cfg(feature = "lv2-legacy")]
 use crate::plugin::get_control_port_info;
 use yadaw_plugin_api::{BackendKind, ParamKind};
 
@@ -558,7 +557,7 @@ impl TracksPanel {
                                 ui.close();
                             }
 
-                            #[cfg(not(target_os = "android"))]
+                            #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
                             {
                                 if ui.button("Open Presets Folder").clicked() {
                                     let uri_dir = crate::paths::presets_dir().join(
@@ -606,7 +605,6 @@ impl TracksPanel {
 
                     // Draw parameters based on backend
                     match backend {
-                        #[cfg(feature = "lv2-legacy")]
                         BackendKind::Lv2 => {
                             self.draw_lv2_params(
                                 ui,
@@ -617,8 +615,6 @@ impl TracksPanel {
                                 &params,
                             );
                         }
-                        #[cfg(not(feature = "lv2-legacy"))]
-                        BackendKind::Lv2 => {}
                         BackendKind::Clap => {
                             self.draw_clap_params(
                                 ui, app, track_id, plugin_id, plugin_idx, &params,
@@ -649,7 +645,6 @@ impl TracksPanel {
         }
     }
 
-    #[cfg(feature = "lv2-legacy")]
     fn draw_lv2_params(
         &self,
         ui: &mut egui::Ui,
@@ -669,7 +664,6 @@ impl TracksPanel {
                     .as_ref()
                     .map(|m| (m.min, m.max, m.default))
                     .unwrap_or((0.0, 1.0, 0.0));
-
                 if ui
                     .add(egui::Slider::new(&mut v, min_v..=max_v).show_value(true))
                     .changed()

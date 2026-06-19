@@ -4,8 +4,9 @@ version = "0.8.9"
 edition = "2024"
 
 [[bin]]
-name = "yadaw"
+name = "yadaw-desktop"
 path = "src/main.rs"
+required-features = ["desktop-bin"]
 
 [lib]
 name = "yadaw"
@@ -19,17 +20,13 @@ resolver = "3"
 
 [dependencies]
 yadaw-plugin-api = { path = "crates/yadaw-plugin-api" }
-yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = false }
 
-# Audio Backend
-cpal = "0.18"
 chrono = { version = "0.4", features = ["serde"] }
 egui = "0.34"
 eframe = { version = "0.34", features = ["wgpu"] }
 
 symphonia-adapter-oporus = "0.1.3"
 rtrb = "0.3"
-crossbeam-channel = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 directories = "6.0.0"
@@ -38,6 +35,7 @@ glob = "0.3.3"
 shellexpand = "3.1"
 env_logger = "0.11"
 once_cell = "1.19"
+web-time = "1.1.0"
 hound = "3.5"
 dissonia = { git = "https://github.com/MLM-Stuff/dissonia", features = [
     "flac",
@@ -57,7 +55,7 @@ num_cpus = "1.17.0"
 
 smallvec = "1.15.1"
 log = "0.4"
-clack = "0.1.0"
+flume = "0.11"
 
 [target.'cfg(target_os = "android")'.dependencies]
 rlobkit-dialogs = { git = "https://github.com/mlm-games/rlobkit" }
@@ -68,33 +66,44 @@ winit = { version = "0.30.12", default-features = false, features = [
 ] }
 ndk-context = "0.1"
 jni = "0.22"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "fs",
+] }
 
-[target.'cfg(not(target_os = "android"))'.dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cpal = "0.18"
+yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = false }
 winit = "0.30.12"
 rlobkit-dialogs = { git = "https://github.com/mlm-games/rlobkit" }
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "fs",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+cpal = { version = "0.18", features = ["wasm-bindgen"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
+yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = false }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+console_log = "1.0"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+rlobkit-dialogs = { git = "https://github.com/mlm-games/rlobkit" }
+tokio = { version = "1", features = ["rt", "macros", "time"] }
 
 
 [features]
-default = ["clap-host", "lv2-legacy"]
-desktop-bin = []
+default = []
+desktop-bin = ["clap-host", "lv2-legacy"]
 android = []
 clap-host = ["yadaw-plugin-host/clap-host"]
 lv2-legacy = ["yadaw-plugin-host/lv2-legacy"]
-
-[dependencies.clack-host]
-git = "https://github.com/prokopyl/clack"
-package = "clack-host"
-branch = "main"
-
-[dependencies.clack-extensions]
-git = "https://github.com/prokopyl/clack"
-package = "clack-extensions"
-branch = "main"
-optional = true
-default-features = false
-features = ["params", "clack-host"]
 
 [package.metadata.android]
 package = "org.mlm.yadaw"

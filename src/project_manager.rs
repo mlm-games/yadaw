@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use chrono::Local;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use web_time::{Duration, Instant, SystemTime};
 
 use crate::constants::PROJECT_EXTENSION;
 use crate::paths::cache_dir;
@@ -150,10 +150,19 @@ impl ProjectManager {
         let contents = fs::read_to_string(path)?;
         let project: Project = serde_json::from_str(&contents)?;
 
+        let std_system_time = path.metadata()?.modified()?;
+
+        // HACK: Convert std::time::SystemTime to web_time::SystemTime via unix epoch duration
+        let duration_since_epoch = std_system_time
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_else(|_| std::time::Duration::from_secs(0));
+        let modified = web_time::SystemTime::UNIX_EPOCH
+            + web_time::Duration::from_secs(duration_since_epoch.as_secs());
+
         self.current_project = Some(ProjectInfo {
             path: path.to_path_buf(),
             name: project.name.clone(),
-            modified: path.metadata()?.modified()?,
+            modified,
             auto_save_path: None,
         });
 

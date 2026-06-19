@@ -6,6 +6,7 @@ pub struct HostFacade {
 }
 
 impl HostFacade {
+    #[allow(unused_variables)]
     pub fn new(cfg: HostConfig) -> Result<Self> {
         let mut backs: Vec<Box<dyn PluginBackend>> = Vec::new();
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crossbeam_channel::{Receiver, Sender};
+use flume::{Receiver, Sender};
 
 use crate::audio_export::AudioExporter;
 use crate::audio_state::{AudioGraphSnapshot, AudioState, RealtimeCommand};
@@ -13,13 +13,12 @@ use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
 use crate::model::track::TrackType;
 use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor, TrackGroup};
-#[cfg(feature = "lv2-legacy")]
 use crate::plugin::{create_plugin_instance, get_control_port_info};
 use crate::project::{AppState, ClipLocation, ClipRef};
 use crate::time_utils::quick::samples_to_beats;
 use yadaw_plugin_api::BackendKind;
 
-pub fn run_command_processor(
+pub async fn run_command_processor(
     app_state: Arc<std::sync::Mutex<AppState>>,
     audio_state: Arc<AudioState>,
     command_rx: Receiver<AudioCommand>,
@@ -29,7 +28,7 @@ pub fn run_command_processor(
     midi_input_handler: Option<Arc<MidiInputHandler>>,
 ) {
     let mut midi_recording_state: Option<MidiRecordingState> = None;
-    while let Ok(command) = command_rx.recv() {
+    while let Ok(command) = command_rx.recv_async().await {
         process_command(
             command, // pass by value so we can move owned fields
             &mut midi_recording_state,
@@ -385,15 +384,12 @@ fn process_command(
             if let Some(uri) = uri_opt {
                 // Only clamp for LV2, CLAP plugins handle their own bounds
                 let v = match backend {
-                    #[cfg(feature = "lv2-legacy")]
                     BackendKind::Lv2 => {
                         let (min, max) = get_control_port_info(&uri, &param_name)
                             .map(|m| (m.min, m.max))
                             .unwrap_or((0.0, 1.0));
                         value.clamp(min, max)
                     }
-                    #[cfg(not(feature = "lv2-legacy"))]
-                    BackendKind::Lv2 => value,
                     BackendKind::Clap => value,
                 };
 
@@ -560,7 +556,6 @@ fn process_command(
                 let mut state = app_state.lock().unwrap();
                 let plugin_id = idgen::next();
 
-                #[cfg(feature = "lv2-legacy")]
                 let mut desc = create_plugin_instance(&uri, audio_state.sample_rate.load())
                     .unwrap_or_else(|_| PluginDescriptor {
                         id: 0,
@@ -572,17 +567,6 @@ fn process_command(
                         preset_name: None,
                         custom_name: None,
                     });
-                #[cfg(not(feature = "lv2-legacy"))]
-                let mut desc = PluginDescriptor {
-                    id: 0,
-                    uri: uri.clone(),
-                    name: display_name.clone(),
-                    backend,
-                    bypass: false,
-                    params: std::collections::HashMap::new(),
-                    preset_name: None,
-                    custom_name: None,
-                };
                 desc.backend = backend;
                 desc.id = plugin_id;
                 desc.name = display_name.clone();
@@ -2159,13 +2143,12 @@ pub fn send_graph_snapshot(state: &AppState, snapshot_tx: &Sender<AudioGraphSnap
 
     match snapshot_tx.try_send(snapshot) {
         Ok(()) => {}
-        Err(e) if e.is_full() => {
-            let latest = e.into_inner();
+        Err(flume::TrySendError::Full(latest)) => {
             if snapshot_tx.send(latest).is_err() {
                 log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
             }
         }
-        Err(_) => {
+        Err(flume::TrySendError::Disconnected(_)) => {
             log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
         }
     }

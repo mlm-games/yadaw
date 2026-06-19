@@ -1,26 +1,80 @@
+use crate::audio;
+use crate::audio_state::{AudioGraphSnapshot, AudioState, RealtimeCommand};
+use crate::config::Config;
+use crate::messages::AudioCommand;
+use crate::messages::UIUpdate;
 use crate::midi_input::MidiInputHandler;
-use crate::{
-    audio,
-    audio_state::{AudioState, RealtimeCommand},
-    command_processor::run_command_processor,
-    config::Config,
-    constants,
-    messages::{AudioCommand, UIUpdate},
-    ui,
-};
-use crate::{audio_state::AudioGraphSnapshot, project};
+use crate::spawn_detached;
+use crate::{project, ui};
+use flume::{self, Sender};
 use std::sync::{Arc, Mutex};
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::constants;
+#[cfg(not(target_arch = "wasm32"))]
 use yadaw_plugin_api::HostConfig;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "lv2-legacy")))]
 use yadaw_plugin_host::HostFacade;
-#[cfg(feature = "lv2-legacy")]
-use yadaw_plugin_host::legacy::init as plugin_host_init;
+#[cfg(all(not(target_arch = "wasm32"), feature = "lv2-legacy"))]
+use yadaw_plugin_host::{HostFacade, legacy::init as plugin_host_init};
 
 #[cfg(target_os = "android")]
 use android_activity::AndroidApp;
 #[cfg(all(target_os = "android", feature = "lv2-legacy"))]
 use yadaw_plugin_host::plugin_host;
 
-#[cfg(not(target_os = "android"))]
+struct AppChannels {
+    command_tx: Sender<AudioCommand>,
+    ui_tx: Sender<UIUpdate>,
+    ui_rx: flume::Receiver<UIUpdate>,
+    midi_handler: Option<Arc<MidiInputHandler>>,
+}
+
+fn setup_channels_and_start_audio(
+    app_state: &Arc<Mutex<project::AppState>>,
+    audio_state: &Arc<AudioState>,
+    start_audio: impl FnOnce(
+        flume::Receiver<RealtimeCommand>,
+        flume::Receiver<AudioGraphSnapshot>,
+        Sender<UIUpdate>,
+    ),
+) -> AppChannels {
+    let (command_tx, command_rx) = flume::unbounded::<AudioCommand>();
+    let (realtime_tx, realtime_rx) = flume::unbounded::<RealtimeCommand>();
+    let (snapshot_tx, snapshot_rx) = flume::bounded::<AudioGraphSnapshot>(1);
+    let (ui_tx, ui_rx) = flume::unbounded::<UIUpdate>();
+
+    start_audio(realtime_rx, snapshot_rx, ui_tx.clone());
+
+    let midi_handler = match MidiInputHandler::new(command_tx.clone()) {
+        Ok(handler) => Some(Arc::new(handler)),
+        Err(e) => {
+            log::warn!("Could not create MIDI Input handler: {}", e);
+            None
+        }
+    };
+
+    spawn_detached!(crate::command_processor::run_command_processor(
+        app_state.clone(),
+        audio_state.clone(),
+        command_rx,
+        realtime_tx,
+        ui_tx.clone(),
+        snapshot_tx,
+        midi_handler.clone(),
+    ));
+
+    let _ = command_tx.send(AudioCommand::UpdateTracks);
+
+    AppChannels {
+        command_tx,
+        ui_tx,
+        ui_rx,
+        midi_handler,
+    }
+}
+
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Logging
 
@@ -55,13 +109,6 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         state.sample_rate = host_sample_rate;
     }
 
-    // Create channels for communication
-    let (command_tx, command_rx) = crossbeam_channel::unbounded::<AudioCommand>();
-    let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
-    let (ui_tx, ui_rx) = crossbeam_channel::unbounded::<UIUpdate>();
-
-    let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded::<AudioGraphSnapshot>(1);
-
     // Initialize the global LV2 plugin host with current audio settings
     #[cfg(feature = "lv2-legacy")]
     plugin_host_init(host_sample_rate as f64, constants::MAX_BUFFER_SIZE)?;
@@ -75,58 +122,23 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let ui_facade = HostFacade::new(host_cfg)?;
     let available_plugins = ui_facade.scan().unwrap_or_default();
 
-    std::panic::set_hook(Box::new(|info| {
-        eprintln!("Panic: {info}");
-        let _ = std::fs::write(
-            crate::paths::cache_dir().join("last_panic.txt"),
-            format!("{info:?}"),
-        );
-    }));
-
-    // Start audio thread
-    {
-        let audio_state_clone = audio_state.clone();
-        let ui_tx_audio = ui_tx.clone();
-        std::thread::spawn(move || {
-            audio::run_audio_thread(
-                audio_state_clone,
-                realtime_rx,
-                ui_tx_audio,
-                snapshot_rx,
-                host_sample_rate,
-            );
-        });
-    }
-
-    let midi_input_handler = match MidiInputHandler::new(command_tx.clone()) {
-        Ok(handler) => Some(Arc::new(handler)),
-        Err(e) => {
-            log::warn!("Could not create MIDI Input handler: {}", e);
-            None
-        }
-    };
-
-    log::info!("Starting command processor thread...");
-    {
-        let app_state_clone = app_state.clone();
-        let audio_state_clone = audio_state.clone();
-        let ui_tx_clone = ui_tx.clone();
-        let midi_input_handler_clone = midi_input_handler.clone();
-        std::thread::spawn(move || {
-            run_command_processor(
-                app_state_clone,
-                audio_state_clone,
-                command_rx,
-                realtime_tx,
-                ui_tx_clone,
-                snapshot_tx,
-                midi_input_handler_clone,
-            );
-        });
-    }
-
-    // Prime audio graph
-    let _ = command_tx.send(AudioCommand::UpdateTracks);
+    let audio_state_audio = audio_state.clone();
+    let channels = setup_channels_and_start_audio(
+        &app_state,
+        &audio_state,
+        |realtime_rx, snapshot_rx, ui_tx_audio| {
+            let audio_state_audio = audio_state_audio.clone();
+            std::thread::spawn(move || {
+                audio::run_audio_thread(
+                    audio_state_audio,
+                    realtime_rx,
+                    ui_tx_audio,
+                    snapshot_rx,
+                    host_sample_rate,
+                );
+            });
+        },
+    );
 
     // UI
     let native_options = eframe::NativeOptions {
@@ -142,12 +154,12 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         "Yadaw",
         native_options,
         Box::new(move |_cc| {
-            let ui_midi_handler = midi_input_handler.clone();
+            let ui_midi_handler = channels.midi_handler.clone();
             let mut app = ui::YadawApp::new(
                 app_state.clone(),
                 audio_state.clone(),
-                command_tx.clone(),
-                ui_rx,
+                channels.command_tx.clone(),
+                channels.ui_rx,
                 available_plugins,
                 config,
                 ui_midi_handler,
@@ -193,12 +205,6 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         state.sample_rate = host_sample_rate;
     }
 
-    // Create channels
-    let (command_tx, command_rx) = crossbeam_channel::unbounded::<AudioCommand>();
-    let (realtime_tx, realtime_rx) = crossbeam_channel::unbounded::<RealtimeCommand>();
-    let (ui_tx, ui_rx) = crossbeam_channel::unbounded::<UIUpdate>();
-    let (snapshot_tx, snapshot_rx) = crossbeam_channel::bounded::<AudioGraphSnapshot>(1);
-
     // Initialize plugin host
     #[cfg(feature = "lv2-legacy")]
     plugin_host::init(host_sample_rate as f64, constants::MAX_BUFFER_SIZE)?;
@@ -212,51 +218,23 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     let ui_facade = HostFacade::new(host_cfg)?;
     let available_plugins = ui_facade.scan().unwrap_or_default();
 
-    // Start audio thread
-    {
-        let audio_state_clone = audio_state.clone();
-        let ui_tx_audio = ui_tx.clone();
-        let snapshot_tx_audio = snapshot_tx.clone();
-        std::thread::spawn(move || {
-            audio::run_audio_thread(
-                audio_state_clone,
-                realtime_rx,
-                ui_tx_audio,
-                snapshot_rx,
-                host_sample_rate,
-            );
-        });
-    }
-
-    let midi_input_handler = match MidiInputHandler::new(command_tx.clone()) {
-        Ok(handler) => Some(Arc::new(handler)),
-        Err(e) => {
-            log::warn!("Could not create MIDI Input handler: {}", e);
-            None
-        }
-    };
-
-    log::info!("Starting command processor thread...");
-    {
-        let app_state_clone = app_state.clone();
-        let audio_state_clone = audio_state.clone();
-        let ui_tx_clone = ui_tx.clone();
-        let midi_input_handler_clone = midi_input_handler.clone();
-        std::thread::spawn(move || {
-            run_command_processor(
-                app_state_clone,
-                audio_state_clone,
-                command_rx,
-                realtime_tx,
-                ui_tx_clone,
-                snapshot_tx,
-                midi_input_handler_clone,
-            );
-        });
-    }
-
-    // Prime audio graph
-    let _ = command_tx.send(AudioCommand::UpdateTracks);
+    let audio_state_audio = audio_state.clone();
+    let channels = setup_channels_and_start_audio(
+        &app_state,
+        &audio_state,
+        |realtime_rx, snapshot_rx, ui_tx_audio| {
+            let audio_state_audio = audio_state_audio.clone();
+            std::thread::spawn(move || {
+                audio::run_audio_thread(
+                    audio_state_audio,
+                    realtime_rx,
+                    ui_tx_audio,
+                    snapshot_rx,
+                    host_sample_rate,
+                );
+            });
+        },
+    );
 
     // UI
     let native_options = eframe::NativeOptions {
@@ -272,12 +250,12 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         "Yadaw",
         native_options,
         Box::new(move |_cc| {
-            let ui_midi_handler = midi_input_handler.clone();
+            let ui_midi_handler = channels.midi_handler.clone();
             Ok(Box::new(ui::YadawApp::new(
                 app_state.clone(),
                 audio_state.clone(),
-                command_tx.clone(),
-                ui_rx,
+                channels.command_tx.clone(),
+                channels.ui_rx,
                 available_plugins,
                 config,
                 ui_midi_handler,
@@ -286,4 +264,35 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     )?;
 
     Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn create_app() -> ui::YadawApp {
+    let config = Config::default();
+    let app_state = Arc::new(Mutex::new(project::AppState::default()));
+    let audio_state = Arc::new(AudioState::new());
+
+    let channels = setup_channels_and_start_audio(
+        &app_state,
+        &audio_state,
+        |realtime_rx, snapshot_rx, ui_tx_audio| {
+            audio::run_audio_wasm(
+                audio_state.clone(),
+                realtime_rx,
+                ui_tx_audio,
+                snapshot_rx,
+                config.audio.sample_rate,
+            );
+        },
+    );
+
+    ui::YadawApp::new(
+        app_state,
+        audio_state,
+        channels.command_tx,
+        channels.ui_rx,
+        vec![],
+        config,
+        channels.midi_handler,
+    )
 }

@@ -7,7 +7,7 @@ use crate::constants::{
 use crate::messages::AudioCommand;
 use crate::model::clip::{MidiClip, MidiNote};
 use crate::model::track::{Track, TrackType};
-use crossbeam_channel::Sender;
+use flume::Sender;
 use eframe::egui;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

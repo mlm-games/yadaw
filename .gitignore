@@ -2,3 +2,5 @@
 /temp
 Cargo.lock
 target/
+dist/
+pkg/

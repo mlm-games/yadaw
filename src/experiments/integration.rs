@@ -8,7 +8,7 @@ use crate::project_manager::ProjectManager;
 use crate::track_manager::{TrackManager, TrackType};
 use parking_lot::RwLock;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 pub struct DawCore {
     pub state: Arc<RwLock<AppState>>,

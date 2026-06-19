@@ -1,15 +1,21 @@
 #[cfg(feature = "clap-host")]
 mod clap_impl {
     use anyhow::{Result, anyhow};
+    #[cfg(feature = "clap-host")]
     use clack_host::utils::Cookie;
     use std::collections::HashMap;
     use std::path::Path;
 
+    #[cfg(feature = "clap-host")]
     use clack_host::entry::PluginEntry;
+    #[cfg(feature = "clap-host")]
     use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
+    #[cfg(feature = "clap-host")]
     use clack_host::prelude::*;
+    #[cfg(feature = "clap-host")]
     use clack_host::process::StartedPluginAudioProcessor;
 
+    #[cfg(feature = "clap-host")]
     use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
     use yadaw_plugin_api::{
         BackendKind, HostConfig, MidiEvent, ParamKey, ParamKind, PluginBackend,

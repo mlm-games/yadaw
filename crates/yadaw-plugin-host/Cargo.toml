@@ -13,19 +13,20 @@ parking_lot = "0.12"
 smallvec = "1.15.1"
 
 livi = { version = "0.8.0", optional = true }
-clack = "0.1.0"
+clack = { version = "0.1.0", optional = true }
 
 yadaw-plugin-api = { path = "../yadaw-plugin-api" }
 
 [features]
-default = ["clap-host", "lv2-legacy"]
-clap-host = ["clack-extensions"]
+default = []
+clap-host = ["clack-extensions", "clack", "clack-host"]
 lv2-legacy = ["livi"]
 
 [dependencies.clack-host]
 git = "https://github.com/prokopyl/clack"
 package = "clack-host"
 branch = "main"
+optional = true
 
 [dependencies.clack-extensions]
 git = "https://github.com/prokopyl/clack"

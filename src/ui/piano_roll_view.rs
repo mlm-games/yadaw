@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crossbeam_channel::Sender;
+use flume::Sender;
 use egui::scroll_area::ScrollSource;
 use egui::{Sense, UiBuilder};
 
@@ -28,7 +28,7 @@ pub struct PianoRollView {
 
     // Interaction tracking
     drag_in_progress: bool,
-    last_undo_snapshot: Option<std::time::Instant>,
+    last_undo_snapshot: Option<web_time::Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

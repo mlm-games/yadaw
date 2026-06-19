@@ -3,8 +3,6 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    audio_export::ExportConfig,
-    midi_input::RawMidiMessage,
     model::{
         MidiNote,
         automation::{AutomationMode, AutomationTarget},
@@ -12,6 +10,32 @@ use crate::{
     },
     project::AppStateSnapshot,
 };
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct RawMidiMessage {
+    pub timestamp_us: u64,
+    pub message: [u8; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportFormat {
+    Wav,
+    Flac,
+    Ogg,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportConfig {
+    pub path: std::path::PathBuf,
+    #[serde(default)]
+    pub export_uri: Option<String>,
+    pub format: Option<ExportFormat>,
+    pub sample_rate: f32,
+    pub bit_depth: u16,
+    pub start_beat: f64,
+    pub end_beat: f64,
+    pub normalize: bool,
+}
 
 use yadaw_plugin_api::{BackendKind, ParamKind};
 
