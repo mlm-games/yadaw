@@ -4,9 +4,8 @@ version = "0.8.9"
 edition = "2024"
 
 [[bin]]
-name = "yadaw-desktop"
+name = "yadaw"
 path = "src/main.rs"
-required-features = ["desktop-bin"]
 
 [lib]
 name = "yadaw"
@@ -99,8 +98,7 @@ tokio = { version = "1", features = ["rt", "macros", "time"] }
 
 
 [features]
-default = []
-desktop-bin = ["clap-host", "lv2-legacy"]
+default = ["clap-host", "lv2-legacy"]
 android = []
 clap-host = ["yadaw-plugin-host/clap-host"]
 lv2-legacy = ["yadaw-plugin-host/lv2-legacy"]
