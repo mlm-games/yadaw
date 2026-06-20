@@ -10,6 +10,7 @@ pub struct PluginDescriptor {
     pub name: String,
     pub backend: BackendKind,
     pub bypass: bool,
+    pub has_editor: bool,
     pub params: HashMap<String, f32>,
     pub preset_name: Option<String>,
     pub custom_name: Option<String>,

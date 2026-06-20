@@ -563,6 +563,7 @@ fn process_command(
                         name: display_name.clone(),
                         backend,
                         bypass: false,
+                        has_editor: false,
                         params: std::collections::HashMap::new(),
                         preset_name: None,
                         custom_name: None,
@@ -2084,8 +2085,10 @@ fn process_command(
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
-        AudioCommand::PunchOutMidiClip {
-            clip_id,
+        AudioCommand::OpenPluginEditor(track_id, plugin_id) => {
+            let _ = realtime_tx.send(RealtimeCommand::OpenPluginEditor(track_id, plugin_id));
+        }
+        AudioCommand::PunchOutMidiClip {            clip_id,
             start_beat,
             end_beat,
         } => {

@@ -869,6 +869,7 @@ impl AudioEngine {
                             })
                             .collect();
 
+                        let has_editor = inst.has_editor();
                         let handle = generate_plugin_handle();
                         self.plugin_instances
                             .insert(handle, PluginCell(Arc::new(parking_lot::Mutex::new(inst))));
@@ -893,6 +894,7 @@ impl AudioEngine {
                         let _ = self.updates.try_send(UIUpdate::PluginParamsDiscovered {
                             track_id,
                             plugin_idx,
+                            has_editor,
                             params: params_for_ui,
                         });
                     }
@@ -990,6 +992,22 @@ impl AudioEngine {
             }
             RealtimeCommand::RebuildTrackChain { track_id, chain } => {
                 self.rebuild_track_chain_rt(track_id, &chain);
+            }
+            RealtimeCommand::OpenPluginEditor(track_id, plugin_id) => {
+                if let Some(proc) = self.track_processors.get(&track_id) {
+                    if let Some(plugin) = proc.plugins.get(&plugin_id) {
+                        if let Some(handle) = plugin.rt_instance_id {
+                            if let Some(cell) = self.plugin_instances.get(&handle) {
+                                let mut guard = cell.lock();
+                                if let Err(e) = guard.open_editor() {
+                                    let msg = format!("Failed to open editor: {e}");
+                                    log::error!("{}", msg);
+                                    let _ = self.updates.try_send(UIUpdate::Error(msg));
+                                }
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -1590,6 +1608,7 @@ impl AudioEngine {
                     let _ = self.updates.try_send(UIUpdate::PluginParamsDiscovered {
                         track_id,
                         plugin_idx,
+                        has_editor: inst.has_editor(),
                         params: params_for_ui,
                     });
 

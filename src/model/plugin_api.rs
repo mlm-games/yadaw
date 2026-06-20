@@ -108,6 +108,10 @@ pub trait PluginInstance {
     fn load_state(&mut self, _data: &[u8]) -> bool {
         false
     }
+
+    fn open_editor(&mut self) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("Editor not supported"))
+    }
 }
 
 pub trait PluginBackend: Send + Sync {

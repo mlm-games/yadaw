@@ -2,9 +2,9 @@ use anyhow::{Result, anyhow};
 
 use crate::messages::AudioCommand;
 use crate::model::plugin::PluginDescriptor;
-use yadaw_plugin_api::UnifiedPluginInfo;
 #[cfg(feature = "lv2-legacy")]
 use yadaw_plugin_api::BackendKind;
+use yadaw_plugin_api::UnifiedPluginInfo;
 #[cfg(feature = "lv2-legacy")]
 use yadaw_plugin_host::legacy::{PluginInfo, get_available_plugins, with_host};
 
@@ -82,14 +82,15 @@ pub fn create_plugin_instance(uri: &str, sample_rate: f32) -> Result<PluginDescr
         }
 
         Ok(PluginDescriptor {
-            id: 0,
+            id: Default::default(),
             uri: uri.to_string(),
             name: plugin_info.name.clone(),
             backend: BackendKind::Lv2,
-            bypass: false,
+            bypass: Default::default(),
+            has_editor: Default::default(),
             params,
-            preset_name: None,
-            custom_name: None,
+            preset_name: Default::default(),
+            custom_name: Default::default(),
         })
     }
     #[cfg(not(feature = "lv2-legacy"))]

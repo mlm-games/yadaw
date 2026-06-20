@@ -149,7 +149,10 @@ impl YadawApp {
             .collect();
 
         let available_midi_ports = {
-            midi_input_handler.as_ref().map(|h| h.list_ports()).unwrap_or_default()
+            midi_input_handler
+                .as_ref()
+                .map(|h| h.list_ports())
+                .unwrap_or_default()
         };
 
         let mut input_manager = InputManager::new();
@@ -327,6 +330,12 @@ impl YadawApp {
     pub fn show_plugin_browser_for_track(&mut self, track_id: u64) {
         self.selected_track_for_plugin = Some(track_id);
         self.dialogs.show_plugin_browser();
+    }
+
+    pub fn open_plugin_editor(&mut self, track_id: u64, plugin_id: u64) {
+        if self.command_tx.send(AudioCommand::OpenPluginEditor(track_id, plugin_id)).is_err() {
+            self.dialogs.show_error("Failed to send open-editor command");
+        }
     }
 
     // Update clipboard operations to use IDs
@@ -1253,6 +1262,7 @@ impl YadawApp {
             UIUpdate::PluginParamsDiscovered {
                 track_id,
                 plugin_idx,
+                has_editor,
                 params,
             } => {
                 // Store meta info (name, min, max, default) for UI sliders
@@ -1264,6 +1274,7 @@ impl YadawApp {
                     if let Some(track) = state.tracks.get_mut(&track_id) {
                         if let Some(plugin) = track.plugin_chain.get_mut(plugin_idx) {
                             plugin.params.clear();
+                            plugin.has_editor = has_editor;
                             for param_info in &params {
                                 plugin
                                     .params

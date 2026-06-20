@@ -91,6 +91,8 @@ pub enum AudioCommand {
     FreezeTrack(u64),
     UnfreezeTrack(u64),
 
+    OpenPluginEditor(u64, u64),
+
     AddPluginUnified {
         track_id: u64,
         plugin_idx: usize, // for ordering
@@ -359,6 +361,7 @@ pub enum UIUpdate {
     PluginParamsDiscovered {
         track_id: u64,
         plugin_idx: usize,
+        has_editor: bool,
         params: Vec<PluginParamInfo>,
     },
     NotesCutToClipboard(Vec<MidiNote>),

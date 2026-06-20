@@ -201,6 +201,7 @@ pub enum RealtimeCommand {
         data1: u8,
         data2: u8,
     },
+    OpenPluginEditor(u64, u64),
 }
 
 #[derive(Debug, Clone)]

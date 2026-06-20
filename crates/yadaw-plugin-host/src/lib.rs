@@ -12,6 +12,20 @@ pub mod lv2_plugin_host;
 #[cfg(feature = "lv2-legacy")]
 pub mod plugin_host;
 
+/// Must be called early at process startup, before any other X11 calls
+/// (especially before winit/eframe initializes X11).
+#[cfg(all(unix, not(target_os = "android")))]
+pub fn init_xlib_threads_early() {
+    if let Ok(xlib) = x11_dl::xlib::Xlib::open() {
+        unsafe {
+            let ok = (xlib.XInitThreads)();
+            if ok == 0 {
+                log::warn!("XInitThreads returned 0");
+            }
+        }
+    }
+}
+
 pub use plugin_facade::HostFacade;
 
 #[cfg(feature = "lv2-legacy")]

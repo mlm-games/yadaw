@@ -76,6 +76,9 @@ fn setup_channels_and_start_audio(
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    yadaw_plugin_host::init_xlib_threads_early();
+
     // Logging
 
     #[cfg(not(target_os = "android"))]

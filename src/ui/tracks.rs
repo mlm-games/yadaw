@@ -499,7 +499,7 @@ impl TracksPanel {
 
         // Only lock when we need to read plugin data
         for plugin_idx in 0..chain_len {
-            let (plugin_id, plugin_name, plugin_uri, backend, bypass, params) = {
+            let (plugin_id, plugin_name, plugin_uri, backend, bypass, has_editor, params) = {
                 let state = app.state.lock().unwrap();
                 let track = match state.tracks.get(&track_id) {
                     Some(t) => t,
@@ -515,6 +515,7 @@ impl TracksPanel {
                     plugin.uri.clone(),
                     plugin.backend,
                     plugin.bypass,
+                    plugin.has_editor,
                     plugin.params.clone(),
                 )
             };
@@ -540,6 +541,10 @@ impl TracksPanel {
                         }
                         if plugin_idx < chain_len - 1 && ui.small_button("⏷").clicked() {
                             move_action = Some((plugin_idx, plugin_idx + 1));
+                        }
+                        #[cfg(all(feature = "clap-host", not(target_os = "android")))]
+                        if has_editor && ui.button("Open Editor").clicked() {
+                            app.open_plugin_editor(track_id, plugin_id);
                         }
                     });
 
