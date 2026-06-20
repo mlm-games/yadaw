@@ -5734,9 +5734,7 @@ dependencies = [
  "log",
  "once_cell",
  "parking_lot",
- "raw-window-handle",
  "smallvec",
- "winit",
  "x11-dl",
  "yadaw-plugin-api",
 ]
