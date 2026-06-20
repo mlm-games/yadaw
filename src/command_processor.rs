@@ -2088,7 +2088,8 @@ fn process_command(
         AudioCommand::OpenPluginEditor(track_id, plugin_id) => {
             let _ = realtime_tx.send(RealtimeCommand::OpenPluginEditor(track_id, plugin_id));
         }
-        AudioCommand::PunchOutMidiClip {            clip_id,
+        AudioCommand::PunchOutMidiClip {
+            clip_id,
             start_beat,
             end_beat,
         } => {

@@ -667,7 +667,11 @@ impl PianoRoll {
                 // On touch devices, ignore smooth_scroll_delta to prevent touch-drag
                 // from both interacting with notes AND scrolling the view. Touch pan/zoom
                 // is handled separately via handle_touch_pan_zoom (two-finger gestures).
-                let touch_active = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })));
+                let touch_active = ui.input(|i| {
+                    i.events
+                        .iter()
+                        .any(|e| matches!(e, egui::Event::Touch { .. }))
+                });
                 if !touch_active {
                     let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
                     if ui.input(|i| i.modifiers.ctrl) {

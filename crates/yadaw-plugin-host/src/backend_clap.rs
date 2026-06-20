@@ -10,9 +10,9 @@ mod clap_impl {
     use std::ptr;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc;
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
-    use {Arc, Mutex, OnceLock};
 
     #[cfg(feature = "clap-host")]
     use clack_host::entry::PluginEntry;

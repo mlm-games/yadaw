@@ -10,11 +10,11 @@ use dissonia::prelude::*;
 #[cfg(target_os = "android")]
 use rlobkit_dialogs::PlatformFile;
 
+use flume::Sender;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
-use flume::Sender;
 
 impl ExportFormat {
     pub fn default_extension(self) -> &'static str {

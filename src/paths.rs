@@ -5,21 +5,36 @@ use std::process::Command;
 // On wasm32 there is no real filesystem — all path functions return dummy paths
 // and directory creation is skipped.
 #[cfg(target_arch = "wasm32")]
-pub fn projects_dir() -> PathBuf { PathBuf::from("/projects") }
+pub fn projects_dir() -> PathBuf {
+    PathBuf::from("/projects")
+}
 #[cfg(target_arch = "wasm32")]
-pub fn config_path() -> PathBuf { PathBuf::from("/config/config.json") }
+pub fn config_path() -> PathBuf {
+    PathBuf::from("/config/config.json")
+}
 #[cfg(target_arch = "wasm32")]
-pub fn cache_dir() -> PathBuf { PathBuf::from("/cache") }
+pub fn cache_dir() -> PathBuf {
+    PathBuf::from("/cache")
+}
 #[cfg(target_arch = "wasm32")]
-pub fn plugins_dir() -> PathBuf { PathBuf::from("/plugins/clap") }
+pub fn plugins_dir() -> PathBuf {
+    PathBuf::from("/plugins/clap")
+}
 #[cfg(target_arch = "wasm32")]
-pub fn presets_dir() -> PathBuf { PathBuf::from("/presets") }
+pub fn presets_dir() -> PathBuf {
+    PathBuf::from("/presets")
+}
 #[cfg(target_arch = "wasm32")]
-pub fn config_root_dir() -> PathBuf { PathBuf::from("/config") }
+pub fn config_root_dir() -> PathBuf {
+    PathBuf::from("/config")
+}
 
 #[cfg(target_arch = "wasm32")]
 pub fn open_path_in_file_manager(_path: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "no filesystem on wasm32"))
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "no filesystem on wasm32",
+    ))
 }
 
 #[cfg(target_os = "android")]

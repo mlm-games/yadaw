@@ -1,11 +1,6 @@
 #![cfg(target_os = "android")]
 
-use jni::{
-    objects::JObject,
-    signature::RuntimeMethodSignature,
-    strings::JNIString,
-    Env, JavaVM,
-};
+use jni::{Env, JavaVM, objects::JObject, signature::RuntimeMethodSignature, strings::JNIString};
 use std::path::PathBuf;
 
 pub fn with_env<F, R>(f: F) -> Result<R, jni::errors::Error>

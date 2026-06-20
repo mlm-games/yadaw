@@ -7,8 +7,8 @@ use crate::constants::{
 use crate::messages::AudioCommand;
 use crate::model::clip::{MidiClip, MidiNote};
 use crate::model::track::{Track, TrackType};
-use flume::Sender;
 use eframe::egui;
+use flume::Sender;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UITrackType {

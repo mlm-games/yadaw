@@ -26,11 +26,7 @@ pub fn pick_open_file(title: &str, extensions: &[&str]) -> Picker<PlatformFile> 
     })
 }
 
-pub fn pick_save_file(
-    title: &str,
-    suggested_name: &str,
-    extension: &str,
-) -> Picker<PlatformFile> {
+pub fn pick_save_file(title: &str, suggested_name: &str, extension: &str) -> Picker<PlatformFile> {
     let title = title.to_string();
     let suggested = suggested_name.to_string();
     let ext = extension.to_string();
@@ -82,7 +78,9 @@ pub fn pick_directory(title: &str) -> Picker<PlatformFile> {
             })
             .await
             .map_err(|e| e.to_string())?;
-        Ok(result.map(|dir| PlatformFile::from_path(dir.name().unwrap_or_default(), dir.path().to_path_buf())))
+        Ok(result.map(|dir| {
+            PlatformFile::from_path(dir.name().unwrap_or_default(), dir.path().to_path_buf())
+        }))
     })
 }
 

@@ -1,21 +1,21 @@
 use std::path::{Path, PathBuf};
 
 use crate::file_picker::Picker;
+use crate::file_picker::PlatformFile;
 #[cfg(target_os = "android")]
 use crate::file_picker::RlobKit;
-use crate::file_picker::PlatformFile;
 
 use serde::{Deserialize, Serialize};
 
 use super::*;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::messages::ExportFormat;
 use crate::constants::{PROJECT_ALT_EXTENSION, PROJECT_EXTENSION};
 use crate::error::UserNotification;
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
 use crate::input::shortcuts::{KeyCode, Keybind};
 use crate::messages::AudioCommand;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::messages::ExportFormat;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::messages::ExportState;
 use crate::model::track::TrackType;
@@ -74,18 +74,16 @@ fn save_project_to_uri(app: &mut super::app::YadawApp, file: &PlatformFile) {
     };
 
     match save_result {
-        Ok(()) => {
-            match RlobKit::write_file_from_path(file, &temp_path) {
-                Ok(()) => {
-                    let _ = std::fs::remove_file(&temp_path);
-                    app.project_path = Some(uri);
-                    app.dialogs.show_success("Project saved successfully");
-                }
-                Err(e) => app
-                    .dialogs
-                    .show_error(&format!("Failed to write project to selected URI: {e}")),
+        Ok(()) => match RlobKit::write_file_from_path(file, &temp_path) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&temp_path);
+                app.project_path = Some(uri);
+                app.dialogs.show_success("Project saved successfully");
             }
-        }
+            Err(e) => app
+                .dialogs
+                .show_error(&format!("Failed to write project to selected URI: {e}")),
+        },
         Err(e) => app
             .dialogs
             .show_error(&format!("Failed to save project: {e}")),
@@ -2089,10 +2087,8 @@ impl PluginManagerDialog {
                                     ));
                                 }
                                 Err(e) => {
-                                    app.dialogs.show_warning(&format!(
-                                        "Failed to import plugin: {}",
-                                        e
-                                    ));
+                                    app.dialogs
+                                        .show_warning(&format!("Failed to import plugin: {}", e));
                                 }
                             }
                         } else if let Some(uri) = file.uri() {
@@ -2112,10 +2108,7 @@ impl PluginManagerDialog {
                                         crate::paths::set_executable(&dst);
                                         self.ensure_plugins_dir_in_scan_paths();
                                         self.perform_scan(app);
-                                        app.dialogs.show_message(&format!(
-                                            "Imported {}",
-                                            filename
-                                        ));
+                                        app.dialogs.show_message(&format!("Imported {}", filename));
                                     }
                                     Err(e) => {
                                         app.dialogs.show_warning(&format!(
@@ -2151,9 +2144,7 @@ impl PluginManagerDialog {
     }
 
     fn ensure_plugins_dir_in_scan_paths(&mut self) {
-        let dir = crate::paths::plugins_dir()
-            .to_string_lossy()
-            .to_string();
+        let dir = crate::paths::plugins_dir().to_string_lossy().to_string();
         if !self.scan_paths.contains(&dir) {
             self.scan_paths.push(dir);
         }
@@ -2180,8 +2171,7 @@ impl PluginManagerDialog {
         };
         match HostFacade::new(host_cfg).and_then(|f| f.scan()) {
             Ok(list) => {
-                app.available_plugins =
-                    list.into_iter().map(|p| (p.uri.clone(), p)).collect();
+                app.available_plugins = list.into_iter().map(|p| (p.uri.clone(), p)).collect();
                 app.dialogs.show_message("Plugin scan complete.");
             }
             Err(e) => {
@@ -2262,8 +2252,7 @@ impl ImportAudioDialog {
                                                 .map(|e| format!(".{e}"))
                                                 .unwrap_or_default()
                                         );
-                                        let temp_path =
-                                            crate::paths::cache_dir().join(&dest_name);
+                                        let temp_path = crate::paths::cache_dir().join(&dest_name);
                                         RlobKit::read_file_to_path(&file, &temp_path)
                                             .map_err(|e| e.to_string())
                                             .map(|()| temp_path)

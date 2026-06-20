@@ -69,16 +69,8 @@ pub const PROJECT_ALT_EXTENSION: &str = "ydw";
 pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "m4a", "aac"];
 pub const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 pub const EXPORT_EXTENSIONS: &[&str] = &["wav", "flac", "ogg"];
-pub const AUDIO_IMPORT_EXTENSIONS: &[&str] = &[
-    "wav",
-    "mp3",
-    "flac",
-    "ogg",
-    "m4a",
-    "aac",
-    "mid",
-    "midi",
-];
+pub const AUDIO_IMPORT_EXTENSIONS: &[&str] =
+    &["wav", "mp3", "flac", "ogg", "m4a", "aac", "mid", "midi"];
 
 pub fn is_audio_extension(ext: &str) -> bool {
     AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str())

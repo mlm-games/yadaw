@@ -333,8 +333,13 @@ impl YadawApp {
     }
 
     pub fn open_plugin_editor(&mut self, track_id: u64, plugin_id: u64) {
-        if self.command_tx.send(AudioCommand::OpenPluginEditor(track_id, plugin_id)).is_err() {
-            self.dialogs.show_error("Failed to send open-editor command");
+        if self
+            .command_tx
+            .send(AudioCommand::OpenPluginEditor(track_id, plugin_id))
+            .is_err()
+        {
+            self.dialogs
+                .show_error("Failed to send open-editor command");
         }
     }
 

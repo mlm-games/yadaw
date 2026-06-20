@@ -3,11 +3,9 @@ use crate::audio_state::{
     RtAutomationLaneSnapshot, RtAutomationTarget, RtCurveType, TrackSnapshot,
 };
 use crate::audio_utils::{calculate_stereo_gains, soft_clip};
-use crate::constants::{
-    DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION,
-};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::constants::RECORDING_BUFFER_SIZE;
+use crate::constants::{DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION};
 use crate::messages::{PluginParamInfo, UIUpdate};
 use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::ChannelStrip;
@@ -18,8 +16,8 @@ use yadaw_plugin_api::{BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEven
 use yadaw_plugin_host::HostFacade;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use flume::{Receiver, Sender};
 use dashmap::DashMap;
+use flume::{Receiver, Sender};
 use rtrb::{Consumer, RingBuffer};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
@@ -594,13 +592,8 @@ pub fn run_audio_wasm(
         free_running_samples: 0.0,
     };
 
-    let audio_callback = build_audio_callback(
-        engine,
-        channels,
-        realtime_commands,
-        snapshot_rx,
-        updates,
-    );
+    let audio_callback =
+        build_audio_callback(engine, channels, realtime_commands, snapshot_rx, updates);
 
     let stream = device
         .build_output_stream(

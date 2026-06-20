@@ -58,13 +58,27 @@ impl<T> Picker<T> {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", target_arch = "wasm32"))]
-pub use crate::file_picker_desktop::{pick_open_file, pick_save_file, pick_multiple_audio, pick_directory};
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_arch = "wasm32"
+))]
+pub use crate::file_picker_desktop::{
+    pick_directory, pick_multiple_audio, pick_open_file, pick_save_file,
+};
 
 #[cfg(target_os = "android")]
-pub use crate::file_picker_android::{pick_open_file, pick_save_file, pick_multiple_audio, pick_directory, write_file_to_uri};
+pub use crate::file_picker_android::{
+    pick_directory, pick_multiple_audio, pick_open_file, pick_save_file, write_file_to_uri,
+};
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", target_arch = "wasm32"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_arch = "wasm32"
+))]
 pub fn write_file_to_uri(_source_path: &std::path::Path, _uri: &str) -> Result<(), String> {
     Err("write_file_to_uri not needed on desktop".into())
 }
