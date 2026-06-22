@@ -7,6 +7,7 @@ default-run = "yadaw"
 [[bin]]
 name = "yadaw"
 path = "src/main.rs"
+required-features = ["clap-host"]
 
 [lib]
 name = "yadaw"
