@@ -1,0 +1,3 @@
+- cargo fmt
+- clap plugin ui support (hit n miss)
+- fix playhead not appearing in roll (from wasm changes)
