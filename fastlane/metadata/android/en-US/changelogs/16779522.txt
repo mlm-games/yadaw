@@ -1,0 +1,3 @@
+- Add required-features to bin section in Cargo.toml
+- Prefix tag_name with 'v' for versioning
+- Rename default binary and update package name
