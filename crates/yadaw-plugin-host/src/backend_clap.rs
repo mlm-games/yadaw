@@ -4,9 +4,11 @@ mod clap_impl {
     #[cfg(feature = "clap-host")]
     use clack_host::utils::Cookie;
     use std::collections::HashMap;
+    #[cfg(unix)]
     use std::mem;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::Path;
+    #[cfg(unix)]
     use std::ptr;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc;
@@ -39,8 +41,8 @@ mod clap_impl {
     mod xlib {
         pub struct Xlib;
         impl Xlib {
-            pub fn open() -> Option<Xlib> {
-                None
+            pub fn open() -> Result<Xlib, ()> {
+                Err(())
             }
         }
     }
@@ -955,7 +957,7 @@ mod clap_impl {
     /// Tries floating first, falls back to embedded.
     fn open_editor_on_main_thread(
         instance: &mut PluginInstance<MyHost>,
-        xlib: &Option<xlib::Xlib>,
+        _xlib: &Option<xlib::Xlib>,
         editor: &mut Option<EditorState>,
     ) -> Result<()> {
         if editor.is_some() {
@@ -1020,7 +1022,7 @@ mod clap_impl {
                 ));
             }
 
-            let xlib = xlib.as_ref().ok_or_else(|| anyhow!("Xlib not available"))?;
+            let xlib = _xlib.as_ref().ok_or_else(|| anyhow!("Xlib not available"))?;
 
             // Open X11 display
             let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
