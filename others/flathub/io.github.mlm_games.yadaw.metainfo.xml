@@ -52,15 +52,6 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="0.9.1" date="2026-06-22" type="stable">
-      <description>
-        <ul>
-          <li>cargo fmt</li>
-          <li>clap plugin ui support (hit n miss)</li>
-          <li>fix playhead not appearing in roll (from wasm changes)</li>
-        </ul>
-      </description>
-    </release>
     <release version="0.8.9" date="2026-06-02" type="stable">
       <description>
         <ul>
