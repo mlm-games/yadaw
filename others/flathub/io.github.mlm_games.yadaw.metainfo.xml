@@ -52,6 +52,19 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.9.1" date="2026-06-23" type="stable">
+      <description>
+        <ul>
+          <li>fix win build</li>
+          <li>Add required-features to bin section in Cargo.toml</li>
+          <li>Prefix tag_name with 'v' for versioning</li>
+          <li>Rename default binary and update package name</li>
+          <li>cargo fmt</li>
+          <li>clap plugin ui support (hit n miss)</li>
+          <li>fix playhead not appearing in roll (from wasm changes)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.9" date="2026-06-02" type="stable">
       <description>
         <ul>

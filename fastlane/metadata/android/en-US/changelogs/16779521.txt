@@ -1,0 +1,7 @@
+- fix win build
+- Add required-features to bin section in Cargo.toml
+- Prefix tag_name with 'v' for versioning
+- Rename default binary and update package name
+- cargo fmt
+- clap plugin ui support (hit n miss)
+- fix playhead not appearing in roll (from wasm changes)
