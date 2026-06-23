@@ -24,7 +24,17 @@ jobs:
 
       - name: Preflight | Check release tag
         run: |
-          curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ inputs.version_name }}" >/dev/null
+          VERSION="${{ inputs.version_name }}"
+          VERSION="${VERSION#v}"
+          for TAG in "v$VERSION" "$VERSION"; do
+            if curl --output /dev/null --silent --head --fail \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}"; then
+              echo "Found release tag: $TAG"
+              exit 0
+            fi
+          done
+          echo "Release tag not found (tried: v$VERSION, $VERSION)" >&2
+          exit 1
 
       - name: Preflight | Check secret
         env:
@@ -45,9 +55,25 @@ jobs:
                  others/snap/snap/gui/yadaw.desktop
 
           VERSION="${{ inputs.version_name }}"
-          TARGET="x86_64-unknown-linux-gnu" 
+          VERSION="${VERSION#v}"  # normalize
+          TARGET="x86_64-unknown-linux-gnu"
           TAR_GZ_FILE="${{ env.BIN_NAME }}-${VERSION}-${TARGET}.tar.gz"
-          curl -fL "https://github.com/${{ github.repository }}/releases/download/${{ inputs.version_name }}/$TAR_GZ_FILE" -o /tmp/app.tar.gz
+
+          # Try both with and without 'v' prefix for release tag
+          DOWNLOADED=false
+          for TAG in "v$VERSION" "$VERSION"; do
+            URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${TAR_GZ_FILE}"
+            if curl --output /dev/null --silent --head --fail "$URL"; then
+              curl -fL "$URL" -o /tmp/app.tar.gz
+              DOWNLOADED=true
+              break
+            fi
+          done
+
+          if [[ "$DOWNLOADED" != "true" ]]; then
+            echo "Failed to download tarball" >&2
+            exit 1
+          fi
 
           # Extract tar.gz and copy binary
           mkdir -p /tmp/app_extract
@@ -58,7 +84,9 @@ jobs:
 
       - name: Update version in snapcraft.yml
         run: |
-          sed -i "s/^version: .*/version: '${{ inputs.version_name }}'/" others/snap/snapcraft.yaml
+          VERSION="${{ inputs.version_name }}"
+          VERSION="${VERSION#v}"
+          sed -i "s/^version: .*/version: '$VERSION'/" others/snap/snapcraft.yaml
           echo "others/snap/snapcraft.yaml version updated"
 
       - name: Build snap

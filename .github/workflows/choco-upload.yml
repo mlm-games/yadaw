@@ -14,10 +14,40 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Download windows build from release
+        shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $VERSION = "${{ inputs.version_name }}" -replace '^v', ''
           mkdir -p choco-package
-          Invoke-WebRequest "https://github.com/mlm-games/yadaw/releases/download/${{ inputs.version_name }}/yadaw.exe" -OutFile "choco-package/yadaw.exe"
-          
+
+          # Try both with and without 'v' prefix for release tag
+          $downloaded = $false
+          foreach ($tag in @("v$VERSION", "$VERSION")) {
+            $url = "https://github.com/mlm-games/yadaw/releases/download/${tag}/yadaw-${VERSION}-x86_64-pc-windows-gnu.zip"
+            try {
+              $request = [System.Net.WebRequest]::Create($url)
+              $request.Method = "HEAD"
+              $response = $request.GetResponse()
+              $response.Close()
+              Write-Output "Found asset at tag $tag"
+              Invoke-WebRequest -Uri $url -OutFile "choco-package/yadaw-${VERSION}-x86_64-pc-windows-gnu.zip"
+              $downloaded = $true
+              break
+            } catch {
+              continue
+            }
+          }
+
+          if (-not $downloaded) {
+            throw "Failed to download Windows build"
+          }
+
+          # Extract yadaw.exe from the zip
+          Expand-Archive -Path "choco-package/yadaw-${VERSION}-x86_64-pc-windows-gnu.zip" -DestinationPath "choco-package/extracted" -Force
+          Copy-Item "choco-package/extracted/yadaw-${VERSION}-x86_64-pc-windows-gnu/yadaw.exe" "choco-package/yadaw.exe"
+          Remove-Item "choco-package/yadaw-${VERSION}-x86_64-pc-windows-gnu.zip" -Force
+          Remove-Item "choco-package/extracted" -Recurse -Force
+
       - name: List downloaded files
         shell: pwsh
         run: |
@@ -50,17 +80,18 @@ jobs:
         with:
           args: -v
 
-      - name: Update Chocolatey nuspec version
+      - name: Update Chocolatey nuspec version and install script
         shell: pwsh
         run: |
+          $VERSION = "${{ inputs.version_name }}" -replace '^v', ''
+          $TAG = "v$VERSION"
+
+          # Update nuspec version
           $nuspecPath = ".\chocolatey\yadaw.nuspec"
           $content = Get-Content $nuspecPath
-          $content = $content -replace "<version>.*</version>", "<version>${{ inputs.version_name }}</version>"
+          $content = $content -replace "<version>.*</version>", "<version>$VERSION</version>"
           $content | Set-Content $nuspecPath
 
-      - name: Update Chocolatey install script
-        shell: pwsh
-        run: |
           # Get the SHA256 hash from the checksums file
           $checksumFile = Get-Content ".\choco-package\SHA256SUMS.txt"
           $exeFileName = "yadaw.exe"
@@ -78,7 +109,7 @@ jobs:
           # Update the chocolateyinstall.ps1 file
           $installPath = ".\chocolatey\tools\chocolateyinstall.ps1"
           $content = Get-Content $installPath
-          $content = $content -replace "url\s*=\s*'.*'", "url = 'https://github.com/mlm-games/yadaw/releases/download/${{ inputs.version_name }}/yadaw.exe'"
+          $content = $content -replace "url\s*=\s*'.*'", "url = 'https://github.com/mlm-games/yadaw/releases/download/${TAG}/yadaw.exe'"
           $content = $content -replace "checksum\s*=\s*'.*'", "checksum = '$hash'"
           $content | Set-Content $installPath
 
@@ -89,5 +120,6 @@ jobs:
         env:
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
         run: |
+          $VERSION = "${{ inputs.version_name }}" -replace '^v', ''
           choco pack .\chocolatey\yadaw.nuspec
-          choco push yadaw.${{ inputs.version_name }}.nupkg --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+          choco push yadaw.$VERSION.nupkg --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
