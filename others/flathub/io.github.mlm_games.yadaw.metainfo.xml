@@ -52,15 +52,6 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="0.9.2" date="2026-06-22" type="stable">
-      <description>
-        <ul>
-          <li>Add required-features to bin section in Cargo.toml</li>
-          <li>Prefix tag_name with 'v' for versioning</li>
-          <li>Rename default binary and update package name</li>
-        </ul>
-      </description>
-    </release>
     <release version="0.9.1" date="2026-06-22" type="stable">
       <description>
         <ul>

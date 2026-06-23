@@ -1,6 +1,6 @@
 [package]
 name = "yadaw"
-version = "0.9.2"
+version = "0.9.1"
 edition = "2024"
 default-run = "yadaw"
 
@@ -134,7 +134,7 @@ icon = "@drawable/ic_launcher_monochrome"
 # exported = false
 
 [package.metadata.android.sdk]
-version_code = 16779522
+version_code = 16779521
 min_sdk_version = 29
 target_sdk_version = 36
 
