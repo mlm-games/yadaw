@@ -32,8 +32,18 @@ mod clap_impl {
     use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
     use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
 
-    #[cfg(all(unix, not(target_os = "android")))]
+    #[cfg(unix)]
     use x11_dl::xlib;
+
+    #[cfg(not(unix))]
+    mod xlib {
+        pub struct Xlib;
+        impl Xlib {
+            pub fn open() -> Option<Xlib> {
+                None
+            }
+        }
+    }
 
     use yadaw_plugin_api::{
         BackendKind, HostConfig, MidiEvent, ParamKey, ParamKind, PluginBackend,
@@ -878,6 +888,7 @@ mod clap_impl {
             }
 
             // Poll X11 events for embedded editor
+            #[cfg(unix)]
             if let Some(ref mut state) = editor {
                 if pump_x11_events(&xlib, state) {
                     if let Some(state) = editor.take() {
@@ -892,6 +903,7 @@ mod clap_impl {
 
     enum EditorState {
         Floating,
+        #[cfg(unix)]
         Embedded {
             display: *mut xlib::Display,
             parent_win: xlib::Window,
@@ -906,6 +918,7 @@ mod clap_impl {
     unsafe impl Send for EditorState {}
     unsafe impl Sync for EditorState {}
 
+    #[cfg(unix)]
     fn send_expose_event(
         xlib: &xlib::Xlib,
         display: *mut xlib::Display,
@@ -929,6 +942,7 @@ mod clap_impl {
         }
     }
 
+    #[cfg(unix)]
     unsafe fn cleanup_x11_window(
         xlib: &xlib::Xlib,
         display: *mut xlib::Display,
@@ -993,182 +1007,193 @@ mod clap_impl {
             return Ok(());
         }
 
-        // Try X11 embedded
-        let embedded_cfg = GuiConfiguration {
-            api_type: GuiApiType::X11,
-            is_floating: false,
-        };
-        if !gui_ext.is_api_supported(&mut instance.plugin_handle(), embedded_cfg) {
-            return Err(anyhow!(
-                "Plugin does not support X11 floating, Wayland floating, or X11 embedded"
-            ));
-        }
+        #[cfg(unix)]
+        {
+            // Try X11 embedded
+            let embedded_cfg = GuiConfiguration {
+                api_type: GuiApiType::X11,
+                is_floating: false,
+            };
+            if !gui_ext.is_api_supported(&mut instance.plugin_handle(), embedded_cfg) {
+                return Err(anyhow!(
+                    "Plugin does not support X11 floating, Wayland floating, or X11 embedded"
+                ));
+            }
 
-        let xlib = xlib.as_ref().ok_or_else(|| anyhow!("Xlib not available"))?;
+            let xlib = xlib.as_ref().ok_or_else(|| anyhow!("Xlib not available"))?;
 
-        // Open X11 display
-        let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
-        if display.is_null() {
-            return Err(anyhow!("Cannot open X11 display"));
-        }
+            // Open X11 display
+            let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
+            if display.is_null() {
+                return Err(anyhow!("Cannot open X11 display"));
+            }
 
-        let screen = unsafe { (xlib.XDefaultScreen)(display) };
-        let root = unsafe { (xlib.XRootWindow)(display, screen) };
-        let white = unsafe { (xlib.XWhitePixel)(display, screen) };
+            let screen = unsafe { (xlib.XDefaultScreen)(display) };
+            let root = unsafe { (xlib.XRootWindow)(display, screen) };
+            let white = unsafe { (xlib.XWhitePixel)(display, screen) };
 
-        let parent_win =
-            unsafe { (xlib.XCreateSimpleWindow)(display, root, 100, 100, 800, 600, 0, 0, white) };
+            let parent_win = unsafe {
+                (xlib.XCreateSimpleWindow)(display, root, 100, 100, 800, 600, 0, 0, white)
+            };
 
-        unsafe {
-            (xlib.XSelectInput)(
-                display,
-                parent_win,
-                (xlib::StructureNotifyMask
-                    | xlib::ExposureMask
-                    | xlib::SubstructureNotifyMask
-                    | xlib::PropertyChangeMask) as i64,
-            );
-        }
+            unsafe {
+                (xlib.XSelectInput)(
+                    display,
+                    parent_win,
+                    (xlib::StructureNotifyMask
+                        | xlib::ExposureMask
+                        | xlib::SubstructureNotifyMask
+                        | xlib::PropertyChangeMask) as i64,
+                );
+            }
 
-        let wm_delete_window =
-            unsafe { (xlib.XInternAtom)(display, c"WM_DELETE_WINDOW".as_ptr(), 0) };
-        let wm_protocols = unsafe { (xlib.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
-        unsafe {
-            (xlib.XSetWMProtocols)(
-                display,
-                parent_win,
-                &wm_delete_window as *const _ as *mut _,
-                1,
-            );
-        }
+            let wm_delete_window =
+                unsafe { (xlib.XInternAtom)(display, c"WM_DELETE_WINDOW".as_ptr(), 0) };
+            let wm_protocols =
+                unsafe { (xlib.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
+            unsafe {
+                (xlib.XSetWMProtocols)(
+                    display,
+                    parent_win,
+                    &wm_delete_window as *const _ as *mut _,
+                    1,
+                );
+            }
 
-        unsafe {
-            (xlib.XMapWindow)(display, parent_win);
-            (xlib.XFlush)(display);
-        }
+            unsafe {
+                (xlib.XMapWindow)(display, parent_win);
+                (xlib.XFlush)(display);
+            }
 
-        // Now, create (embedded)
-        gui_ext
-            .create(&mut instance.plugin_handle(), embedded_cfg)
-            .map_err(|e| {
+            // Now, create (embedded)
+            gui_ext
+                .create(&mut instance.plugin_handle(), embedded_cfg)
+                .map_err(|e| {
+                    unsafe {
+                        cleanup_x11_window(xlib, display, parent_win);
+                    }
+                    anyhow!("Plugin GUI create (embedded) failed: {e:?}")
+                })?;
+
+            // Preferred size
+            let preferred_size = gui_ext.get_size(&mut instance.plugin_handle());
+            log::info!("Plugin preferred size: {:?}", preferred_size);
+            if let Some(size) = preferred_size {
+                unsafe {
+                    (xlib.XResizeWindow)(display, parent_win, size.width, size.height);
+                    (xlib.XSync)(display, 0);
+                }
+            }
+
+            // set_parent
+            let clap_window = clack_extensions::gui::Window::from_x11_handle(parent_win);
+            let sp_result =
+                unsafe { gui_ext.set_parent(&mut instance.plugin_handle(), clap_window) };
+            log::info!("set_parent result: {:?}", sp_result);
+            if let Err(e) = sp_result {
+                let _ = gui_ext.destroy(&mut instance.plugin_handle());
                 unsafe {
                     cleanup_x11_window(xlib, display, parent_win);
                 }
-                anyhow!("Plugin GUI create (embedded) failed: {e:?}")
-            })?;
+                return Err(anyhow!("set_parent failed: {e:?}"));
+            }
 
-        // Preferred size
-        let preferred_size = gui_ext.get_size(&mut instance.plugin_handle());
-        log::info!("Plugin preferred size: {:?}", preferred_size);
-        if let Some(size) = preferred_size {
+            // set_size before show
+            if let Some(size) = gui_ext.get_size(&mut instance.plugin_handle()) {
+                let ss_result = gui_ext.set_size(&mut instance.plugin_handle(), size);
+                log::info!(
+                    "set_size(pre-show) size={}x{} result={:?}",
+                    size.width,
+                    size.height,
+                    ss_result
+                );
+            }
+
+            // show
+            let show_result = gui_ext.show(&mut instance.plugin_handle());
+            log::info!("show result: {:?}", show_result);
+            if let Err(e) = show_result {
+                let _ = gui_ext.destroy(&mut instance.plugin_handle());
+                unsafe {
+                    cleanup_x11_window(xlib, display, parent_win);
+                }
+                return Err(anyhow!("show failed: {e:?}"));
+            }
+
+            // set_size after show, as JUCE could defer resized() on invisible components (surge)
+            if let Some(size) = gui_ext.get_size(&mut instance.plugin_handle()) {
+                let ss_result = gui_ext.set_size(&mut instance.plugin_handle(), size);
+                log::info!(
+                    "set_size(post-show) size={}x{} result={:?}",
+                    size.width,
+                    size.height,
+                    ss_result
+                );
+            }
+
             unsafe {
-                (xlib.XResizeWindow)(display, parent_win, size.width, size.height);
+                (xlib.XMapSubwindows)(display, parent_win);
                 (xlib.XSync)(display, 0);
             }
-        }
 
-        // set_parent
-        let clap_window = clack_extensions::gui::Window::from_x11_handle(parent_win);
-        let sp_result = unsafe { gui_ext.set_parent(&mut instance.plugin_handle(), clap_window) };
-        log::info!("set_parent result: {:?}", sp_result);
-        if let Err(e) = sp_result {
-            let _ = gui_ext.destroy(&mut instance.plugin_handle());
-            unsafe {
-                cleanup_x11_window(xlib, display, parent_win);
+            // get ID for Expose-based paint triggering
+            let child_win = unsafe {
+                let mut root_ret: xlib::Window = 0;
+                let mut parent_ret: xlib::Window = 0;
+                let mut children: *mut xlib::Window = ptr::null_mut();
+                let mut nchildren: std::os::raw::c_uint = 0;
+                let ok = (xlib.XQueryTree)(
+                    display,
+                    parent_win,
+                    &mut root_ret,
+                    &mut parent_ret,
+                    &mut children,
+                    &mut nchildren,
+                );
+                let found = if ok != 0 && !children.is_null() && nchildren > 0 {
+                    *children.offset(0)
+                } else {
+                    0
+                };
+                if !children.is_null() {
+                    (xlib.XFree)(children as *mut _);
+                }
+                found
+            };
+
+            let size = preferred_size
+                .map(|s| (s.width, s.height))
+                .unwrap_or((800, 600));
+
+            // Send initial Expose to child to kick-start painting
+            if child_win != 0 {
+                let (w, h) = size;
+                send_expose_event(xlib, display, child_win, w as i32, h as i32);
+                log::info!("Sent initial Expose to child 0x{:x}", child_win);
             }
-            return Err(anyhow!("set_parent failed: {e:?}"));
-        }
 
-        // set_size before show
-        if let Some(size) = gui_ext.get_size(&mut instance.plugin_handle()) {
-            let ss_result = gui_ext.set_size(&mut instance.plugin_handle(), size);
-            log::info!(
-                "set_size(pre-show) size={}x{} result={:?}",
-                size.width,
-                size.height,
-                ss_result
-            );
-        }
-
-        // show
-        let show_result = gui_ext.show(&mut instance.plugin_handle());
-        log::info!("show result: {:?}", show_result);
-        if let Err(e) = show_result {
-            let _ = gui_ext.destroy(&mut instance.plugin_handle());
-            unsafe {
-                cleanup_x11_window(xlib, display, parent_win);
-            }
-            return Err(anyhow!("show failed: {e:?}"));
-        }
-
-        // set_size after show, as JUCE could defer resized() on invisible components (surge)
-        if let Some(size) = gui_ext.get_size(&mut instance.plugin_handle()) {
-            let ss_result = gui_ext.set_size(&mut instance.plugin_handle(), size);
-            log::info!(
-                "set_size(post-show) size={}x{} result={:?}",
-                size.width,
-                size.height,
-                ss_result
-            );
-        }
-
-        unsafe {
-            (xlib.XMapSubwindows)(display, parent_win);
-            (xlib.XSync)(display, 0);
-        }
-
-        // get ID for Expose-based paint triggering
-        let child_win = unsafe {
-            let mut root_ret: xlib::Window = 0;
-            let mut parent_ret: xlib::Window = 0;
-            let mut children: *mut xlib::Window = ptr::null_mut();
-            let mut nchildren: std::os::raw::c_uint = 0;
-            let ok = (xlib.XQueryTree)(
+            *editor = Some(EditorState::Embedded {
                 display,
                 parent_win,
-                &mut root_ret,
-                &mut parent_ret,
-                &mut children,
-                &mut nchildren,
-            );
-            let found = if ok != 0 && !children.is_null() && nchildren > 0 {
-                *children.offset(0)
-            } else {
-                0
-            };
-            if !children.is_null() {
-                (xlib.XFree)(children as *mut _);
-            }
-            found
-        };
-
-        let size = preferred_size
-            .map(|s| (s.width, s.height))
-            .unwrap_or((800, 600));
-
-        // Send initial Expose to child to kick-start painting
-        if child_win != 0 {
-            let (w, h) = size;
-            send_expose_event(xlib, display, child_win, w as i32, h as i32);
-            log::info!("Sent initial Expose to child 0x{:x}", child_win);
+                child_win,
+                wm_delete_window,
+                wm_protocols,
+                size,
+                expose_tick: 0,
+            });
+            log::info!("Plugin GUI opened in embedded mode");
+            return Ok(());
         }
 
-        *editor = Some(EditorState::Embedded {
-            display,
-            parent_win,
-            child_win,
-            wm_delete_window,
-            wm_protocols,
-            size,
-            expose_tick: 0,
-        });
-        log::info!("Plugin GUI opened in embedded mode");
-        Ok(())
+        #[cfg(not(unix))]
+        return Err(anyhow!(
+            "Plugin does not support X11 floating, Wayland floating, or X11 embedded"
+        ));
     }
 
     fn close_editor_state(
         instance: &mut PluginInstance<MyHost>,
-        xlib: &Option<xlib::Xlib>,
+        _xlib: &Option<xlib::Xlib>,
         state: EditorState,
     ) {
         if let Some(gui_ext) = instance.plugin_handle().get_extension::<PluginGui>() {
@@ -1179,12 +1204,13 @@ mod clap_impl {
         match state {
             EditorState::Floating => {}
 
+            #[cfg(unix)]
             EditorState::Embedded {
                 display,
                 parent_win,
                 ..
             } => {
-                if let Some(xlib) = xlib {
+                if let Some(xlib) = _xlib {
                     unsafe {
                         (xlib.XDestroyWindow)(display, parent_win);
                         (xlib.XCloseDisplay)(display);
@@ -1195,6 +1221,7 @@ mod clap_impl {
     }
 
     /// Returns `true` if the editor was closed (user clicked the close button).
+    #[cfg(unix)]
     fn pump_x11_events(xlib: &Option<xlib::Xlib>, state: &mut EditorState) -> bool {
         let xlib = match xlib {
             Some(x) => x,
