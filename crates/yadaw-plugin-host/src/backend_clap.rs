@@ -32,6 +32,7 @@ mod clap_impl {
     use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
     use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
 
+    #[cfg(all(unix, not(target_os = "android")))]
     use x11_dl::xlib;
 
     use yadaw_plugin_api::{
