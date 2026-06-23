@@ -17,20 +17,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="${{ inputs.version_name }}"
+          VERSION="${{ inputs.version_name }}"
+          VERSION="${VERSION#v}"  # normalize: strip leading 'v' if present
           mkdir -p downloads
-          wget -O downloads/yadaw-${{ inputs.version_name }}-x86_64-unknown-linux-gnu.tar.gz \
-            "https://github.com/mlm-games/yadaw/releases/download/${tag}/yadaw-${{ inputs.version_name }}-x86_64-unknown-linux-gnu.tar.gz"
-          wget -O downloads/yadaw-${{ inputs.version_name }}-aarch64-unknown-linux-gnu.tar.gz \
-            "https://github.com/mlm-games/yadaw/releases/download/${tag}/yadaw-${{ inputs.version_name }}-aarch64-unknown-linux-gnu.tar.gz"
+
+          # Try both with and without 'v' prefix for release tag
+          DOWNLOADED=false
+          for TAG in "v$VERSION" "$VERSION"; do
+            URL_X64="https://github.com/mlm-games/yadaw/releases/download/${TAG}/yadaw-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+            if curl --output /dev/null --silent --head --fail "$URL_X64"; then
+              wget -O "downloads/yadaw-${VERSION}-x86_64-unknown-linux-gnu.tar.gz" "$URL_X64"
+              wget -O "downloads/yadaw-${VERSION}-aarch64-unknown-linux-gnu.tar.gz" \
+                "https://github.com/mlm-games/yadaw/releases/download/${TAG}/yadaw-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
+              DOWNLOADED=true
+              break
+            fi
+          done
+
+          if [[ "$DOWNLOADED" != "true" ]]; then
+            echo "Failed to download tarballs"
+            exit 1
+          fi
 
       - name: Calculate SHA256 checksums
         id: checksums
         shell: bash
         run: |
           set -euo pipefail
-          X64_TARBALL="downloads/yadaw-${{ inputs.version_name }}-x86_64-unknown-linux-gnu.tar.gz"
-          ARM64_TARBALL="downloads/yadaw-${{ inputs.version_name }}-aarch64-unknown-linux-gnu.tar.gz"
+          VERSION="${{ inputs.version_name }}"
+          VERSION="${VERSION#v}"  # normalize: strip leading 'v' if present
+          X64_TARBALL="downloads/yadaw-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          ARM64_TARBALL="downloads/yadaw-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
           X64_HASH=$(sha256sum "$X64_TARBALL" | cut -d ' ' -f 1)
           ARM64_HASH=$(sha256sum "$ARM64_TARBALL" | cut -d ' ' -f 1)
           echo "x64_hash=$X64_HASH"   >> "$GITHUB_OUTPUT"
@@ -41,12 +58,15 @@ jobs:
         run: |
           set -euo pipefail
           ver="${{ inputs.version_name }}"
+          pkgver="${ver#v}"
+          tag="v${pkgver}"
           mkdir -p aur-package
           cat > aur-package/PKGBUILD <<'EOF'
           # Maintainer: MLM-stuff <gfxoxinzh@mozmail.com>
           pkgname=yadaw-bin
           _pkgname=yadaw
-          pkgver={{VER}}
+          pkgver={{PKGVER}}
+          _tag={{TAG}}
           pkgrel=1
           pkgdesc="Yet Another mini-DAW - a lightweight sfx tool in pure Rust (binary)"
           arch=('x86_64' 'aarch64')
@@ -61,8 +81,8 @@ jobs:
           conflicts=('yadaw')
           options=('!strip')
 
-          source_x86_64=("${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/yadaw/releases/download/${pkgver}/${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
-          source_aarch64=("${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/yadaw/releases/download/${pkgver}/${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
+          source_x86_64=("${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/yadaw/releases/download/${_tag}/${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
+          source_aarch64=("${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/yadaw/releases/download/${_tag}/${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
 
           source=("icon.png::https://raw.githubusercontent.com/mlm-games/yadaw/refs/heads/master/fastlane/metadata/android/en-US/images/icon.png")
 
@@ -99,7 +119,8 @@ jobs:
           }
           EOF
 
-          sed -i "s/{{VER}}/${ver}/g" aur-package/PKGBUILD
+          sed -i "s/{{PKGVER}}/${pkgver}/g" aur-package/PKGBUILD
+          sed -i "s/{{TAG}}/${tag}/g" aur-package/PKGBUILD
           sed -i "s/{{X64_HASH}}/${{ steps.checksums.outputs.x64_hash }}/g" aur-package/PKGBUILD
           sed -i "s/{{ARM64_HASH}}/${{ steps.checksums.outputs.arm64_hash }}/g" aur-package/PKGBUILD
 

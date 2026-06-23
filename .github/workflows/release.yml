@@ -133,14 +133,6 @@ jobs:
           git push
           echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Create and push tag
-        shell: bash
-        run: |
-          set -e
-          TAG="v${{ steps.bump.outputs.version_name }}"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-
   build:
     name: Build and package (desktop)
     needs: prepare-version
