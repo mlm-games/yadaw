@@ -21,7 +21,7 @@ yadaw-plugin-api = { path = "../yadaw-plugin-api" }
 
 [features]
 default = []
-clap-host = ["clack-extensions", "clack", "clack-host"]
+clap-host = ["clack-extensions", "clack-host"]
 lv2-legacy = ["livi"]
 
 [dependencies.clack-host]
