@@ -795,12 +795,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clack"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c91b44356ec0db6b07f4f3c344338463114a998032b5b57df20fb7f4fac0c9e"
-
-[[package]]
 name = "clack-common"
 version = "0.1.0"
 source = "git+https://github.com/prokopyl/clack?branch=main#f874e858ad576c601367b3038af5088a4e671744"
@@ -5665,7 +5659,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "yadaw"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -5726,7 +5720,6 @@ name = "yadaw-plugin-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clack",
  "clack-extensions",
  "clack-host",
  "dashmap",
