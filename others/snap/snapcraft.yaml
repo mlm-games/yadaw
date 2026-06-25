@@ -9,6 +9,7 @@ description: |
 grade: stable
 confinement: strict
 
+icon: snap/gui/icon.svg
 title: YADAW
 license: AGPL-3.0
 contact: https://github.com/mlm-games/yadaw/issues

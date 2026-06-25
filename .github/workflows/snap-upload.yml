@@ -49,9 +49,9 @@ jobs:
 
           # Copy desktop and icon files
           cp others/flathub/io.github.mlm_games.yadaw.desktop others/snap/snap/gui/yadaw.desktop
-          cp fastlane/metadata/android/en-US/images/icon.png others/snap/snap/gui/icon.png
+          cp others/packaging/icon.svg others/snap/snap/gui/icon.svg
           sed -i -e 's|^Exec=.*|Exec=yadaw|' \
-                 -e 's|^Icon=.*|Icon=${SNAP}/meta/gui/icon.png|' \
+                 -e 's|^Icon=.*|Icon=${SNAP}/meta/gui/icon.svg|' \
                  others/snap/snap/gui/yadaw.desktop
 
           VERSION="${{ inputs.version_name }}"
