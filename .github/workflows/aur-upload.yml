@@ -77,7 +77,7 @@ jobs:
             'pipewire-pulse: for PipeWire audio support'
             'pulseaudio: for PulseAudio audio support'
           )
-          provides=('yadaw')
+          provides=('yadaw' 'clap-host' 'lv2-host')
           conflicts=('yadaw')
           options=('!strip')
 
