@@ -10,9 +10,14 @@ use dissonia::prelude::*;
 #[cfg(target_os = "android")]
 use rlobkit_dialogs::PlatformFile;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use web_sys::HtmlAnchorElement;
+
 use flume::Sender;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Cursor};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -88,7 +93,19 @@ impl AudioExporter {
             }
         });
         #[cfg(target_arch = "wasm32")]
-        let _ = (app_state, audio_state, config, ui_tx);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = run_export_wasm(app_state, audio_state, &config).await;
+            match result {
+                Ok(filename) => {
+                    let _ = ui_tx.send(UIUpdate::ExportStateUpdate(ExportState::Complete(filename)));
+                }
+                Err(e) => {
+                    let _ = ui_tx.send(UIUpdate::ExportStateUpdate(ExportState::Error(
+                        e.to_string(),
+                    )));
+                }
+            }
+        });
     }
 }
 
@@ -338,4 +355,111 @@ fn encode_pcm_from_f32(
 
 fn send(ui_tx: &Sender<UIUpdate>, state: ExportState) {
     let _ = ui_tx.send(UIUpdate::ExportStateUpdate(state));
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn run_export_wasm(
+    app_state: AppState,
+    audio_state: Arc<AudioState>,
+    config: &ExportConfig,
+) -> Result<String> {
+    let sample_format = config.sample_format()?;
+    let layout = config.channel_layout();
+    let channels = layout.count() as usize;
+    let _ = sample_format;
+
+    let converter = TimeConverter::new(config.sample_rate, app_state.bpm);
+    let start_sample = converter.beats_to_samples(config.start_beat).round() as u64;
+    let end_sample = converter.beats_to_samples(config.end_beat).round() as u64;
+    let total_frames = end_sample.saturating_sub(start_sample);
+
+    if total_frames == 0 {
+        bail!("Export range is zero length.");
+    }
+
+    let snapshots = crate::audio_snapshot::build_track_snapshots(&app_state);
+    let mut engine =
+        AudioEngine::new_for_offline_render(&snapshots, &audio_state, config.sample_rate)?;
+
+    let total_samples = total_frames as usize * channels;
+    let mut pcm = Vec::<f32>::with_capacity(total_samples);
+    let mut current_pos = start_sample as f64;
+    let mut frames_done = 0u64;
+
+    while frames_done < total_frames {
+        let batch = ((total_frames - frames_done) as usize).min(MAX_BUFFER_SIZE);
+        let mut buf = vec![0.0f32; batch * channels];
+        let mut plugin_time_ms = 0.0f32;
+
+        engine.process_audio(&mut buf, batch, channels, current_pos, &mut plugin_time_ms);
+
+        pcm.extend_from_slice(&buf);
+        current_pos += batch as f64;
+        frames_done += batch as u64;
+    }
+
+    if config.normalize {
+        let peak = pcm.iter().copied().map(f32::abs).fold(0.0f32, f32::max);
+        if peak > 1e-6 {
+            let gain = 0.99 / peak;
+            for s in &mut pcm {
+                *s *= gain;
+            }
+        }
+    }
+
+    let filename = config
+        .output_path()
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("export.wav")
+        .to_string();
+
+    let spec = hound::WavSpec {
+        channels: channels as u16,
+        sample_rate: config.sample_rate as u32,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+
+    let wav_bytes = {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = hound::WavWriter::new(&mut cursor, spec)
+                .map_err(|e| anyhow!("Failed to create WAV writer: {e}"))?;
+            for &sample in &pcm {
+                writer
+                    .write_sample(sample)
+                    .map_err(|e| anyhow!("Failed to write sample: {e}"))?;
+            }
+            writer
+                .finalize()
+                .map_err(|e| anyhow!("Failed to finalize WAV: {e}"))?;
+        }
+        cursor.into_inner()
+    };
+
+    let uint8 = js_sys::Uint8Array::from(&wav_bytes[..]);
+    let parts = js_sys::Array::new();
+    parts.push(&uint8.into());
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)
+        .map_err(|_| anyhow!("Failed to create Blob"))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|_| anyhow!("Failed to create object URL"))?;
+
+    let window = web_sys::window().ok_or_else(|| anyhow!("No window"))?;
+    let document = window.document().ok_or_else(|| anyhow!("No document"))?;
+    let anchor = document
+        .create_element("a")
+        .map_err(|_| anyhow!("Failed to create anchor"))?
+        .dyn_into::<HtmlAnchorElement>()
+        .map_err(|_| anyhow!("Failed to cast anchor"))?;
+
+    anchor.set_href(&url);
+    anchor.set_download(&filename);
+    anchor.click();
+
+    let _ = web_sys::Url::revoke_object_url(&url);
+
+    Ok(filename)
 }

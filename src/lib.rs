@@ -52,6 +52,9 @@ pub async fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
     console_error_panic_hook::set_once();
     eframe::WebLogger::init(log::LevelFilter::Debug).ok();
 
+    wasm_bindgen_rayon::init_thread_pool(4)
+        .map_err(|e| format!("failed to init thread pool: {e:?}"))?;
+
     let web_options = eframe::WebOptions::default();
     let canvas = web_sys::window()
         .and_then(|w| w.document())
