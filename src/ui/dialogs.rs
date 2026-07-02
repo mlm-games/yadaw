@@ -14,9 +14,7 @@ use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
 use crate::input::shortcuts::{KeyCode, Keybind};
 use crate::messages::AudioCommand;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::messages::ExportFormat;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::messages::ExportState;
 use crate::model::track::TrackType;
 use crate::plugin::categorize_plugin;
@@ -317,7 +315,6 @@ pub struct DialogManager {
     pub humanize_dialog: Option<HumanizeDialog>,
 
     pub project_settings: Option<ProjectSettingsDialog>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub export_dialog: Option<ExportDialog>,
 
     pub theme_editor: Option<ThemeEditorDialog>,
@@ -343,7 +340,6 @@ impl DialogManager {
             transpose_dialog: None,
             humanize_dialog: None,
             project_settings: None,
-            #[cfg(not(target_arch = "wasm32"))]
             export_dialog: None,
             theme_editor: None,
             layout_manager: None,
@@ -430,7 +426,6 @@ impl DialogManager {
                 self.project_settings = Some(d);
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(mut d) = self.export_dialog.take() {
             d.show(ctx, app);
             if !d.is_closed() {
@@ -547,7 +542,6 @@ impl DialogManager {
         editor.open = true;
         self.shortcuts_editor = Some(editor);
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn show_export_dialog(&mut self) {
         self.export_dialog = Some(ExportDialog::new());
     }
@@ -1631,7 +1625,6 @@ enum ExportQuality {
     Lossless,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(PartialEq, Clone, Copy)]
 enum ExportRange {
     EntireProject,
@@ -1639,8 +1632,6 @@ enum ExportRange {
     Custom,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg(not(target_arch = "wasm32"))]
 pub struct ExportDialog {
     closed: bool,
     path: PathBuf,
@@ -1655,7 +1646,6 @@ pub struct ExportDialog {
     normalize: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl ExportDialog {
     pub fn new() -> Self {
         Self {

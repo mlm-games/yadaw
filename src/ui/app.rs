@@ -1119,7 +1119,6 @@ impl YadawApp {
     }
 
     pub fn export_audio_dialog(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
         self.dialogs.show_export_dialog();
     }
 
@@ -1257,12 +1256,9 @@ impl YadawApp {
                 self.note_clipboard = Some(notes);
             }
             UIUpdate::ExportStateUpdate(state) => {
-                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(dialog) = &mut self.dialogs.export_dialog {
                     dialog.set_state(state);
                 }
-                #[cfg(target_arch = "wasm32")]
-                let _ = state;
             }
             UIUpdate::PluginParamsDiscovered {
                 track_id,
