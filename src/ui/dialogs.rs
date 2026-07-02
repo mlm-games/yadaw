@@ -836,8 +836,6 @@ impl PluginBrowserDialog {
                                 app.dialogs.show_message("You are adding an effect plugin to a MIDI track. It will not output audio unless the track is fed with audio. Consider adding it to an audio track or a bus.");
                             }
 
-                            let track_id = app.selected_track;
-
                             let plugin_idx = {
                                 let state = app.state.lock().unwrap();
                                 state.tracks.get(&track_id).map(|t| t.plugin_chain.len()).unwrap_or(0)
