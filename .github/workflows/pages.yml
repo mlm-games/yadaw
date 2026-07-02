@@ -27,8 +27,10 @@ jobs:
         with:
           tool: trunk
 
-      - name: Add wasm target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Install wasm target + rust-src (needed for -Zbuild-std)
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup component add rust-src
 
       - name: Build with trunk
         run: |
