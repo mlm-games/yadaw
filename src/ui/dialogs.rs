@@ -2211,13 +2211,12 @@ impl ImportAudioDialog {
                         let bpm = app.audio_state.bpm.load();
 
                         for file in files {
-                            let name = file.name().to_string();
-                            let ext = file.extension().unwrap_or("wav").to_string();
-
                             #[cfg(target_arch = "wasm32")]
                             {
                                 if let Some(data) = file.data() {
-                                    self.import_blob(&name, data, &ext, bpm as f64, app);
+                                    let name = file.name();
+                                    let ext = file.extension().unwrap_or("wav");
+                                    self.import_blob(name, data, ext, bpm as f64, app);
                                     continue;
                                 }
                             }

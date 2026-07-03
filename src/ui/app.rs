@@ -720,6 +720,8 @@ impl YadawApp {
 
                 let _ = self.command_tx.send(AudioCommand::UpdateTracks);
                 let _ = self.command_tx.send(AudioCommand::RebuildAllRtChains);
+
+                self.hydrate_audio_cache();
             })
             .notify_user(&mut self.dialogs);
     }
@@ -1993,7 +1995,13 @@ impl YadawApp {
 
     /// Import audio from raw bytes (wasm file picker path).
     #[cfg(target_arch = "wasm32")]
-    pub fn import_audio_blob_to_new_track(&mut self, name: &str, data: &[u8], extension: &str, bpm: f32) {
+    pub fn import_audio_blob_to_new_track(
+        &mut self,
+        name: &str,
+        data: &[u8],
+        extension: &str,
+        bpm: f32,
+    ) {
         self.add_audio_track();
         let track_id = self.selected_track;
 
@@ -2011,10 +2019,12 @@ impl YadawApp {
                 drop(state);
 
                 self.cache_audio_after_import();
-                self.dialogs.show_success(&format!("Imported audio: {name}"));
+                self.dialogs
+                    .show_success(&format!("Imported audio: {name}"));
             }
             Err(e) => {
-                self.dialogs.show_error(&format!("Failed to import '{name}': {e}"));
+                self.dialogs
+                    .show_error(&format!("Failed to import '{name}': {e}"));
             }
         }
     }
@@ -2024,19 +2034,54 @@ impl YadawApp {
     fn cache_audio_after_import(&self) {
         #[cfg(target_arch = "wasm32")]
         {
-            let latest_id = {
+            let entry = {
                 let state = self.state.lock().unwrap();
                 state
                     .tracks
                     .get(&self.selected_track)
-                    .and_then(|t| t.audio_clips.last().map(|c| (c.id, c.samples.clone(), c.source_hash)))
+                    .and_then(|t| t.audio_clips.last())
+                    .and_then(|c| c.source_hash.map(|h| (h, c.samples.clone())))
             };
-            if let Some((_clip_id, samples, source_hash)) = latest_id {
-                if let Some(hash) = source_hash {
-                    crate::spawn_detached!(async move {
-                        let _ = crate::wasm_persist::cache_audio_by_hash(hash, &samples).await;
-                    });
-                }
+            if let Some((hash, samples)) = entry {
+                crate::spawn_detached!(async move {
+                    let _ = crate::wasm_persist::cache_audio_by_hash(hash, &samples).await;
+                });
+            }
+        }
+    }
+
+    /// Iterate all clips with a `source_hash` and try to load their samples
+    /// from the OPFS cache.
+    pub fn hydrate_audio_cache(&self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let entries: Vec<(u64, usize, u64)> = {
+                let state = self.state.lock().unwrap();
+                state
+                    .tracks
+                    .iter()
+                    .flat_map(|(&tid, t)| {
+                        t.audio_clips
+                            .iter()
+                            .enumerate()
+                            .filter_map(move |(i, c)| c.source_hash.map(|h| (tid, i, h)))
+                    })
+                    .collect()
+            };
+            let state_arc = self.state.clone();
+            for (track_id, idx, hash) in entries {
+                crate::spawn_detached!(async move {
+                    if let Some(cached) = crate::wasm_persist::read_cached_audio_by_hash(hash).await
+                    {
+                        if let Some(track) = state_arc.lock().unwrap().tracks.get_mut(&track_id) {
+                            if let Some(clip) = track.audio_clips.get_mut(idx) {
+                                if clip.source_hash == Some(hash) {
+                                    clip.samples = cached;
+                                }
+                            }
+                        }
+                    }
+                });
             }
         }
     }
