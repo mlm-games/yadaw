@@ -2078,6 +2078,7 @@ impl YadawApp {
             };
             let state_arc = self.state.clone();
             for (track_id, idx, hash) in entries {
+                let state_arc = state_arc.clone();
                 crate::spawn_detached!(async move {
                     if let Some(cached) = crate::wasm_persist::read_cached_audio_by_hash(hash).await
                     {

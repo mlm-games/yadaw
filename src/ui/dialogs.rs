@@ -75,17 +75,16 @@ fn save_project_wasm(app: &mut super::app::YadawApp, filename: &str) {
         if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
             if let Some(window) = web_sys::window() {
                 if let Some(document) = window.document() {
-                    if let Ok(anchor) = document
-                        .create_element("a")
-                        .and_then(|a| a.dyn_into::<HtmlAnchorElement>().map_err(|_| ()))
-                    {
-                        anchor.set_href(&url);
-                        anchor.set_download(filename);
-                        anchor.click();
-                        let _ = web_sys::Url::revoke_object_url(&url);
-                        app.project_path = Some(filename.to_string());
-                        app.dialogs.show_success("Project saved successfully");
-                        return;
+                    if let Ok(a) = document.create_element("a") {
+                        if let Ok(anchor) = a.dyn_into::<HtmlAnchorElement>() {
+                            anchor.set_href(&url);
+                            anchor.set_download(filename);
+                            anchor.click();
+                            let _ = web_sys::Url::revoke_object_url(&url);
+                            app.project_path = Some(filename.to_string());
+                            app.dialogs.show_success("Project saved successfully");
+                            return;
+                        }
                     }
                 }
             }

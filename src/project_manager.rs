@@ -7,8 +7,6 @@ use crate::constants::PROJECT_EXTENSION;
 use crate::paths::cache_dir;
 use crate::project::{AppState, Project};
 use crate::wasm_persist::{read_config_string, save_config_string};
-
-#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 
 #[derive(Debug, Clone)]
