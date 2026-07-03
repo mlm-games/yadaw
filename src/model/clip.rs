@@ -103,6 +103,10 @@ impl Default for MidiClip {
     }
 }
 
+fn default_opt_u64_none() -> Option<u64> {
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioClip {
     #[serde(default = "zero_u64")]
@@ -114,6 +118,8 @@ pub struct AudioClip {
     pub offset_beats: f64,
     pub samples: Vec<f32>,
     pub sample_rate: f32,
+    #[serde(default = "default_opt_u64_none")]
+    pub source_hash: Option<u64>,
     pub fade_in: Option<f64>,
     pub fade_out: Option<f64>,
     pub gain: f32,
@@ -140,6 +146,7 @@ impl Default for AudioClip {
             offset_beats: 0.0,
             samples: Vec::new(),
             sample_rate: 44100.0,
+            source_hash: None,
             fade_in: None,
             fade_out: None,
             gain: 1.0,

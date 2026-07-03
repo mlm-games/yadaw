@@ -105,15 +105,15 @@ pub fn read_config_string(wasm_key: &str, fs_path: &Path) -> Option<String> {
     std::fs::read_to_string(fs_path).ok()
 }
 
-/// Generate a unique OPFS cache filename for an audio clip.
-pub fn audio_cache_key(clip_id: u64) -> String {
-    format!("audio_{clip_id}.f32")
+/// Build an OPFS cache filename from a 64-bit content hash.
+pub fn audio_cache_key(hash: u64) -> String {
+    format!("audio_{:016x}.f32", hash)
 }
 
-/// Write decoded audio samples to the OPFS cache.
-/// Returns the cache key on success. No-op on native.
-pub async fn cache_audio_samples(clip_id: u64, samples: &[f32]) -> anyhow::Result<String> {
-    let key = audio_cache_key(clip_id);
+/// Write decoded audio samples to the OPFS cache, keyed by content hash.
+/// No-op on native.
+pub async fn cache_audio_by_hash(hash: u64, samples: &[f32]) -> anyhow::Result<()> {
+    let key = audio_cache_key(hash);
     let data: &[u8] =
         unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4) };
     #[cfg(target_arch = "wasm32")]
@@ -127,13 +127,13 @@ pub async fn cache_audio_samples(clip_id: u64, samples: &[f32]) -> anyhow::Resul
     {
         let _ = data;
     }
-    Ok(key)
+    Ok(())
 }
 
-/// Read previously cached audio samples from OPFS.
+/// Read previously cached audio samples from OPFS by content hash.
 /// Returns `None` if not cached.
-pub async fn read_cached_audio(clip_id: u64) -> Option<Vec<f32>> {
-    let key = audio_cache_key(clip_id);
+pub async fn read_cached_audio_by_hash(hash: u64) -> Option<Vec<f32>> {
+    let key = audio_cache_key(hash);
     #[cfg(target_arch = "wasm32")]
     {
         let full_key = format!("{}/{}", crate::paths::opfs::DIR_CACHE, key);

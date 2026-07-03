@@ -1,4 +1,6 @@
 use anyhow::{Result, anyhow};
+use std::hash::{Hash, Hasher};
+use std::io::Cursor;
 use std::path::Path;
 
 use crate::model::clip::AudioClip;
@@ -9,6 +11,7 @@ fn new_audio_clip(
     length_beats: f64,
     samples: Vec<f32>,
     sample_rate: f32,
+    source_hash: Option<u64>,
 ) -> AudioClip {
     AudioClip {
         name,
@@ -16,8 +19,15 @@ fn new_audio_clip(
         length_beats,
         samples,
         sample_rate,
+        source_hash,
         ..Default::default()
     }
+}
+
+fn hash_source_bytes(data: &[u8]) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    data.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub fn import_audio_file(path: &Path, bpm: f32) -> Result<AudioClip> {
@@ -26,80 +36,96 @@ pub fn import_audio_file(path: &Path, bpm: f32) -> Result<AudioClip> {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
+    let data = std::fs::read(path)?;
 
-    match extension.as_str() {
-        "wav" => import_wav(path, bpm),
-        "mp3" | "flac" | "ogg" | "m4a" | "aac" => import_with_symphonia(path, bpm),
-        _ => import_wav(path, bpm)
-            .or_else(|_| import_with_symphonia(path, bpm))
+    import_audio_data(
+        &path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Imported Audio"),
+        &data,
+        &extension,
+        bpm,
+    )
+}
+
+pub fn import_audio_data(
+    name: &str,
+    data: &[u8],
+    extension: &str,
+    bpm: f32,
+) -> Result<AudioClip> {
+    let source_hash = Some(hash_source_bytes(data));
+    let ext = extension.to_lowercase();
+
+    match ext.as_str() {
+        "wav" => decode_wav_bytes(data, name, bpm, source_hash),
+        "mp3" | "flac" | "ogg" | "m4a" | "aac" => {
+            decode_with_symphonia_bytes(data, name, &ext, bpm, source_hash)
+        }
+        _ => decode_wav_bytes(data, name, bpm, source_hash)
+            .or_else(|_| decode_with_symphonia_bytes(data, name, &ext, bpm, source_hash))
             .map_err(|_| anyhow!("Unsupported audio format: {}", extension)),
     }
 }
 
-fn import_wav(path: &Path, bpm: f32) -> Result<AudioClip> {
-    let mut reader = hound::WavReader::open(path)?;
+fn decode_wav_bytes(
+    data: &[u8],
+    name: &str,
+    bpm: f32,
+    source_hash: Option<u64>,
+) -> Result<AudioClip> {
+    let mut reader = hound::WavReader::new(Cursor::new(data))?;
     let spec = reader.spec();
 
     let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<Vec<_>, _>>()?,
-        hound::SampleFormat::Int => {
-            match spec.bits_per_sample {
-                8 => {
-                    // 8-bit PCM is typically unsigned
-                    reader
-                        .samples::<i8>() // hound doesn't provide u8; i8 reads centered -128..127
-                        .map(|s| s.map(|v| (v as f32) / 128.0))
-                        .collect::<Result<Vec<_>, _>>()?
-                }
-                16 => reader
-                    .samples::<i16>()
-                    .map(|s| s.map(|v| (v as f32) / 32768.0))
-                    .collect::<Result<Vec<_>, _>>()?,
-                24 => {
-                    // 24-bit PCM decoded into i32 by hound; normalize by 2^23
-                    reader
-                        .samples::<i32>()
-                        .map(|s| s.map(|v| (v as f32) / 8_388_608.0))
-                        .collect::<Result<Vec<_>, _>>()?
-                }
-                32 => reader
-                    .samples::<i32>()
-                    .map(|s| s.map(|v| (v as f32) / 2_147_483_648.0))
-                    .collect::<Result<Vec<_>, _>>()?,
-                bits => return Err(anyhow!("Unsupported PCM bit depth: {}", bits)),
-            }
+        hound::SampleFormat::Int => match spec.bits_per_sample {
+            8 => reader.samples::<i8>()
+                .map(|s| s.map(|v| (v as f32) / 128.0))
+                .collect::<Result<Vec<_>, _>>()?,
+            16 => reader.samples::<i16>()
+                .map(|s| s.map(|v| (v as f32) / 32768.0))
+                .collect::<Result<Vec<_>, _>>()?,
+            24 => reader.samples::<i32>()
+                .map(|s| s.map(|v| (v as f32) / 8_388_608.0))
+                .collect::<Result<Vec<_>, _>>()?,
+            32 => reader.samples::<i32>()
+                .map(|s| s.map(|v| (v as f32) / 2_147_483_648.0))
+                .collect::<Result<Vec<_>, _>>()?,
+            bits => return Err(anyhow!("Unsupported PCM bit depth: {}", bits)),
         }
     };
 
-    // Downmix to mono if stereo; other channel counts -> average
     let channels = spec.channels.max(1) as usize;
     let mono_samples: Vec<f32> = if channels == 1 {
         samples
     } else {
-        samples
-            .chunks(channels)
+        samples.chunks(channels)
             .map(|ch| ch.iter().copied().sum::<f32>() / channels as f32)
             .collect()
     };
 
     let trimmed_samples = trim_silence_end(&mono_samples, 0.001);
-
     let duration_seconds = trimmed_samples.len() as f64 / spec.sample_rate as f64;
     let duration_beats = duration_seconds * (bpm as f64 / 60.0);
 
     Ok(new_audio_clip(
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Imported Audio")
-            .to_string(),
+        name.to_string(),
         0.0,
         duration_beats,
         trimmed_samples,
         spec.sample_rate as f32,
+        source_hash,
     ))
 }
 
-fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
+fn decode_with_symphonia_bytes(
+    data: &[u8],
+    name: &str,
+    extension: &str,
+    bpm: f32,
+    source_hash: Option<u64>,
+) -> Result<AudioClip> {
     use symphonia::core::codecs::audio::AudioDecoderOptions;
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::formats::TrackType;
@@ -107,13 +133,10 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::MetadataOptions;
 
-    let file = std::fs::File::open(path)?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mss = MediaSourceStream::new(Box::new(Cursor::new(data)), Default::default());
 
     let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
+    hint.with_extension(extension);
 
     let mut format = symphonia::default::get_probe().probe(
         &hint,
@@ -150,9 +173,7 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
     loop {
         match format.next_packet() {
             Ok(Some(packet)) => {
-                if packet.track_id != track_id {
-                    continue;
-                }
+                if packet.track_id != track_id { continue; }
                 match decoder.decode(&packet) {
                     Ok(decoded) => {
                         let mut packet_samples = Vec::new();
@@ -163,7 +184,7 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
                         log::warn!("decode error: {e}");
                         continue;
                     }
-                    Err(e) => return Err(anyhow!("Opus decode failed: {}", e)),
+                    Err(e) => return Err(anyhow!("Decode failed: {}", e)),
                 }
             }
             Ok(None) => break,
@@ -173,8 +194,7 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
     }
 
     let mono_samples = if channels == 2 {
-        all_samples
-            .chunks(2)
+        all_samples.chunks(2)
             .map(|chunk| (chunk[0] + chunk.get(1).copied().unwrap_or(0.0)) / 2.0)
             .collect()
     } else {
@@ -182,19 +202,16 @@ fn import_with_symphonia(path: &Path, bpm: f32) -> Result<AudioClip> {
     };
 
     let trimmed_samples = trim_silence_end(&mono_samples, 0.001);
-
     let duration_seconds = trimmed_samples.len() as f64 / sample_rate as f64;
     let duration_beats = duration_seconds * (bpm as f64 / 60.0);
 
     Ok(new_audio_clip(
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Imported Audio")
-            .to_string(),
+        name.to_string(),
         0.0,
         duration_beats,
         trimmed_samples,
         sample_rate as f32,
+        source_hash,
     ))
 }
 

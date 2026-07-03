@@ -1967,12 +1967,7 @@ impl YadawApp {
             Ok(mut clip) => {
                 self.push_undo();
                 let mut state = self.state.lock().unwrap();
-
                 clip.id = state.fresh_id();
-                let clip_id = clip.id;
-
-                #[cfg(target_arch = "wasm32")]
-                let samples_for_cache = clip.samples.clone();
 
                 if let Some(track) = state.tracks.get_mut(&track_id) {
                     track.audio_clips.push(clip);
@@ -1980,12 +1975,7 @@ impl YadawApp {
                 }
                 drop(state);
 
-                #[cfg(target_arch = "wasm32")]
-                crate::spawn_detached!(async move {
-                    let _ = crate::wasm_persist::cache_audio_samples(clip_id, &samples_for_cache).await;
-                });
-
-                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+                self.cache_audio_after_import();
                 self.dialogs.show_success(&format!(
                     "Imported audio file: {}",
                     path.file_name().unwrap_or_default().to_string_lossy()
@@ -1997,6 +1987,56 @@ impl YadawApp {
                     path.display(),
                     e
                 ));
+            }
+        }
+    }
+
+    /// Import audio from raw bytes (wasm file picker path).
+    #[cfg(target_arch = "wasm32")]
+    pub fn import_audio_blob_to_new_track(&mut self, name: &str, data: &[u8], extension: &str, bpm: f32) {
+        self.add_audio_track();
+        let track_id = self.selected_track;
+
+        let decode = || crate::audio_import::import_audio_data(name, data, extension, bpm);
+        match decode() {
+            Ok(mut clip) => {
+                self.push_undo();
+                let mut state = self.state.lock().unwrap();
+                clip.id = state.fresh_id();
+
+                if let Some(track) = state.tracks.get_mut(&track_id) {
+                    track.audio_clips.push(clip);
+                    state.ensure_ids();
+                }
+                drop(state);
+
+                self.cache_audio_after_import();
+                self.dialogs.show_success(&format!("Imported audio: {name}"));
+            }
+            Err(e) => {
+                self.dialogs.show_error(&format!("Failed to import '{name}': {e}"));
+            }
+        }
+    }
+
+    /// Spawn an async background task to persist decoded audio to the OPFS
+    /// cache on wasm. No-op on native.
+    fn cache_audio_after_import(&self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let latest_id = {
+                let state = self.state.lock().unwrap();
+                state
+                    .tracks
+                    .get(&self.selected_track)
+                    .and_then(|t| t.audio_clips.last().map(|c| (c.id, c.samples.clone(), c.source_hash)))
+            };
+            if let Some((_clip_id, samples, source_hash)) = latest_id {
+                if let Some(hash) = source_hash {
+                    crate::spawn_detached!(async move {
+                        let _ = crate::wasm_persist::cache_audio_by_hash(hash, &samples).await;
+                    });
+                }
             }
         }
     }

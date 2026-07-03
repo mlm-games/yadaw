@@ -2211,6 +2211,17 @@ impl ImportAudioDialog {
                         let bpm = app.audio_state.bpm.load();
 
                         for file in files {
+                            let name = file.name().to_string();
+                            let ext = file.extension().unwrap_or("wav").to_string();
+
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                if let Some(data) = file.data() {
+                                    self.import_blob(&name, data, &ext, bpm as f64, app);
+                                    continue;
+                                }
+                            }
+
                             let processing_path_result: Result<std::path::PathBuf, String> =
                                 if let Some(path) = file.path() {
                                     Ok(path.to_path_buf())
@@ -2283,6 +2294,16 @@ impl ImportAudioDialog {
 
     fn import_file(&self, path: &Path, app: &mut YadawApp, _bpm: f64) {
         app.open_file_from_path(path);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn import_blob(&self, name: &str, data: &[u8], ext: &str, bpm: f64, app: &mut YadawApp) {
+        let ext = if ext.is_empty() {
+            name.rsplit('.').next().unwrap_or("wav")
+        } else {
+            ext
+        };
+        app.import_audio_blob_to_new_track(name, data, ext, bpm as f32);
     }
 
     pub fn is_open(&self) -> bool {
