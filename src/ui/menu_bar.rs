@@ -223,6 +223,7 @@ impl MenuBar {
                     .clicked()
                 {
                     app.theme_manager.set_theme(super::theme::Theme::Dark);
+                    let _ = app.theme_manager.save_current_theme(&crate::paths::current_theme_path());
                     ui.close();
                 }
 
@@ -235,6 +236,7 @@ impl MenuBar {
                     .clicked()
                 {
                     app.theme_manager.set_theme(super::theme::Theme::Light);
+                    let _ = app.theme_manager.save_current_theme(&crate::paths::current_theme_path());
                     ui.close();
                 }
 
@@ -247,6 +249,7 @@ impl MenuBar {
                     if ui.button(&custom_theme.name).clicked() {
                         app.theme_manager
                             .set_theme(Theme::Custom(custom_theme.clone()));
+                        let _ = app.theme_manager.save_current_theme(&crate::paths::current_theme_path());
                         ui.close();
                     }
                 }

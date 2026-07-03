@@ -45,6 +45,56 @@ fn load_project_from_uri(_app: &mut super::app::YadawApp, _file: &PlatformFile) 
     unreachable!("load_project_from_uri should not be called on desktop");
 }
 
+#[cfg(target_arch = "wasm32")]
+fn save_project_wasm(app: &mut super::app::YadawApp, filename: &str) {
+    use wasm_bindgen::JsCast;
+    use web_sys::HtmlAnchorElement;
+
+    let live_bpm = app.audio_state.bpm.load();
+    let live_loop_start = app.audio_state.loop_start.load();
+    let live_loop_end = app.audio_state.loop_end.load();
+    let live_loop_enabled = app
+        .audio_state
+        .loop_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let json = {
+        let mut state = app.state.lock().unwrap();
+        state.bpm = live_bpm;
+        state.loop_start = live_loop_start;
+        state.loop_end = live_loop_end;
+        state.loop_enabled = live_loop_enabled;
+        serde_json::to_string_pretty(&state.to_project()).unwrap_or_default()
+    };
+
+    let data = json.into_bytes();
+    let uint8 = js_sys::Uint8Array::from(&data[..]);
+    let parts = js_sys::Array::new();
+    parts.push(&uint8.into());
+    if let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence(&parts) {
+        if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
+            if let Some(window) = web_sys::window() {
+                if let Some(document) = window.document() {
+                    if let Ok(anchor) = document
+                        .create_element("a")
+                        .and_then(|a| a.dyn_into::<HtmlAnchorElement>().map_err(|_| ()))
+                    {
+                        anchor.set_href(&url);
+                        anchor.set_download(filename);
+                        anchor.click();
+                        let _ = web_sys::Url::revoke_object_url(&url);
+                        app.project_path = Some(filename.to_string());
+                        app.dialogs.show_success("Project saved successfully");
+                        return;
+                    }
+                }
+            }
+            let _ = web_sys::Url::revoke_object_url(&url);
+        }
+    }
+    app.dialogs.show_error("Failed to save project: browser download failed");
+}
+
 #[cfg(target_os = "android")]
 fn save_project_to_uri(app: &mut super::app::YadawApp, file: &PlatformFile) {
     let uri = file.uri().unwrap_or("").to_string();
@@ -575,6 +625,55 @@ impl OpenDialog {
             if let Some(result) = picker.poll() {
                 match result {
                     Ok(Some(file)) => {
+                        // On wasm, files come as in-memory blobs with data()
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            if let Some(data) = file.data() {
+                                let contents = String::from_utf8_lossy(data);
+                                if let Ok(project) = serde_json::from_str::<crate::project::Project>(&contents) {
+                                    let live_bpm = app.audio_state.bpm.load();
+                                    let live_loop_start = app.audio_state.loop_start.load();
+                                    let live_loop_end = app.audio_state.loop_end.load();
+                                    let live_loop_enabled = app
+                                        .audio_state
+                                        .loop_enabled
+                                        .load(std::sync::atomic::Ordering::Relaxed);
+
+                                    let mut state = app.state.lock().unwrap();
+                                    state.load_project(project);
+                                    state.bpm = live_bpm;
+                                    state.loop_start = live_loop_start;
+                                    state.loop_end = live_loop_end;
+                                    state.loop_enabled = live_loop_enabled;
+
+                                    app.audio_state.bpm.store(state.bpm);
+                                    app.audio_state.loop_start.store(state.loop_start);
+                                    app.audio_state.loop_end.store(state.loop_end);
+                                    app.audio_state
+                                        .loop_enabled
+                                        .store(state.loop_enabled, std::sync::atomic::Ordering::Relaxed);
+
+                                    state.ensure_ids();
+                                    drop(state);
+
+                                    app.project_path = Some(file.name().to_string());
+                                    app.select_track(0);
+                                    app.selected_clips.clear();
+                                    app.undo_stack.clear();
+                                    app.redo_stack.clear();
+
+                                    let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                                    let _ = app.command_tx.send(AudioCommand::RebuildAllRtChains);
+
+                                    app.hydrate_audio_cache();
+                                    self.closed = true;
+                                } else {
+                                    app.dialogs.show_error("Failed to parse project file");
+                                }
+                                return;
+                            }
+                        }
+
                         if file.uri().is_some() {
                             load_project_from_uri(app, &file);
                         } else if let Some(path) = file.path() {
@@ -634,6 +733,13 @@ impl SaveDialog {
             if let Some(result) = picker.poll() {
                 match result {
                     Ok(Some(file)) => {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            save_project_wasm(app, file.name());
+                            self.closed = true;
+                            return;
+                        }
+
                         if file.uri().is_some() {
                             save_project_to_uri(app, &file);
                         } else if let Some(path) = file.path() {
@@ -1208,6 +1314,7 @@ impl ThemeEditorDialog {
                     if ui.button("Save Theme").clicked() {
                         app.theme_manager
                             .add_custom_theme(self.custom_theme.clone());
+                        let _ = app.theme_manager.save_custom_themes(&crate::paths::custom_themes_path());
                         self.closed = true;
                     }
 
@@ -1291,6 +1398,8 @@ impl ShortcutsEditorDialog {
                         if let Some(path) = file.path() {
                             if let Err(e) = input_mgr.load_shortcuts(path) {
                                 eprintln!("Shortcuts import failed: {}", e);
+                            } else {
+                                let _ = input_mgr.save_shortcuts(&crate::paths::shortcuts_path());
                             }
                         } else {
                             #[cfg(target_os = "android")]
@@ -1304,6 +1413,8 @@ impl ShortcutsEditorDialog {
                                     Ok(()) => {
                                         if let Err(e) = input_mgr.load_shortcuts(&temp_path) {
                                             eprintln!("Shortcuts import failed: {}", e);
+                                        } else {
+                                            let _ = input_mgr.save_shortcuts(&crate::paths::shortcuts_path());
                                         }
                                         let _ = std::fs::remove_file(&temp_path);
                                     }
@@ -1453,6 +1564,7 @@ impl ShortcutsEditorDialog {
         ui.horizontal(|ui| {
             if ui.button("Reset to Defaults").clicked() {
                 *input_mgr.shortcuts_mut() = crate::input::shortcuts::ShortcutRegistry::default();
+                let _ = input_mgr.save_shortcuts(&crate::paths::shortcuts_path());
             }
 
             if ui.button("Import...").clicked() {
@@ -1505,6 +1617,7 @@ impl ShortcutsEditorDialog {
                     // Remove button
                     if ui.small_button("✕").on_hover_text("Remove").clicked() {
                         input_mgr.shortcuts_mut().unbind(bind);
+                        let _ = input_mgr.save_shortcuts(&crate::paths::shortcuts_path());
                     }
 
                     // Keybind label
@@ -1595,6 +1708,7 @@ impl ShortcutsEditorDialog {
                     ui.horizontal(|ui| {
                         if ui.button("Assign").clicked() {
                             input_mgr.shortcuts_mut().bind(action, bind);
+                            let _ = input_mgr.save_shortcuts(&crate::paths::shortcuts_path());
                             self.capturing = None;
                             self.capture_buffer = None;
                         }
@@ -2216,7 +2330,14 @@ impl ImportAudioDialog {
                                 if let Some(data) = file.data() {
                                     let name = file.name();
                                     let ext = file.extension().unwrap_or("wav");
-                                    self.import_blob(name, data, ext, bpm as f64, app);
+                                    match ext {
+                                        "mid" | "midi" => {
+                                            app.import_midi_blob_to_new_track(name, data);
+                                        }
+                                        _ => {
+                                            self.import_blob(name, data, ext, bpm as f64, app);
+                                        }
+                                    }
                                     continue;
                                 }
                             }
@@ -2295,7 +2416,6 @@ impl ImportAudioDialog {
         app.open_file_from_path(path);
     }
 
-    #[cfg(target_arch = "wasm32")]
     fn import_blob(&self, name: &str, data: &[u8], ext: &str, bpm: f64, app: &mut YadawApp) {
         let ext = if ext.is_empty() {
             name.rsplit('.').next().unwrap_or("wav")
@@ -2402,23 +2522,39 @@ impl LayoutManagerDialog {
     }
 
     fn saved_layout_names() -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(Self::layouts_dir())
-            .ok()
-            .into_iter()
-            .flat_map(|it| it.flatten())
-            .filter_map(|entry| {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    return None;
-                }
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string())
-            })
-            .filter(|name| !Self::is_builtin_name(name))
-            .collect();
-        names.sort();
-        names
+        #[cfg(target_arch = "wasm32")]
+        {
+            let contents = crate::wasm_persist::read_config_string(
+                "config/layouts.json",
+                &PathBuf::new(),
+            );
+            let map: std::collections::BTreeMap<String, SavedLayout> = contents
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_default();
+            let mut names: Vec<String> = map.into_keys().filter(|n| !Self::is_builtin_name(n)).collect();
+            names.sort();
+            names
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut names: Vec<String> = std::fs::read_dir(Self::layouts_dir())
+                .ok()
+                .into_iter()
+                .flat_map(|it| it.flatten())
+                .filter_map(|entry| {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                        return None;
+                    }
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_string())
+                })
+                .filter(|name| !Self::is_builtin_name(name))
+                .collect();
+            names.sort();
+            names
+        }
     }
 
     fn refresh_layouts(&mut self) {
@@ -2466,13 +2602,26 @@ impl LayoutManagerDialog {
     }
 
     fn load_custom_layout(name: &str, app: &mut super::app::YadawApp) -> Result<(), String> {
-        let path = Self::layout_path(name);
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read layout '{}': {e}", path.display()))?;
-        let layout = serde_json::from_str::<SavedLayout>(&text)
-            .map_err(|e| format!("Failed to parse layout '{}': {e}", path.display()))?;
-        layout.apply(app);
-        Ok(())
+        #[cfg(target_arch = "wasm32")]
+        {
+            let map: std::collections::BTreeMap<String, SavedLayout> =
+                crate::wasm_persist::read_config_string("config/layouts.json", &PathBuf::new())
+                    .and_then(|c| serde_json::from_str(&c).ok())
+                    .unwrap_or_default();
+            let layout = map.get(name).ok_or_else(|| format!("Layout '{name}' not found"))?;
+            layout.apply(app);
+            Ok(())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let path = Self::layout_path(name);
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read layout '{}': {e}", path.display()))?;
+            let layout = serde_json::from_str::<SavedLayout>(&text)
+                .map_err(|e| format!("Failed to parse layout '{}': {e}", path.display()))?;
+            layout.apply(app);
+            Ok(())
+        }
     }
 
     fn save_current_layout(&mut self, app: &super::app::YadawApp) -> Result<String, String> {
@@ -2490,8 +2639,23 @@ impl LayoutManagerDialog {
         let json = serde_json::to_string_pretty(&layout)
             .map_err(|e| format!("Failed to serialize layout: {e}"))?;
 
-        std::fs::write(Self::layout_path(&name), json)
-            .map_err(|e| format!("Failed to save layout '{name}': {e}"))?;
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut map: std::collections::BTreeMap<String, SavedLayout> =
+                crate::wasm_persist::read_config_string("config/layouts.json", &PathBuf::new())
+                    .and_then(|c| serde_json::from_str(&c).ok())
+                    .unwrap_or_default();
+            map.insert(name.clone(), layout);
+            let json = serde_json::to_string_pretty(&map)
+                .map_err(|e| format!("Failed to serialize layouts: {e}"))?;
+            crate::wasm_persist::save_config_string("config/layouts.json", &PathBuf::new(), &json)
+                .map_err(|e| format!("Failed to save layout '{name}': {e}"))?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::fs::write(Self::layout_path(&name), json)
+                .map_err(|e| format!("Failed to save layout '{name}': {e}"))?;
+        }
 
         self.refresh_layouts();
         if let Some(idx) = self.layouts.iter().position(|n| n == &name) {
@@ -2513,11 +2677,28 @@ impl LayoutManagerDialog {
             return Err("Invalid layout selection.".to_string());
         };
 
-        let path = Self::layout_path(&name);
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("Failed to delete layout '{}': {e}", path.display())),
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut map: std::collections::BTreeMap<String, SavedLayout> =
+                crate::wasm_persist::read_config_string("config/layouts.json", &PathBuf::new())
+                    .and_then(|c| serde_json::from_str(&c).ok())
+                    .unwrap_or_default();
+            if map.remove(&name).is_none() {
+                return Err(format!("Layout '{name}' not found"));
+            }
+            let json = serde_json::to_string_pretty(&map)
+                .map_err(|e| format!("Failed to serialize layouts: {e}"))?;
+            crate::wasm_persist::save_config_string("config/layouts.json", &PathBuf::new(), &json)
+                .map_err(|e| format!("Failed to delete layout '{name}': {e}"))?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let path = Self::layout_path(&name);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("Failed to delete layout '{}': {e}", path.display())),
+            }
         }
 
         self.refresh_layouts();

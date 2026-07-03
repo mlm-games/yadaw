@@ -1,12 +1,15 @@
 use anyhow::{Result, anyhow};
 use chrono::Local;
-use std::fs;
 use std::path::{Path, PathBuf};
 use web_time::{Duration, Instant, SystemTime};
 
 use crate::constants::PROJECT_EXTENSION;
 use crate::paths::cache_dir;
 use crate::project::{AppState, Project};
+use crate::wasm_persist::{read_config_string, save_config_string};
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs;
 
 #[derive(Debug, Clone)]
 pub struct ProjectInfo {
@@ -182,20 +185,27 @@ impl ProjectManager {
             return Ok(());
         }
 
-        let auto_save_path = self.get_auto_save_path()?;
         let project = state.to_project();
-
         let json = serde_json::to_string_pretty(&project)?;
-        fs::write(&auto_save_path, json)?;
 
-        if let Some(info) = &mut self.current_project {
-            info.auto_save_path = Some(auto_save_path);
+        #[cfg(target_arch = "wasm32")]
+        {
+            save_config_string("config/autosave.json", &PathBuf::new(), &json)?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let auto_save_path = self.get_auto_save_path()?;
+            fs::write(&auto_save_path, json)?;
+            if let Some(info) = &mut self.current_project {
+                info.auto_save_path = Some(auto_save_path);
+            }
         }
 
         self.last_auto_save = Instant::now();
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn recover_auto_save(&mut self) -> Result<Project> {
         let auto_save_path = self.get_auto_save_path()?;
         if !auto_save_path.exists() {
@@ -211,6 +221,16 @@ impl ProjectManager {
         Ok(project)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub fn recover_auto_save(&mut self) -> Result<Project> {
+        let _ = self;
+        let contents = read_config_string("config/autosave.json", &PathBuf::new())
+            .ok_or_else(|| anyhow!("No auto-save file found"))?;
+        let project: Project = serde_json::from_str(&contents)?;
+        Ok(project)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn export_project(&self, state: &AppState, path: &Path, include_audio: bool) -> Result<()> {
         if include_audio {
             // Create a directory for the project bundle
@@ -294,6 +314,7 @@ impl ProjectManager {
         self.is_dirty = false;
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn load_recent_projects() -> Vec<PathBuf> {
         if let Some(dirs) = directories::ProjectDirs::from("com", "yadaw", "yadaw") {
             let recent_file = dirs.config_dir().join("recent_projects.json");
@@ -307,6 +328,18 @@ impl ProjectManager {
         Vec::new()
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn load_recent_projects() -> Vec<PathBuf> {
+        let contents = read_config_string("config/recent_projects.json", &PathBuf::new());
+        if let Some(json) = contents {
+            if let Ok(recent) = serde_json::from_str(&json) {
+                return recent;
+            }
+        }
+        Vec::new()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn save_recent_projects(&self) -> Result<()> {
         if let Some(dirs) = directories::ProjectDirs::from("com", "yadaw", "yadaw") {
             let recent_file = dirs.config_dir().join("recent_projects.json");
@@ -314,6 +347,13 @@ impl ProjectManager {
             let json = serde_json::to_string_pretty(&self.recent_projects)?;
             fs::write(recent_file, json)?;
         }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn save_recent_projects(&self) -> Result<()> {
+        let json = serde_json::to_string_pretty(&self.recent_projects)?;
+        save_config_string("config/recent_projects.json", &PathBuf::new(), &json)?;
         Ok(())
     }
 

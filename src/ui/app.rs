@@ -4,6 +4,7 @@ use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
+use crate::midi_import::ImportedTrack;
 use crate::input::actions::{ActionContext, AppAction};
 use crate::messages::{AudioCommand, PluginParamInfo, UIUpdate};
 use crate::midi_input::MidiInputHandler;
@@ -1833,130 +1834,137 @@ impl YadawApp {
     /// Import a MIDI file, creating new MIDI tracks for each track in the file
     fn import_midi_file_to_new_track(&mut self, path: &Path) {
         let bpm = self.audio_state.bpm.load();
-
         match crate::midi_import::import_midi_file(path, bpm) {
-            Ok(imported_tracks) => {
-                if imported_tracks.is_empty() {
-                    self.dialogs
-                        .show_message("No valid MIDI tracks found in file");
-                    return;
-                }
-
-                self.push_undo();
-                let mut state = self.state.lock().unwrap();
-                let mut first_new_track_id = None;
-
-                let track_count = imported_tracks.len();
-                for imported in imported_tracks {
-                    let track_id = state.fresh_id();
-                    let mut track = self
-                        .track_manager
-                        .create_track(UITrackType::Midi, Some(imported.name));
-
-                    // Remove the default "Pattern 1" that is automatically created for new MIDI tracks
-                    track.midi_clips.clear();
-
-                    track.id = track_id;
-
-                    state.track_order.push(track_id);
-                    state.tracks.insert(track_id, track);
-
-                    if first_new_track_id.is_none() {
-                        first_new_track_id = Some(track_id);
-                    }
-
-                    // Create clip for this track
-                    let mut notes = imported.notes;
-                    if !notes.is_empty() {
-                        let clip_id = state.fresh_id();
-
-                        for note in &mut notes {
-                            if note.id == 0 {
-                                note.id = state.fresh_id();
-                            }
-                            if !note.duration.is_finite() || note.duration <= 0.0 {
-                                note.duration = 1e-6;
-                            }
-                            if !note.start.is_finite() || note.start < 0.0 {
-                                note.start = 0.0;
-                            }
-                        }
-
-                        let length_beats = notes
-                            .iter()
-                            .map(|n| n.start + n.duration)
-                            .fold(0.0f64, f64::max)
-                            .max(0.000001);
-
-                        let pattern_id = state.fresh_id();
-                        let pattern = MidiPattern {
-                            id: pattern_id,
-                            notes: notes.clone(),
-                        };
-                        state.patterns.insert(pattern_id, pattern);
-
-                        let clip = MidiClip {
-                            id: clip_id,
-                            name: "Imported Clip".to_string(),
-                            start_beat: 0.0,
-                            length_beats,
-                            notes: Vec::new(),
-                            color: None,
-                            velocity_offset: 0,
-                            transpose: 0,
-                            loop_enabled: false,
-                            content_len_beats: length_beats,
-                            pattern_id: Some(pattern_id),
-                            quantize_grid: 0.25,
-                            quantize_strength: 1.0,
-                            quantize_enabled: false,
-                            muted: false,
-                            locked: false,
-                            groove: None,
-                            swing: 0.0,
-                            humanize: 0.0,
-                            content_offset_beats: 0.0,
-                        };
-
-                        if let Some(track) = state.tracks.get_mut(&track_id) {
-                            track.midi_clips.push(clip);
-                            state.clips_by_id.insert(
-                                clip_id,
-                                crate::project::ClipRef {
-                                    track_id,
-                                    is_midi: true,
-                                },
-                            );
-                        }
-                    }
-                }
-
-                state.ensure_ids();
-                drop(state);
-
-                if let Some(tid) = first_new_track_id {
-                    self.select_track(tid);
-                }
-
-                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-
-                let suffix = "";
-                self.dialogs.show_success(&format!(
-                    "Imported {} track{} from {}{}",
-                    track_count,
-                    if track_count == 1 { "" } else { "s" },
-                    path.file_name().unwrap_or_default().to_string_lossy(),
-                    suffix
-                ));
+            Ok(tracks) => {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                self.apply_imported_midi(tracks, name)
             }
-            Err(e) => {
-                self.dialogs.show_error(&format!(
-                    "Failed to import MIDI file '{}': {}",
-                    path.display(),
-                    e
-                ));
+            Err(e) => self.dialogs.show_error(&format!(
+                "Failed to import MIDI file '{}': {}",
+                path.display(),
+                e
+            )),
+        }
+    }
+
+    /// Import MIDI from raw bytes.
+    pub fn import_midi_blob_to_new_track(&mut self, name: &str, data: &[u8]) {
+        let bpm = self.audio_state.bpm.load();
+        match crate::midi_import::import_midi_data(data, bpm) {
+            Ok(tracks) => self.apply_imported_midi(tracks, name.to_string()),
+            Err(e) => self.dialogs.show_error(&format!("Failed to import MIDI '{name}': {e}")),
+        }
+    }
+
+    fn apply_imported_midi(&mut self, imported_tracks: Vec<ImportedTrack>, source_label: String) {
+        if imported_tracks.is_empty() {
+            self.dialogs
+                .show_message("No valid MIDI tracks found in file");
+            return;
+        }
+
+        self.push_undo();
+        let mut state = self.state.lock().unwrap();
+        let mut first_new_track_id = None;
+
+        let track_count = imported_tracks.len();
+        for imported in imported_tracks {
+            let track_id = state.fresh_id();
+            let mut track = self
+                .track_manager
+                .create_track(UITrackType::Midi, Some(imported.name));
+
+            track.midi_clips.clear();
+
+            track.id = track_id;
+
+            state.track_order.push(track_id);
+            state.tracks.insert(track_id, track);
+
+            if first_new_track_id.is_none() {
+                first_new_track_id = Some(track_id);
+            }
+
+            let mut notes = imported.notes;
+            if !notes.is_empty() {
+                let clip_id = state.fresh_id();
+
+                for note in &mut notes {
+                    if note.id == 0 {
+                        note.id = state.fresh_id();
+                    }
+                    if !note.duration.is_finite() || note.duration <= 0.0 {
+                        note.duration = 1e-6;
+                    }
+                    if !note.start.is_finite() || note.start < 0.0 {
+                        note.start = 0.0;
+                    }
+                }
+
+                let length_beats = notes
+                    .iter()
+                    .map(|n| n.start + n.duration)
+                    .fold(0.0f64, f64::max)
+                    .max(0.000001);
+
+                let pattern_id = state.fresh_id();
+                let pattern = MidiPattern {
+                    id: pattern_id,
+                    notes: notes.clone(),
+                };
+                state.patterns.insert(pattern_id, pattern);
+
+                let clip = MidiClip {
+                    id: clip_id,
+                    name: "Imported Clip".to_string(),
+                    start_beat: 0.0,
+                    length_beats,
+                    notes: Vec::new(),
+                    color: None,
+                    velocity_offset: 0,
+                    transpose: 0,
+                    loop_enabled: false,
+                    content_len_beats: length_beats,
+                    pattern_id: Some(pattern_id),
+                    quantize_grid: 0.25,
+                    quantize_strength: 1.0,
+                    quantize_enabled: false,
+                    muted: false,
+                    locked: false,
+                    groove: None,
+                    swing: 0.0,
+                    humanize: 0.0,
+                    content_offset_beats: 0.0,
+                };
+
+                if let Some(track) = state.tracks.get_mut(&track_id) {
+                    track.midi_clips.push(clip);
+                    state.clips_by_id.insert(
+                        clip_id,
+                        crate::project::ClipRef {
+                            track_id,
+                            is_midi: true,
+                        },
+                    );
+                }
             }
         }
+
+        state.ensure_ids();
+        drop(state);
+
+        if let Some(tid) = first_new_track_id {
+            self.select_track(tid);
+        }
+
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+
+        self.dialogs.show_success(&format!(
+            "Imported {} track{} from {}",
+            track_count,
+            if track_count == 1 { "" } else { "s" },
+            source_label,
+        ));
     }
 
     /// creates a new audio track if needed
@@ -1994,7 +2002,7 @@ impl YadawApp {
     }
 
     /// Import audio from raw bytes (wasm file picker path).
-    #[cfg(target_arch = "wasm32")]
+    /// Import audio from raw bytes.
     pub fn import_audio_blob_to_new_track(
         &mut self,
         name: &str,
@@ -2151,47 +2159,109 @@ impl eframe::App for YadawApp {
             self.handle_action(action);
         }
 
-        let dropped_files: Vec<egui::DroppedFile> = ctx.input(|i| i.raw.dropped_files.clone());
-        for dropped in &dropped_files {
-            if let Some(path) = &dropped.path {
-                let extension = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|s| s.to_lowercase());
+        {
+            let dropped_files: Vec<egui::DroppedFile> = ctx.input(|i| i.raw.dropped_files.clone());
+            let bpm = self.audio_state.bpm.load();
+            for dropped in &dropped_files {
+                if let Some(path) = &dropped.path {
+                    let extension = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_lowercase());
 
-                log::info!("Dropped file: {:?} (ext: {:?})", path, extension);
+                    log::info!("Dropped file: {:?} (ext: {:?})", path, extension);
 
-                match extension.as_deref() {
-                    Some("mid") | Some("midi") => {
-                        self.import_midi_file_to_new_track(path);
-                    }
-                    Some("yadaw") | Some("ydw") => match std::env::current_exe() {
-                        Ok(exe) => match std::process::Command::new(&exe).arg(path).spawn() {
-                            Ok(_) => {
-                                log::info!("Launched new YADAW instance for project: {:?}", path);
-                            }
-                            Err(e) => {
-                                log::error!("Failed to launch new YADAW instance: {}", e);
-                                self.dialogs.show_error(&format!(
-                                    "Failed to open project in new window: {}",
-                                    e
-                                ));
-                            }
-                        },
-                        Err(e) => {
-                            log::error!("Failed to get current executable path: {}", e);
+                    match extension.as_deref() {
+                        Some("mid") | Some("midi") => {
+                            self.import_midi_file_to_new_track(path);
                         }
-                    },
-                    Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a")
-                    | Some("aac") => {
-                        self.import_audio_file_to_new_track(path);
+                        Some("yadaw") | Some("ydw") => {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            match std::env::current_exe() {
+                                Ok(exe) => match std::process::Command::new(&exe).arg(path).spawn() {
+                                    Ok(_) => {
+                                        log::info!("Launched new YADAW instance for project: {:?}", path);
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to launch new YADAW instance: {}", e);
+                                        self.dialogs.show_error(&format!(
+                                            "Failed to open project in new window: {}",
+                                            e
+                                        ));
+                                    }
+                                },
+                                Err(e) => {
+                                    log::error!("Failed to get current executable path: {}", e);
+                                }
+                            }
+                        }
+                        Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a")
+                        | Some("aac") => {
+                            self.import_audio_file_to_new_track(path);
+                        }
+                        _ => {
+                            log::warn!("Unknown file type dropped: {:?}", path);
+                            self.dialogs.show_warning(&format!(
+                                "Cannot open dropped file: unknown type '{}'",
+                                extension.unwrap_or_default()
+                            ));
+                        }
                     }
-                    _ => {
-                        log::warn!("Unknown file type dropped: {:?}", path);
-                        self.dialogs.show_warning(&format!(
-                            "Cannot open dropped file: unknown type '{}'",
-                            extension.unwrap_or_default()
-                        ));
+                } else if let Some(bytes) = &dropped.bytes {
+                    let name = &dropped.name;
+                    let extension = name
+                        .rsplit('.')
+                        .next()
+                        .map(|s| s.to_lowercase());
+
+                    match extension.as_deref() {
+                        Some("mid") | Some("midi") => {
+                            self.import_midi_blob_to_new_track(name, bytes);
+                        }
+                        Some("yadaw") | Some("ydw") => {
+                            if let Ok(contents) = String::from_utf8(bytes.to_vec()) {
+                                if let Ok(project) = serde_json::from_str::<crate::project::Project>(&contents) {
+                                    let live_bpm = self.audio_state.bpm.load();
+                                    let live_loop_start = self.audio_state.loop_start.load();
+                                    let live_loop_end = self.audio_state.loop_end.load();
+                                    let live_loop_enabled = self.audio_state.loop_enabled.load(std::sync::atomic::Ordering::Relaxed);
+
+                                    let mut state = self.state.lock().unwrap();
+                                    state.load_project(project);
+                                    state.bpm = live_bpm;
+                                    state.loop_start = live_loop_start;
+                                    state.loop_end = live_loop_end;
+                                    state.loop_enabled = live_loop_enabled;
+
+                                    self.audio_state.bpm.store(state.bpm);
+                                    self.audio_state.loop_start.store(state.loop_start);
+                                    self.audio_state.loop_end.store(state.loop_end);
+                                    self.audio_state.loop_enabled.store(state.loop_enabled, std::sync::atomic::Ordering::Relaxed);
+
+                                    state.ensure_ids();
+                                    drop(state);
+
+                                    self.project_path = Some(name.to_string());
+                                    self.select_track(0);
+                                    self.selected_clips.clear();
+                                    self.undo_stack.clear();
+                                    self.redo_stack.clear();
+
+                                    let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+                                    let _ = self.command_tx.send(AudioCommand::RebuildAllRtChains);
+
+                                    self.hydrate_audio_cache();
+                                    self.dialogs.show_success(&format!("Loaded project: {name}"));
+                                }
+                            }
+                        }
+                        Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a")
+                        | Some("aac") => {
+                            self.import_audio_blob_to_new_track(name, bytes, extension.as_deref().unwrap_or("wav"), bpm);
+                        }
+                        _ => {
+                            log::warn!("Unknown dropped file type: {:?}", name);
+                        }
                     }
                 }
             }
@@ -2227,11 +2297,8 @@ impl eframe::App for YadawApp {
 
 impl Drop for YadawApp {
     fn drop(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let _ = self.input_manager.save_shortcuts(&shortcuts_path());
-            let _ = self.theme_manager.save_custom_themes(&custom_themes_path());
-            let _ = self.theme_manager.save_current_theme(&current_theme_path());
-        }
+        let _ = self.input_manager.save_shortcuts(&shortcuts_path());
+        let _ = self.theme_manager.save_custom_themes(&custom_themes_path());
+        let _ = self.theme_manager.save_current_theme(&current_theme_path());
     }
 }

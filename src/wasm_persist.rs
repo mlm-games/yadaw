@@ -1,8 +1,14 @@
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 static PRELOADED: OnceCell<HashMap<&'static str, String>> = OnceCell::new();
+
+/// In-memory config cache used on wasm so that writes are immediately
+/// visible to subsequent reads (OPFS writes are async). Updated by
+/// `save_config_string` and checked by `read_config_string`.
+static CONFIG_CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(target_arch = "wasm32")]
 mod opfs_io {
@@ -37,6 +43,9 @@ mod opfs_io {
             crate::paths::opfs::FILE_CUSTOM_THEMES,
             crate::paths::opfs::FILE_CURRENT_THEME,
             crate::paths::opfs::FILE_SHORTCUTS,
+            "config/layouts.json",
+            "config/autosave.json",
+            "config/recent_projects.json",
         ] {
             if let Ok(data) = read_string(key).await {
                 map.insert(*key, data);
@@ -99,10 +108,19 @@ pub use opfs_io::init;
 
 pub fn read_config_string(wasm_key: &str, fs_path: &Path) -> Option<String> {
     #[cfg(target_arch = "wasm32")]
-    if let Some(data) = opfs_io::get_preloaded(wasm_key) {
-        return Some(data.to_string());
+    {
+        if let Some(data) = opfs_io::get_preloaded(wasm_key) {
+            return Some(data.to_string());
+        }
+        if let Some(data) = CONFIG_CACHE.lock().unwrap().get(wasm_key) {
+            return Some(data.clone());
+        }
+        return None;
     }
-    std::fs::read_to_string(fs_path).ok()
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::read_to_string(fs_path).ok()
+    }
 }
 
 /// Build an OPFS cache filename from a 64-bit content hash.
@@ -151,6 +169,7 @@ pub async fn read_cached_audio_by_hash(hash: u64) -> Option<Vec<f32>> {
 pub fn save_config_string(wasm_key: &str, fs_path: &Path, data: &str) -> anyhow::Result<()> {
     #[cfg(target_arch = "wasm32")]
     {
+        CONFIG_CACHE.lock().unwrap().insert(wasm_key.to_string(), data.to_string());
         let key = wasm_key.to_string();
         let data = data.to_string();
         wasm_bindgen_futures::spawn_local(async move {

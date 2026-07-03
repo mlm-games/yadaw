@@ -12,7 +12,11 @@ pub struct ImportedTrack {
 
 pub fn import_midi_file(path: &Path, bpm: f32) -> Result<Vec<ImportedTrack>> {
     let data = std::fs::read(path)?;
-    let smf = midly::Smf::parse(&data).map_err(|e| anyhow!("MIDI parse failed: {e}"))?;
+    import_midi_data(&data, bpm)
+}
+
+pub fn import_midi_data(data: &[u8], bpm: f32) -> Result<Vec<ImportedTrack>> {
+    let smf = midly::Smf::parse(data).map_err(|e| anyhow!("MIDI parse failed: {e}"))?;
 
     enum TickToBeats {
         Ppqn(f64),                  // ticks_per_beat

@@ -713,14 +713,15 @@ impl ShortcutRegistry {
     /// Save to file
     pub fn save(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, json)?;
+        crate::wasm_persist::save_config_string(crate::paths::opfs::FILE_SHORTCUTS, path, &json)?;
         Ok(())
     }
 
     /// Load from file
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
-        let json = std::fs::read_to_string(path)?;
-        Self::load_from_json(&json)
+        let data = crate::wasm_persist::read_config_string(crate::paths::opfs::FILE_SHORTCUTS, path)
+            .ok_or_else(|| anyhow::anyhow!("Failed to read shortcuts from {:?}", path))?;
+        Self::load_from_json(&data)
     }
 
     pub fn load_from_json(json: &str) -> anyhow::Result<Self> {
