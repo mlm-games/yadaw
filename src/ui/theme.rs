@@ -93,6 +93,16 @@ impl ThemeManager {
     pub fn get_custom_themes(&self) -> &[CustomTheme] {
         &self.custom_themes
     }
+
+    pub fn set_custom_themes(&mut self, themes: Vec<CustomTheme>) {
+        self.custom_themes = themes;
+    }
+
+    pub fn set_current_theme_from_json(&mut self, json: &str) -> anyhow::Result<()> {
+        self.current_theme = serde_json::from_str(json)?;
+        Ok(())
+    }
+
     pub fn save_custom_themes(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(&self.custom_themes)?;
         std::fs::write(path, json)?;

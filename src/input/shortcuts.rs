@@ -720,7 +720,11 @@ impl ShortcutRegistry {
     /// Load from file
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let json = std::fs::read_to_string(path)?;
-        let mut reg: Self = serde_json::from_str(&json)?;
+        Self::load_from_json(&json)
+    }
+
+    pub fn load_from_json(json: &str) -> anyhow::Result<Self> {
+        let mut reg: Self = serde_json::from_str(json)?;
         reg.rebuild_reverse_index();
         Ok(reg)
     }

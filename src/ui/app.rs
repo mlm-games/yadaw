@@ -159,17 +159,28 @@ impl YadawApp {
 
         let mut project_manager = ProjectManager::new();
 
-        // Load custom themes
-        let themes_path = custom_themes_path();
-        let _ = theme_manager.load_custom_themes(&themes_path);
+        if let Some(data) = crate::wasm_persist::read_config_string(
+            crate::paths::opfs::FILE_CUSTOM_THEMES,
+            &custom_themes_path(),
+        ) {
+            if let Ok(themes) = serde_json::from_str(&data) {
+                theme_manager.set_custom_themes(themes);
+            }
+        }
 
-        let theme_path = current_theme_path();
-        let _ = theme_manager.load_current_theme(&theme_path);
+        if let Some(data) = crate::wasm_persist::read_config_string(
+            crate::paths::opfs::FILE_CURRENT_THEME,
+            &current_theme_path(),
+        ) {
+            let _ = theme_manager.set_current_theme_from_json(&data);
+        }
 
-        // Load custom shortcuts if they exist
-
-        let shortcuts_path = shortcuts_path();
-        let _ = input_manager.load_shortcuts(&shortcuts_path);
+        if let Some(data) = crate::wasm_persist::read_config_string(
+            crate::paths::opfs::FILE_SHORTCUTS,
+            &shortcuts_path(),
+        ) {
+            let _ = input_manager.load_shortcuts_from_json(&data);
+        }
 
         project_manager.set_auto_save(config.behavior.auto_save);
 
@@ -2122,8 +2133,11 @@ impl eframe::App for YadawApp {
 
 impl Drop for YadawApp {
     fn drop(&mut self) {
-        let _ = self.input_manager.save_shortcuts(&shortcuts_path());
-        let _ = self.theme_manager.save_custom_themes(&custom_themes_path());
-        let _ = self.theme_manager.save_current_theme(&current_theme_path());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = self.input_manager.save_shortcuts(&shortcuts_path());
+            let _ = self.theme_manager.save_custom_themes(&custom_themes_path());
+            let _ = self.theme_manager.save_current_theme(&current_theme_path());
+        }
     }
 }

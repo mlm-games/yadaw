@@ -2,31 +2,42 @@ use std::path::{Path, PathBuf};
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 use std::process::Command;
 
-// On wasm32 there is no real filesystem — all path functions return dummy paths
-// and directory creation is skipped.
+pub mod opfs {
+    pub const DIR_CONFIG: &str = "config";
+    pub const DIR_CACHE: &str = "cache";
+    pub const DIR_PROJECTS: &str = "projects";
+    pub const DIR_PRESETS: &str = "presets";
+    pub const DIR_PLUGINS: &str = "plugins/clap";
+    pub const FILE_CONFIG: &str = "config/config.json";
+    pub const FILE_CUSTOM_THEMES: &str = "config/custom_themes.json";
+    pub const FILE_CURRENT_THEME: &str = "config/current_theme.json";
+    pub const FILE_SHORTCUTS: &str = "config/shortcuts.json";
+    pub const DIR_LAYOUTS: &str = "config/layouts";
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn projects_dir() -> PathBuf {
-    PathBuf::from("/projects")
+    PathBuf::from(opfs::DIR_PROJECTS)
 }
 #[cfg(target_arch = "wasm32")]
 pub fn config_path() -> PathBuf {
-    PathBuf::from("/config/config.json")
+    PathBuf::from(opfs::FILE_CONFIG)
 }
 #[cfg(target_arch = "wasm32")]
 pub fn cache_dir() -> PathBuf {
-    PathBuf::from("/cache")
+    PathBuf::from(opfs::DIR_CACHE)
 }
 #[cfg(target_arch = "wasm32")]
 pub fn plugins_dir() -> PathBuf {
-    PathBuf::from("/plugins/clap")
+    PathBuf::from(opfs::DIR_PLUGINS)
 }
 #[cfg(target_arch = "wasm32")]
 pub fn presets_dir() -> PathBuf {
-    PathBuf::from("/presets")
+    PathBuf::from(opfs::DIR_PRESETS)
 }
 #[cfg(target_arch = "wasm32")]
 pub fn config_root_dir() -> PathBuf {
-    PathBuf::from("/config")
+    PathBuf::from(opfs::DIR_CONFIG)
 }
 
 #[cfg(target_arch = "wasm32")]

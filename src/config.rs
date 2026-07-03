@@ -95,23 +95,22 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Result<Self> {
-        if let Some(config_path) = Self::config_path()
-            && config_path.exists()
-        {
-            let contents = std::fs::read_to_string(config_path)?;
-            return Ok(serde_json::from_str(&contents)?);
+        if let Some(data) = crate::wasm_persist::read_config_string(
+            crate::paths::opfs::FILE_CONFIG,
+            &Self::config_path().unwrap_or_default(),
+        ) {
+            return Ok(serde_json::from_str(&data)?);
         }
         Ok(Self::default())
     }
 
     pub fn save(&self) -> Result<()> {
-        if let Some(config_path) = Self::config_path() {
-            if let Some(parent) = config_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let contents = serde_json::to_string_pretty(self)?;
-            std::fs::write(config_path, contents)?;
-        }
+        let json = serde_json::to_string_pretty(self)?;
+        crate::wasm_persist::save_config_string(
+            crate::paths::opfs::FILE_CONFIG,
+            &Self::config_path().unwrap_or_default(),
+            &json,
+        )?;
         Ok(())
     }
 

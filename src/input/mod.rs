@@ -29,6 +29,12 @@ impl InputManager {
         Ok(())
     }
 
+    /// Load shortcuts from JSON string (used on wasm)
+    pub fn load_shortcuts_from_json(&mut self, json: &str) -> anyhow::Result<()> {
+        self.shortcuts = ShortcutRegistry::load_from_json(json)?;
+        Ok(())
+    }
+
     /// Save shortcuts
     pub fn save_shortcuts(&self, path: &std::path::Path) -> anyhow::Result<()> {
         self.shortcuts.save(path)

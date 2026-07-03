@@ -103,6 +103,7 @@ web-sys = { version = "0.3", features = [
     "HtmlAnchorElement",
 ] }
 waw = { git = "https://github.com/Marcel-G/waw-rs", optional = true }
+opfs = { git  = "https://github.com/mlm-games/opfs" }
 rlobkit-dialogs = { git = "https://github.com/mlm-games/rlobkit" }
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 
