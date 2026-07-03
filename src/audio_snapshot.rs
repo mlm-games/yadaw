@@ -56,6 +56,7 @@ fn track_to_snapshot(t: &Track, state: &AppState) -> TrackSnapshot {
 
 fn audio_clip_to_snapshot(c: &AudioClip) -> AudioClipSnapshot {
     AudioClipSnapshot {
+        clip_id: c.id,
         name: c.name.clone(),
         start_beat: c.start_beat,
         length_beats: c.length_beats,

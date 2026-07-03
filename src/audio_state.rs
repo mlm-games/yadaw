@@ -247,6 +247,7 @@ pub enum RtAutomationTarget {
 
 #[derive(Debug, Clone)]
 pub struct AudioClipSnapshot {
+    pub clip_id: u64,
     pub name: String,
     pub start_beat: f64,
     pub length_beats: f64,

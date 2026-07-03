@@ -1969,12 +1969,21 @@ impl YadawApp {
                 let mut state = self.state.lock().unwrap();
 
                 clip.id = state.fresh_id();
+                let clip_id = clip.id;
+
+                #[cfg(target_arch = "wasm32")]
+                let samples_for_cache = clip.samples.clone();
 
                 if let Some(track) = state.tracks.get_mut(&track_id) {
                     track.audio_clips.push(clip);
                     state.ensure_ids();
                 }
                 drop(state);
+
+                #[cfg(target_arch = "wasm32")]
+                crate::spawn_detached!(async move {
+                    let _ = crate::wasm_persist::cache_audio_samples(clip_id, &samples_for_cache).await;
+                });
 
                 let _ = self.command_tx.send(AudioCommand::UpdateTracks);
                 self.dialogs.show_success(&format!(

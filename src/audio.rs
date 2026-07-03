@@ -529,7 +529,11 @@ pub fn run_audio_wasm(
     snapshot_rx: Receiver<AudioGraphSnapshot>,
     preferred_sample_rate: f32,
 ) {
-    let host = cpal::default_host();
+    let host = cpal::available_hosts()
+        .iter()
+        .find(|id| **id == cpal::HostId::AudioWorklet)
+        .and_then(|id| cpal::host_from_id(*id).ok())
+        .unwrap_or_else(cpal::default_host);
     let device = host.default_output_device().expect("No output device");
     let config = choose_output_stream_config(&device, preferred_sample_rate);
 

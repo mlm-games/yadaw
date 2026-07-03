@@ -1,6 +1,6 @@
+use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::path::Path;
-use once_cell::sync::OnceCell;
 
 static PRELOADED: OnceCell<HashMap<&'static str, String>> = OnceCell::new();
 
@@ -9,13 +9,21 @@ mod opfs_io {
     use super::*;
     use opfs as opfs_crate;
     use opfs_crate::persistent;
-    use opfs_crate::{DirectoryHandle as _, FileHandle as _, WritableFileStream as _};
+    use opfs_crate::{
+        DirectoryHandle as _, FileHandle as _, WritableFileStream as _,
+    };
 
     pub async fn init() -> Result<(), String> {
         let mut root = persistent::app_specific_dir()
             .await
             .map_err(|e| format!("OPFS init: {e}"))?;
-        for name in &[crate::paths::opfs::DIR_CONFIG, crate::paths::opfs::DIR_CACHE, crate::paths::opfs::DIR_PROJECTS, crate::paths::opfs::DIR_PRESETS, crate::paths::opfs::DIR_PLUGINS] {
+        for name in &[
+            crate::paths::opfs::DIR_CONFIG,
+            crate::paths::opfs::DIR_CACHE,
+            crate::paths::opfs::DIR_PROJECTS,
+            crate::paths::opfs::DIR_PRESETS,
+            crate::paths::opfs::DIR_PLUGINS,
+        ] {
             root.get_directory_handle_with_options(
                 name,
                 &opfs_crate::GetDirectoryHandleOptions { create: true },
@@ -24,7 +32,12 @@ mod opfs_io {
             .map_err(|e| format!("create dir {name}: {e}"))?;
         }
         let mut map = HashMap::new();
-        for key in &[crate::paths::opfs::FILE_CONFIG, crate::paths::opfs::FILE_CUSTOM_THEMES, crate::paths::opfs::FILE_CURRENT_THEME, crate::paths::opfs::FILE_SHORTCUTS] {
+        for key in &[
+            crate::paths::opfs::FILE_CONFIG,
+            crate::paths::opfs::FILE_CUSTOM_THEMES,
+            crate::paths::opfs::FILE_CURRENT_THEME,
+            crate::paths::opfs::FILE_SHORTCUTS,
+        ] {
             if let Ok(data) = read_string(key).await {
                 map.insert(*key, data);
             }
@@ -42,7 +55,7 @@ mod opfs_io {
         String::from_utf8(data).map_err(|e| format!("decode {name}: {e}"))
     }
 
-    async fn read_file(name: &str) -> Result<Vec<u8>, String> {
+    pub(super) async fn read_file(name: &str) -> Result<Vec<u8>, String> {
         let mut root = persistent::app_specific_dir()
             .await
             .map_err(|e| format!("OPFS root: {e}"))?;
@@ -53,11 +66,7 @@ mod opfs_io {
         file.read().await.map_err(|e| format!("read {name}: {e}"))
     }
 
-    pub(super) async fn write_string(name: &str, data: &str) -> Result<(), String> {
-        write_file(name, data.as_bytes()).await
-    }
-
-    async fn write_file(name: &str, data: &[u8]) -> Result<(), String> {
+    pub(super) async fn write_file(name: &str, data: &[u8]) -> Result<(), String> {
         let mut root = persistent::app_specific_dir()
             .await
             .map_err(|e| format!("OPFS root: {e}"))?;
@@ -81,6 +90,8 @@ mod opfs_io {
             .await
             .map_err(|e| format!("close {name}: {e}"))
     }
+
+
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -94,13 +105,56 @@ pub fn read_config_string(wasm_key: &str, fs_path: &Path) -> Option<String> {
     std::fs::read_to_string(fs_path).ok()
 }
 
+/// Generate a unique OPFS cache filename for an audio clip.
+pub fn audio_cache_key(clip_id: u64) -> String {
+    format!("audio_{clip_id}.f32")
+}
+
+/// Write decoded audio samples to the OPFS cache.
+/// Returns the cache key on success. No-op on native.
+pub async fn cache_audio_samples(clip_id: u64, samples: &[f32]) -> anyhow::Result<String> {
+    let key = audio_cache_key(clip_id);
+    let data: &[u8] =
+        unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4) };
+    #[cfg(target_arch = "wasm32")]
+    {
+        let full_key = format!("{}/{}", crate::paths::opfs::DIR_CACHE, key);
+        opfs_io::write_file(&full_key, data)
+            .await
+            .map_err(|e| anyhow::anyhow!("cache audio: {e}"))?;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = data;
+    }
+    Ok(key)
+}
+
+/// Read previously cached audio samples from OPFS.
+/// Returns `None` if not cached.
+pub async fn read_cached_audio(clip_id: u64) -> Option<Vec<f32>> {
+    let key = audio_cache_key(clip_id);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let full_key = format!("{}/{}", crate::paths::opfs::DIR_CACHE, key);
+        let data = opfs_io::read_file(&full_key).await.ok()?;
+        let (_prefix, samples, _suffix) = unsafe { data.align_to::<f32>() };
+        Some(samples.to_vec())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = key;
+        None
+    }
+}
+
 pub fn save_config_string(wasm_key: &str, fs_path: &Path, data: &str) -> anyhow::Result<()> {
     #[cfg(target_arch = "wasm32")]
     {
         let key = wasm_key.to_string();
         let data = data.to_string();
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = opfs_io::write_string(&key, &data).await;
+            let _ = opfs_io::write_file(&key, data.as_bytes()).await;
         });
         return Ok(());
     }
