@@ -1,6 +1,7 @@
 [build]
 target = "index.html"
 no_default_features = true
+no_sri = true
 
 [watch]
 ignore = ["./target", "./dist"]
