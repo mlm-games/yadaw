@@ -2,14 +2,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use flume::{Receiver, Sender};
+use flume::Receiver;
 use wasm_safe_mutex::Mutex;
+use wasm_safe_mutex::mpsc::Sender;
 
 use crate::audio_export::AudioExporter;
 use crate::audio_state::{AudioGraphSnapshot, AudioState, RealtimeCommand};
 use crate::edit_actions::EditProcessor;
 use crate::idgen;
-use crate::messages::{AudioCommand, UiTx, UIUpdate};
+use crate::messages::{AudioCommand, UIUpdate, UiTx};
 use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
 use crate::model::track::TrackType;
@@ -121,28 +122,28 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.volume = volume;
             }
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTrackVolume(track_id, volume));
+            let _ = realtime_tx.send_sync(RealtimeCommand::UpdateTrackVolume(track_id, volume));
         }
         AudioCommand::SetTrackPan(track_id, pan) => {
             let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.pan = pan;
             }
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTrackPan(track_id, pan));
+            let _ = realtime_tx.send_sync(RealtimeCommand::UpdateTrackPan(track_id, pan));
         }
         AudioCommand::SetTrackMute(track_id, mute) => {
             let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.muted = mute;
             }
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTrackMute(track_id, mute));
+            let _ = realtime_tx.send_sync(RealtimeCommand::UpdateTrackMute(track_id, mute));
         }
         AudioCommand::SetTrackSolo(track_id, solo) => {
             let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.solo = solo;
             }
-            let _ = realtime_tx.send(RealtimeCommand::UpdateTrackSolo(track_id, solo));
+            let _ = realtime_tx.send_sync(RealtimeCommand::UpdateTrackSolo(track_id, solo));
         }
         AudioCommand::ArmForRecording(track_id, armed) => {
             let mut state = app_state.lock_sync();
@@ -246,7 +247,7 @@ fn process_command(
             };
 
             if let Some(track_id) = target_track_id {
-                let _ = realtime_tx.send(RealtimeCommand::MidiMessage {
+                let _ = realtime_tx.send_sync(RealtimeCommand::MidiMessage {
                     track_id,
                     status,
                     data1,
@@ -351,7 +352,7 @@ fn process_command(
             }
             drop(state);
 
-            let _ = realtime_tx.send(RealtimeCommand::RemovePluginInstance {
+            let _ = realtime_tx.send_sync(RealtimeCommand::RemovePluginInstance {
                 track_id,
                 plugin_id,
             });
@@ -367,7 +368,7 @@ fn process_command(
             }
             drop(state);
 
-            let _ = realtime_tx.send(RealtimeCommand::UpdatePluginBypass(
+            let _ = realtime_tx.send_sync(RealtimeCommand::UpdatePluginBypass(
                 track_id, plugin_id, bypass,
             ));
         }
@@ -403,7 +404,7 @@ fn process_command(
                 }
                 drop(state);
 
-                let _ = realtime_tx.send(RealtimeCommand::UpdatePluginParam(
+                let _ = realtime_tx.send_sync(RealtimeCommand::UpdatePluginParam(
                     track_id,
                     plugin_id,
                     param_name.clone(),
@@ -492,7 +493,8 @@ fn process_command(
                         return;
                     }
                 } else {
-                    let _ = ui_tx.send_sync(UIUpdate::Warning(format!("Track {} not found", track_id)));
+                    let _ =
+                        ui_tx.send_sync(UIUpdate::Warning(format!("Track {} not found", track_id)));
                     return;
                 };
 
@@ -521,7 +523,7 @@ fn process_command(
             };
 
             for (param_name, value) in params_to_update {
-                let _ = realtime_tx.send(RealtimeCommand::UpdatePluginParam(
+                let _ = realtime_tx.send_sync(RealtimeCommand::UpdatePluginParam(
                     track_id, plugin_id, param_name, value,
                 ));
             }
@@ -534,7 +536,7 @@ fn process_command(
                 let mut state = app_state.lock_sync();
                 state.loop_enabled = enabled;
             }
-            let _ = realtime_tx.send(RealtimeCommand::SetLoopEnabled(enabled));
+            let _ = realtime_tx.send_sync(RealtimeCommand::SetLoopEnabled(enabled));
         }
         AudioCommand::SetLoopRegion(start, end) => {
             audio_state.loop_start.store(start);
@@ -544,7 +546,7 @@ fn process_command(
                 state.loop_start = start;
                 state.loop_end = end;
             }
-            let _ = realtime_tx.send(RealtimeCommand::SetLoopRegion(start, end));
+            let _ = realtime_tx.send_sync(RealtimeCommand::SetLoopRegion(start, end));
         }
         AudioCommand::AddPluginUnified {
             track_id,
@@ -590,7 +592,7 @@ fn process_command(
             };
 
             if let Some(plugin_id) = plugin_id_opt {
-                let _ = realtime_tx.send(RealtimeCommand::AddUnifiedPlugin {
+                let _ = realtime_tx.send_sync(RealtimeCommand::AddUnifiedPlugin {
                     track_id,
                     plugin_id,
                     backend,
@@ -898,14 +900,14 @@ fn process_command(
         }
         AudioCommand::PreviewNote(track_id, pitch) => {
             let current_position = audio_state.get_position();
-            let _ = realtime_tx.send(RealtimeCommand::PreviewNote(
+            let _ = realtime_tx.send_sync(RealtimeCommand::PreviewNote(
                 track_id,
                 pitch,
                 current_position,
             ));
         }
         AudioCommand::StopPreviewNote => {
-            let _ = realtime_tx.send(RealtimeCommand::StopPreviewNote);
+            let _ = realtime_tx.send_sync(RealtimeCommand::StopPreviewNote);
         }
         AudioCommand::SetTrackMonitor(track_id, enabled) => {
             let mut state = app_state.lock_sync();
@@ -1484,7 +1486,7 @@ fn process_command(
             drop(state);
 
             for ts in track_snapshots {
-                let _ = realtime_tx.send(RealtimeCommand::RebuildTrackChain {
+                let _ = realtime_tx.send_sync(RealtimeCommand::RebuildTrackChain {
                     track_id: ts.track_id,
                     chain: ts.plugin_chain,
                 });
@@ -2087,7 +2089,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::OpenPluginEditor(track_id, plugin_id) => {
-            let _ = realtime_tx.send(RealtimeCommand::OpenPluginEditor(track_id, plugin_id));
+            let _ = realtime_tx.send_sync(RealtimeCommand::OpenPluginEditor(track_id, plugin_id));
         }
         AudioCommand::PunchOutMidiClip {
             clip_id,
@@ -2146,11 +2148,7 @@ pub fn send_graph_snapshot(state: &AppState, snapshot_tx: &Sender<AudioGraphSnap
         track_order: state.track_order.clone(),
     };
 
-    if let Err(e) = snapshot_tx.try_send(snapshot) {
-        if !matches!(e, flume::TrySendError::Full(_)) {
-            log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
-        }
-    }
+    let _ = snapshot_tx.send_sync(snapshot);
 }
 
 // Create a recording MIDI clip at start_beat if none spans that beat.

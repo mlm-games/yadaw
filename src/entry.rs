@@ -7,7 +7,8 @@ use crate::spawn_detached;
 use crate::{project, ui};
 use flume::{self, Sender};
 use std::sync::Arc;
-use wasm_safe_mutex::Mutex;
+use wasm_safe_mutex::mpsc::{Receiver, channel};
+use wasm_safe_mutex::{self, Mutex};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::constants;
@@ -33,16 +34,12 @@ struct AppChannels {
 fn setup_channels_and_start_audio(
     app_state: &Arc<Mutex<project::AppState>>,
     audio_state: &Arc<AudioState>,
-    start_audio: impl FnOnce(
-        flume::Receiver<RealtimeCommand>,
-        flume::Receiver<AudioGraphSnapshot>,
-        UiTx,
-    ),
+    start_audio: impl FnOnce(Receiver<RealtimeCommand>, Receiver<AudioGraphSnapshot>, UiTx),
 ) -> AppChannels {
     let (command_tx, command_rx) = flume::unbounded::<AudioCommand>();
-    let (realtime_tx, realtime_rx) = flume::unbounded::<RealtimeCommand>();
-    let (snapshot_tx, snapshot_rx) = flume::bounded::<AudioGraphSnapshot>(1);
-    let (ui_tx, ui_rx) = wasm_safe_mutex::mpsc::channel();
+    let (realtime_tx, realtime_rx) = channel::<RealtimeCommand>();
+    let (snapshot_tx, snapshot_rx) = channel::<AudioGraphSnapshot>();
+    let (ui_tx, ui_rx) = channel();
 
     start_audio(realtime_rx, snapshot_rx, ui_tx.clone());
 

@@ -12,13 +12,13 @@ use crate::mixer::ChannelStrip;
 use crate::model::clip::AudioClip;
 use crate::model::track::TrackType;
 use crate::time_utils::TimeConverter;
+use wasm_safe_mutex::mpsc::{Receiver, channel};
 use yadaw_plugin_api::{BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEvent};
 use yadaw_plugin_host::HostFacade;
 
 use crate::messages::UiTx;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use dashmap::DashMap;
-use flume::Receiver;
 use rtrb::{Consumer, RingBuffer};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
@@ -249,7 +249,7 @@ fn build_audio_callback(
                 engine.process_realtime_command(cmd);
             }
 
-            if let Ok(new_snapshot) = snapshot_rx.try_recv() {
+            while let Ok(new_snapshot) = snapshot_rx.try_recv() {
                 engine.apply_new_snapshot(new_snapshot);
             }
 
@@ -690,7 +690,7 @@ impl AudioEngine {
         export_sample_rate: f32,
     ) -> Result<Self, anyhow::Error> {
         // Create a dummy channel since we don't send UI updates
-        let (dummy_tx, _) = wasm_safe_mutex::mpsc::channel::<UIUpdate>();
+        let (dummy_tx, _) = channel::<UIUpdate>();
 
         let host_cfg = HostConfig {
             sample_rate: export_sample_rate as f64,
