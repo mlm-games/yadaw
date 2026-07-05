@@ -15,8 +15,9 @@ mod opfs_io {
     use std::collections::HashMap;
 
     pub async fn init() -> Result<(), String> {
-        // Ensure directories exist for features that may not have
-        // written files yet (projects, presets, plugins).
+        // TODO: migrate presets.rs, plugin import (ui/dialogs.rs), and
+        // their callers (command_processor.rs) from std::fs to opfs.
+        // Until then these dirs won't be created lazily via opfs::write.
         for path in &[
             crate::paths::opfs::DIR_PROJECTS,
             crate::paths::opfs::DIR_PRESETS,
