@@ -19,6 +19,44 @@ mod opfs_io {
         DirectoryHandle as _, FileHandle as _, WritableFileStream as _,
     };
 
+    async fn ensure_dir_path(
+        root: &mut persistent::DirectoryHandle,
+        path: &str,
+    ) -> Result<persistent::DirectoryHandle, String> {
+        let mut dir = root.clone();
+        for segment in path.split('/') {
+            dir = dir
+                .get_directory_handle_with_options(
+                    segment,
+                    &opfs_crate::GetDirectoryHandleOptions { create: true },
+                )
+                .await
+                .map_err(|e| format!("create dir {segment}: {e}"))?;
+        }
+        Ok(dir)
+    }
+
+    async fn dir_path(
+        root: &mut persistent::DirectoryHandle,
+        path: &str,
+    ) -> Result<persistent::DirectoryHandle, String> {
+        if let Some(parent) = path.rsplit_once('/') {
+            let mut dir = root.clone();
+            for segment in parent.0.split('/') {
+                dir = dir
+                    .get_directory_handle_with_options(
+                        segment,
+                        &opfs_crate::GetDirectoryHandleOptions { create: true },
+                    )
+                    .await
+                    .map_err(|e| format!("create dir {segment}: {e}"))?;
+            }
+            Ok(dir)
+        } else {
+            Ok(root.clone())
+        }
+    }
+
     pub async fn init() -> Result<(), String> {
         let mut root = persistent::app_specific_dir()
             .await
@@ -29,13 +67,9 @@ mod opfs_io {
             crate::paths::opfs::DIR_PROJECTS,
             crate::paths::opfs::DIR_PRESETS,
             crate::paths::opfs::DIR_PLUGINS,
+            crate::paths::opfs::DIR_LAYOUTS,
         ] {
-            root.get_directory_handle_with_options(
-                name,
-                &opfs_crate::GetDirectoryHandleOptions { create: true },
-            )
-            .await
-            .map_err(|e| format!("create dir {name}: {e}"))?;
+            ensure_dir_path(&mut root, name).await?;
         }
         let mut map = HashMap::new();
         for key in &[
@@ -68,8 +102,10 @@ mod opfs_io {
         let mut root = persistent::app_specific_dir()
             .await
             .map_err(|e| format!("OPFS root: {e}"))?;
-        let mut file = root
-            .get_file_handle_with_options(name, &opfs_crate::GetFileHandleOptions { create: false })
+        let mut dir = dir_path(&mut root, name).await?;
+        let file_name = name.rsplit_once('/').map(|(_, f)| f).unwrap_or(name);
+        let mut file = dir
+            .get_file_handle_with_options(file_name, &opfs_crate::GetFileHandleOptions { create: false })
             .await
             .map_err(|e| format!("open {name}: {e}"))?;
         file.read().await.map_err(|e| format!("read {name}: {e}"))
@@ -79,8 +115,10 @@ mod opfs_io {
         let mut root = persistent::app_specific_dir()
             .await
             .map_err(|e| format!("OPFS root: {e}"))?;
-        let mut file = root
-            .get_file_handle_with_options(name, &opfs_crate::GetFileHandleOptions { create: true })
+        let mut dir = dir_path(&mut root, name).await?;
+        let file_name = name.rsplit_once('/').map(|(_, f)| f).unwrap_or(name);
+        let mut file = dir
+            .get_file_handle_with_options(file_name, &opfs_crate::GetFileHandleOptions { create: true })
             .await
             .map_err(|e| format!("open {name}: {e}"))?;
         let mut writer = file

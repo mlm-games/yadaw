@@ -1,4 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use wasm_safe_mutex::Mutex;
 
 use egui::scroll_area::ScrollSource;
 use egui::{Sense, UiBuilder};
@@ -176,7 +178,7 @@ impl PianoRollView {
 
         // Resolve notes and clip length for the view (pattern-first)
         let (clip_length, current_notes, clip_color) = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             let clip_opt = state.find_clip(clip_id);
             match clip_opt {
                 Some((track, crate::project::ClipLocation::Midi(idx))) => {
@@ -343,7 +345,7 @@ impl PianoRollView {
                     ui.label("MIDI Clip:");
 
                     let (_clip_names, _selected_text, _create_clip_data, can_delete) = {
-                        let state = app.state.lock().unwrap();
+                        let state = app.state.lock_sync();
                         if let Some(track) = state.tracks.get(&app.selected_track) {
                             let clip_names: Vec<String> =
                                 track.midi_clips.iter().map(|c| c.name.clone()).collect();
@@ -371,7 +373,7 @@ impl PianoRollView {
                     };
 
                     let (clip_list, selected_name) = {
-                        let state = app.state.lock().unwrap();
+                        let state = app.state.lock_sync();
                         if let Some(track) = state.tracks.get(&app.selected_track) {
                             let clips: Vec<(u64, String)> = track
                                 .midi_clips
@@ -412,7 +414,7 @@ impl PianoRollView {
                         .clicked()
                     {
                         let (playhead_beat, last_clip_end) = {
-                            let state = app.state.lock().unwrap();
+                            let state = app.state.lock_sync();
                             let playhead = state.position_to_beats(app.audio_state.get_position());
 
                             let last_end = state
@@ -542,7 +544,7 @@ impl PianoRollView {
 
         // Resolve notes (pattern-first) and length once (read-only)
         let (notes, _clip_len) = {
-            let st = app.state.lock().unwrap();
+            let st = app.state.lock_sync();
             match st
                 .tracks
                 .get(&app.selected_track)
@@ -730,7 +732,7 @@ impl PianoRollView {
     ) -> Option<Vec<MidiNote>> {
         let clip_id = self.selected_clip?;
 
-        let state_guard = state.lock().unwrap();
+        let state_guard = state.lock_sync();
         let track = state_guard.tracks.get(&selected_track)?;
         let clip = track.midi_clips.iter().find(|c| c.id == clip_id)?;
 
@@ -858,7 +860,7 @@ impl PianoRollView {
             None => return,
         };
 
-        let state_guard = state.lock().unwrap();
+        let state_guard = state.lock_sync();
         if let Some(track) = state_guard.tracks.get(&selected_track)
             && let Some(clip) = track.midi_clips.iter().find(|c| c.id == clip_id)
         {
@@ -901,7 +903,7 @@ impl PianoRollView {
             return;
         }
 
-        let state_guard = state.lock().unwrap();
+        let state_guard = state.lock_sync();
         let (clip, base_notes) = if let Some(track) = state_guard.tracks.get(&selected_track) {
             if let Some(clip) = track.midi_clips.iter().find(|c| c.id == clip_id) {
                 let notes = if let Some(pid) = clip.pattern_id {

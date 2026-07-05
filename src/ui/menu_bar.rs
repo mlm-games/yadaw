@@ -223,7 +223,9 @@ impl MenuBar {
                     .clicked()
                 {
                     app.theme_manager.set_theme(super::theme::Theme::Dark);
-                    let _ = app.theme_manager.save_current_theme(&crate::paths::current_theme_path());
+                    let _ = app
+                        .theme_manager
+                        .save_current_theme(&crate::paths::current_theme_path());
                     ui.close();
                 }
 
@@ -236,7 +238,9 @@ impl MenuBar {
                     .clicked()
                 {
                     app.theme_manager.set_theme(super::theme::Theme::Light);
-                    let _ = app.theme_manager.save_current_theme(&crate::paths::current_theme_path());
+                    let _ = app
+                        .theme_manager
+                        .save_current_theme(&crate::paths::current_theme_path());
                     ui.close();
                 }
 
@@ -249,7 +253,9 @@ impl MenuBar {
                     if ui.button(&custom_theme.name).clicked() {
                         app.theme_manager
                             .set_theme(Theme::Custom(custom_theme.clone()));
-                        let _ = app.theme_manager.save_current_theme(&crate::paths::current_theme_path());
+                        let _ = app
+                            .theme_manager
+                            .save_current_theme(&crate::paths::current_theme_path());
                         ui.close();
                     }
                 }
@@ -338,7 +344,7 @@ impl MenuBar {
             if ui.button("Go to End").clicked() {
                 // Go to end of project
                 let end_beats = {
-                    let state = app.state.lock().unwrap();
+                    let state = app.state.lock_sync();
                     let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
                     for track in state.tracks.values() {
                         for c in &track.audio_clips {
@@ -395,7 +401,7 @@ impl MenuBar {
                 if loop_enabled {
                     let (start, end) = {
                         // compute project end in beats
-                        let state = app.state.lock().unwrap();
+                        let state = app.state.lock_sync();
                         let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS;
                         for t in state.tracks.values() {
                             for c in &t.audio_clips {

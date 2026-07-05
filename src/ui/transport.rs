@@ -63,6 +63,9 @@ impl TransportUI {
 
                         let play_button = if is_playing { "⏸" } else { "▶" };
                         if ui.button(play_button).on_hover_text("Play/Pause").clicked() {
+                            // Needed on wasm for autoplay policy with spacebar.
+                            #[cfg(target_arch = "wasm32")]
+                            crate::audio::resume_audio();
                             self.toggle_playback(&app.command_tx);
                         }
 

@@ -3,12 +3,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use flume::{Receiver, Sender};
+use wasm_safe_mutex::Mutex;
 
 use crate::audio_export::AudioExporter;
 use crate::audio_state::{AudioGraphSnapshot, AudioState, RealtimeCommand};
 use crate::edit_actions::EditProcessor;
 use crate::idgen;
-use crate::messages::{AudioCommand, UIUpdate};
+use crate::messages::{AudioCommand, UiTx, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
 use crate::model::track::TrackType;
@@ -19,11 +20,11 @@ use crate::time_utils::quick::samples_to_beats;
 use yadaw_plugin_api::BackendKind;
 
 pub async fn run_command_processor(
-    app_state: Arc<std::sync::Mutex<AppState>>,
+    app_state: Arc<Mutex<AppState>>,
     audio_state: Arc<AudioState>,
     command_rx: Receiver<AudioCommand>,
     realtime_tx: Sender<RealtimeCommand>,
-    ui_tx: Sender<UIUpdate>,
+    ui_tx: UiTx,
     snapshot_tx: Sender<AudioGraphSnapshot>,
     midi_input_handler: Option<Arc<MidiInputHandler>>,
 ) {
@@ -45,10 +46,10 @@ pub async fn run_command_processor(
 fn process_command(
     command: AudioCommand, // by value
     midi_recording_state: &mut Option<MidiRecordingState>,
-    app_state: &Arc<std::sync::Mutex<AppState>>,
+    app_state: &Arc<Mutex<AppState>>,
     audio_state: &Arc<AudioState>,
     realtime_tx: &Sender<RealtimeCommand>,
-    ui_tx: &Sender<UIUpdate>,
+    ui_tx: &UiTx,
     snapshot_tx: &Sender<AudioGraphSnapshot>,
     midi_input_handler: &Option<Arc<MidiInputHandler>>,
 ) {
@@ -62,7 +63,7 @@ fn process_command(
             if midi_recording_state.is_some() {
                 log::info!("Stopping MIDI recording due to transport stop.");
                 *midi_recording_state = None;
-                send_graph_snapshot(&app_state.lock().unwrap(), snapshot_tx);
+                send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);
             }
         }
         AudioCommand::Pause => {
@@ -72,7 +73,7 @@ fn process_command(
             audio_state.set_position(position);
         }
         AudioCommand::SetBPM(bpm) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             let old_bpm = state.bpm;
 
             if bpm.is_finite() && bpm > 0.0 && old_bpm.is_finite() && old_bpm > 0.0 {
@@ -113,38 +114,38 @@ fn process_command(
             audio_state.master_volume.store(volume);
         }
         AudioCommand::UpdateTracks => {
-            send_graph_snapshot(&app_state.lock().unwrap(), snapshot_tx);
+            send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);
         }
         AudioCommand::SetTrackVolume(track_id, volume) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.volume = volume;
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackVolume(track_id, volume));
         }
         AudioCommand::SetTrackPan(track_id, pan) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.pan = pan;
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackPan(track_id, pan));
         }
         AudioCommand::SetTrackMute(track_id, mute) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.muted = mute;
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackMute(track_id, mute));
         }
         AudioCommand::SetTrackSolo(track_id, solo) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.solo = solo;
             }
             let _ = realtime_tx.send(RealtimeCommand::UpdateTrackSolo(track_id, solo));
         }
         AudioCommand::ArmForRecording(track_id, armed) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
 
             let target_is_midi = state
                 .tracks
@@ -175,7 +176,7 @@ fn process_command(
 
             // Resolve armed MIDI track (read-only)
             let armed_midi_track_id = {
-                let state = app_state.lock().unwrap();
+                let state = app_state.lock_sync();
                 state
                     .tracks
                     .values()
@@ -201,18 +202,18 @@ fn process_command(
             audio_state.recording.store(false, Ordering::Relaxed);
             if midi_recording_state.is_some() {
                 *midi_recording_state = None;
-                send_graph_snapshot(&app_state.lock().unwrap(), snapshot_tx);
+                send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);
             }
         }
         AudioCommand::SetMetronome(on) => {
             audio_state.metronome_enabled.store(on, Ordering::Relaxed);
         }
         AudioCommand::SetSendDestination(track_id, index, dest_track_id) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(t) = state.tracks.get_mut(&track_id) {
                 if index < t.sends.len() {
                     t.sends[index].destination_track = dest_track_id;
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             send_graph_snapshot(&state, snapshot_tx);
@@ -223,7 +224,7 @@ fn process_command(
             let data2 = raw_message.message[2];
 
             let target_track_id = {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 st.tracks
                     .values()
                     .find(|t| {
@@ -276,7 +277,7 @@ fn process_command(
 
                             // 1) Find the target clip/pattern immutably
                             let (clip_idx, pid_opt, clip_start) = {
-                                let st = app_state.lock().unwrap();
+                                let st = app_state.lock_sync();
                                 let Some(track) = st.tracks.get(&rec.track_id) else {
                                     return;
                                 };
@@ -306,7 +307,7 @@ fn process_command(
 
                             // 3) Insert into pattern in a short mutable scope
                             if let Some(pid) = pid_opt {
-                                let mut st = app_state.lock().unwrap();
+                                let mut st = app_state.lock_sync();
                                 if let Some(p) = st.patterns.get_mut(&pid) {
                                     p.notes.push(note);
                                 }
@@ -318,7 +319,7 @@ fn process_command(
             }
         }
         AudioCommand::SetTrackMidiInput(track_id, port_name) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.midi_input_port = port_name.clone();
 
@@ -341,11 +342,11 @@ fn process_command(
             }
         }
         AudioCommand::RemovePlugin(track_id, plugin_id) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if let Some(idx) = track.plugin_chain.iter().position(|p| p.id == plugin_id) {
                     track.plugin_chain.remove(idx);
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             drop(state);
@@ -355,10 +356,10 @@ fn process_command(
                 plugin_id,
             });
 
-            send_graph_snapshot(&app_state.lock().unwrap(), snapshot_tx);
+            send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);
         }
         AudioCommand::SetPluginBypass(track_id, plugin_id, bypass) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if let Some(plugin) = track.plugin_chain.iter_mut().find(|p| p.id == plugin_id) {
                     plugin.bypass = bypass;
@@ -372,7 +373,7 @@ fn process_command(
         }
         AudioCommand::SetPluginParam(track_id, plugin_id, param_name, value) => {
             let (uri_opt, backend) = {
-                let state = app_state.lock().unwrap();
+                let state = app_state.lock_sync();
                 state
                     .tracks
                     .get(&track_id)
@@ -393,7 +394,7 @@ fn process_command(
                     BackendKind::Clap => value,
                 };
 
-                let mut state = app_state.lock().unwrap();
+                let mut state = app_state.lock_sync();
                 if let Some(track) = state.tracks.get_mut(&track_id) {
                     if let Some(plugin) = track.plugin_chain.iter_mut().find(|p| p.id == plugin_id)
                     {
@@ -411,7 +412,7 @@ fn process_command(
             }
         }
         AudioCommand::MovePlugin(track_id, from_idx, to_idx) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if from_idx < track.plugin_chain.len() && to_idx < track.plugin_chain.len() {
                     let plugin = track.plugin_chain.remove(from_idx);
@@ -427,7 +428,7 @@ fn process_command(
         }
         AudioCommand::SavePluginPreset(track_id, plugin_idx, name) => {
             use crate::presets::{PluginPreset, save_preset};
-            let state = app_state.lock().unwrap();
+            let state = app_state.lock_sync();
 
             let (uri, backend, params_map) = if let Some(track) = state.tracks.get(&track_id) {
                 if plugin_idx < track.plugin_chain.len() {
@@ -435,7 +436,7 @@ fn process_command(
                     (desc.uri.clone(), desc.backend, desc.params.clone())
                 } else {
                     drop(state);
-                    let _ = ui_tx.send(UIUpdate::Warning(format!(
+                    let _ = ui_tx.send_sync(UIUpdate::Warning(format!(
                         "Invalid plugin index {} on track {}",
                         plugin_idx, track_id
                     )));
@@ -443,7 +444,7 @@ fn process_command(
                 }
             } else {
                 drop(state);
-                let _ = ui_tx.send(UIUpdate::Warning(format!("Track {} not found", track_id)));
+                let _ = ui_tx.send_sync(UIUpdate::Warning(format!("Track {} not found", track_id)));
                 return;
             };
 
@@ -456,13 +457,13 @@ fn process_command(
 
             match save_preset(&preset) {
                 Ok(_) => {
-                    let _ = ui_tx.send(UIUpdate::Info(format!(
+                    let _ = ui_tx.send_sync(UIUpdate::Info(format!(
                         "Saved preset '{}' for {}",
                         name, uri
                     )));
                 }
                 Err(e) => {
-                    let _ = ui_tx.send(UIUpdate::Error(format!(
+                    let _ = ui_tx.send_sync(UIUpdate::Error(format!(
                         "Failed to save preset '{}': {}",
                         name, e
                     )));
@@ -473,32 +474,32 @@ fn process_command(
             use crate::presets::load_preset;
 
             {
-                let snapshot = app_state.lock().unwrap().snapshot();
-                let _ = ui_tx.send(UIUpdate::PushUndo(snapshot));
+                let snapshot = app_state.lock_sync().snapshot();
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(snapshot));
             }
 
             let (_uri, plugin_id, params_to_update) = {
-                let mut state = app_state.lock().unwrap();
+                let mut state = app_state.lock_sync();
                 let (uri, plugin_id) = if let Some(track) = state.tracks.get_mut(&track_id) {
                     if plugin_idx < track.plugin_chain.len() {
                         let desc = &track.plugin_chain[plugin_idx];
                         (desc.uri.clone(), desc.id)
                     } else {
-                        let _ = ui_tx.send(UIUpdate::Warning(format!(
+                        let _ = ui_tx.send_sync(UIUpdate::Warning(format!(
                             "Invalid plugin index {} on track {}",
                             plugin_idx, track_id
                         )));
                         return;
                     }
                 } else {
-                    let _ = ui_tx.send(UIUpdate::Warning(format!("Track {} not found", track_id)));
+                    let _ = ui_tx.send_sync(UIUpdate::Warning(format!("Track {} not found", track_id)));
                     return;
                 };
 
                 let preset = match load_preset(&uri, &name) {
                     Ok(p) => p,
                     Err(e) => {
-                        let _ = ui_tx.send(UIUpdate::Error(format!(
+                        let _ = ui_tx.send_sync(UIUpdate::Error(format!(
                             "Failed to load preset '{}': {}",
                             name, e
                         )));
@@ -525,12 +526,12 @@ fn process_command(
                 ));
             }
 
-            send_graph_snapshot(&app_state.lock().unwrap(), snapshot_tx);
+            send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);
         }
         AudioCommand::SetLoopEnabled(enabled) => {
             audio_state.loop_enabled.store(enabled, Ordering::Relaxed);
             {
-                let mut state = app_state.lock().unwrap();
+                let mut state = app_state.lock_sync();
                 state.loop_enabled = enabled;
             }
             let _ = realtime_tx.send(RealtimeCommand::SetLoopEnabled(enabled));
@@ -539,7 +540,7 @@ fn process_command(
             audio_state.loop_start.store(start);
             audio_state.loop_end.store(end);
             {
-                let mut state = app_state.lock().unwrap();
+                let mut state = app_state.lock_sync();
                 state.loop_start = start;
                 state.loop_end = end;
             }
@@ -553,7 +554,7 @@ fn process_command(
             display_name,
         } => {
             let plugin_id_opt = {
-                let mut state = app_state.lock().unwrap();
+                let mut state = app_state.lock_sync();
                 let plugin_id = idgen::next();
 
                 let mut desc = create_plugin_instance(&uri, audio_state.sample_rate.load())
@@ -581,7 +582,7 @@ fn process_command(
                 };
 
                 if inserted {
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                     Some(plugin_id)
                 } else {
                     None
@@ -596,7 +597,7 @@ fn process_command(
                     uri: uri.clone(),
                 });
 
-                let state = app_state.lock().unwrap();
+                let state = app_state.lock_sync();
                 send_graph_snapshot(&state, snapshot_tx);
             }
         }
@@ -605,7 +606,7 @@ fn process_command(
             start_beat,
             length_beats,
         } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             let new_clip_id = idgen::next();
             let new_pid = idgen::next();
             state.patterns.insert(
@@ -636,23 +637,23 @@ fn process_command(
                     },
                 );
 
-                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::DeleteMidiClip { clip_id } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     track.midi_clips.remove(idx);
                     state.clips_by_id.remove(&clip_id);
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::MoveMidiClip { clip_id, new_start } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
@@ -667,7 +668,7 @@ fn process_command(
             new_start,
             new_length,
         } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
@@ -680,7 +681,7 @@ fn process_command(
         }
         AudioCommand::DuplicateMidiClip { clip_id } => {
             let source = {
-                let state = app_state.lock().unwrap();
+                let state = app_state.lock_sync();
                 state.find_clip(clip_id).and_then(|(track, loc)| {
                     if let ClipLocation::Midi(idx) = loc {
                         track.midi_clips.get(idx).cloned()
@@ -692,7 +693,7 @@ fn process_command(
 
             let mut duplicated_clip_ids = Vec::new();
             if let Some(mut clip) = source {
-                let mut state = app_state.lock().unwrap();
+                let mut state = app_state.lock_sync();
                 let new_clip_id = idgen::next();
                 duplicated_clip_ids.push(new_clip_id);
                 let new_pid = idgen::next();
@@ -751,11 +752,11 @@ fn process_command(
                 send_graph_snapshot(&state, snapshot_tx);
             }
             if !duplicated_clip_ids.is_empty() {
-                let _ = ui_tx.send(UIUpdate::ClipsDuplicated(duplicated_clip_ids));
+                let _ = ui_tx.send_sync(UIUpdate::ClipsDuplicated(duplicated_clip_ids));
             }
         }
         AudioCommand::MoveAudioClip { clip_id, new_start } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(clip) = track.audio_clips.get_mut(idx) {
@@ -770,7 +771,7 @@ fn process_command(
             new_start,
             new_length,
         } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(clip) = track.audio_clips.get_mut(idx) {
@@ -787,7 +788,7 @@ fn process_command(
         }
         AudioCommand::DuplicateAudioClip { clip_id } => {
             let source = {
-                let state = app_state.lock().unwrap();
+                let state = app_state.lock_sync();
                 state.find_clip(clip_id).and_then(|(track, loc)| {
                     if let ClipLocation::Audio(idx) = loc {
                         track.audio_clips.get(idx).cloned()
@@ -799,7 +800,7 @@ fn process_command(
 
             let mut duplicated_clip_ids = Vec::new();
             if let Some(mut clip) = source {
-                let mut state = app_state.lock().unwrap();
+                let mut state = app_state.lock_sync();
                 let new_clip_id = idgen::next();
                 duplicated_clip_ids.push(new_clip_id);
                 clip.id = new_clip_id;
@@ -821,12 +822,12 @@ fn process_command(
                 }
             }
             if !duplicated_clip_ids.is_empty() {
-                let _ = ui_tx.send(UIUpdate::ClipsDuplicated(duplicated_clip_ids));
+                let _ = ui_tx.send_sync(UIUpdate::ClipsDuplicated(duplicated_clip_ids));
             }
-            send_graph_snapshot(&app_state.lock().unwrap(), snapshot_tx);
+            send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);
         }
         AudioCommand::DeleteAudioClip { clip_id } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
                     track.audio_clips.remove(idx);
@@ -837,7 +838,7 @@ fn process_command(
         }
         AudioCommand::AddAutomationPoint(track_id, target, beat, value) => {
             use crate::model::automation::{AutomationLane, AutomationMode, AutomationPoint};
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 let lane_idx = if let Some(idx) = track
                     .automation_lanes
@@ -862,17 +863,17 @@ fn process_command(
                     lane.points
                         .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
                 }
-                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id)
                 && let Some(lane) = track.automation_lanes.get_mut(lane_idx)
             {
                 lane.points.retain(|p| (p.beat - beat).abs() > 0.001);
-                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
@@ -883,7 +884,7 @@ fn process_command(
             new_beat,
             new_value,
         } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id)
                 && let Some(lane) = track.automation_lanes.get_mut(lane_idx)
             {
@@ -907,15 +908,15 @@ fn process_command(
             let _ = realtime_tx.send(RealtimeCommand::StopPreviewNote);
         }
         AudioCommand::SetTrackMonitor(track_id, enabled) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.monitor_enabled = enabled;
-                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::AddSend(track_id, dest_track_id, amount) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(t) = state.tracks.get_mut(&track_id) {
                 t.sends.push(crate::model::track::Send {
                     destination_track: dest_track_id,
@@ -923,22 +924,22 @@ fn process_command(
                     pre_fader: false,
                     muted: false,
                 });
-                let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::RemoveSend(track_id, index) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(t) = state.tracks.get_mut(&track_id) {
                 if index < t.sends.len() {
                     t.sends.remove(index);
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::SetSendAmount(track_id, index, value) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(t) = state.tracks.get_mut(&track_id) {
                 if index < t.sends.len() {
                     t.sends[index].amount = value;
@@ -947,7 +948,7 @@ fn process_command(
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::SetSendPreFader(track_id, index, pref) => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some(t) = state.tracks.get_mut(&track_id) {
                 if index < t.sends.len() {
                     t.sends[index].pre_fader = pref;
@@ -960,7 +961,7 @@ fn process_command(
             dest_track_id,
             new_start,
         } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
 
             if let Some((src_track, loc)) = state.find_clip(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
@@ -1013,7 +1014,7 @@ fn process_command(
                         );
                     }
 
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             state.ensure_ids();
@@ -1024,7 +1025,7 @@ fn process_command(
             dest_track_id,
             new_start,
         } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
 
             if let Some((src_track, loc)) = state.find_clip(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
@@ -1045,13 +1046,13 @@ fn process_command(
                         );
                     }
 
-                    let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::CreateGroup(name, track_ids) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             let group_id = idgen::next();
 
             let group = TrackGroup::new(group_id, name);
@@ -1065,7 +1066,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::RemoveGroup(group_id) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             st.groups.remove(&group_id);
             for t in st.tracks.values_mut() {
                 if t.group_id == Some(group_id) {
@@ -1075,7 +1076,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::AddTrackToGroup(track_id, group_id) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if st.groups.contains_key(&group_id) {
                 if let Some(t) = st.tracks.get_mut(&track_id) {
                     t.group_id = Some(group_id);
@@ -1084,63 +1085,63 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::RemoveTrackFromGroup(track_id) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 t.group_id = None;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetTrackColor(track_id, r, g, b) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 t.color = Some((r, g, b));
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::RenameGroup(group_id, name) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(g) = st.groups.get_mut(&group_id) {
                 g.name = name;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetGroupColor(group_id, r, g, b) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(gr) = st.groups.get_mut(&group_id) {
                 gr.color = (r, g, b);
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetGroupLinkVolume(group_id, link) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(g) = st.groups.get_mut(&group_id) {
                 g.link_volume = link;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetGroupLinkMute(group_id, link) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(g) = st.groups.get_mut(&group_id) {
                 g.link_mute = link;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetGroupLinkSolo(group_id, link) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(g) = st.groups.get_mut(&group_id) {
                 g.link_solo = link;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::ToggleGroupCollapsed(group_id) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(g) = st.groups.get_mut(&group_id) {
                 g.collapsed = !g.collapsed;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::ToggleClipLoop { clip_id, enabled } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
@@ -1156,7 +1157,7 @@ fn process_command(
         AudioCommand::MakeClipAlias { clip_id } => {
             use crate::model::clip::MidiPattern;
 
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
 
             // Only alias MIDI clips that don't yet have a pattern, and still have local notes.
             let (needs_pid, notes_to_move) = match state.find_clip_mut(clip_id) {
@@ -1197,7 +1198,7 @@ fn process_command(
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::MakeClipUnique { clip_id } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
@@ -1214,7 +1215,7 @@ fn process_command(
             swing,
             enabled,
         } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
@@ -1228,9 +1229,9 @@ fn process_command(
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::DuplicateMidiClipAsAlias { clip_id } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
 
-            let _ = ui_tx.send(UIUpdate::PushUndo(state.snapshot()));
+            let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
 
             let (src_clip, src_pid, track_id) = {
                 let (track, loc) = match state.find_clip(clip_id) {
@@ -1315,7 +1316,7 @@ fn process_command(
             clip_id,
             new_offset,
         } => {
-            let mut state = app_state.lock().unwrap();
+            let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
@@ -1337,16 +1338,16 @@ fn process_command(
             .unwrap_or_default();
 
             if !cut.is_empty() {
-                let _ = ui_tx.send(UIUpdate::NotesCutToClipboard(cut));
+                let _ = ui_tx.send_sync(UIUpdate::NotesCutToClipboard(cut));
             }
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::DeleteSelectedNotes { clip_id, note_ids } => {
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.retain(|n| !note_ids.contains(&n.id));
             });
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::PasteNotes { clip_id, mut notes } => {
@@ -1373,13 +1374,13 @@ fn process_command(
             });
 
             if !new_ids.is_empty() {
-                let _ = ui_tx.send(UIUpdate::ReservedNoteIds {
+                let _ = ui_tx.send_sync(UIUpdate::ReservedNoteIds {
                     clip_id,
                     note_ids: new_ids,
                 });
             }
 
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::TransposeSelectedNotes {
@@ -1394,7 +1395,7 @@ fn process_command(
                     }
                 }
             });
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::NudgeSelectedNotes {
@@ -1411,7 +1412,7 @@ fn process_command(
                     }
                 }
             });
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::QuantizeSelectedNotes {
@@ -1437,7 +1438,7 @@ fn process_command(
                     }
                 }
             });
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::HumanizeSelectedNotes {
@@ -1462,11 +1463,11 @@ fn process_command(
                     }
                 }
             });
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::ExportAudio(config) => {
-            let app_state_clone = app_state.lock().unwrap().clone();
+            let app_state_clone = app_state.lock_sync().clone();
             let audio_state_clone = audio_state.clone();
             let ui_tx_clone = ui_tx.clone();
 
@@ -1478,7 +1479,7 @@ fn process_command(
             );
         }
         AudioCommand::RebuildAllRtChains => {
-            let state = app_state.lock().unwrap();
+            let state = app_state.lock_sync();
             let track_snapshots = crate::audio_snapshot::build_track_snapshots(&state);
             drop(state);
 
@@ -1506,14 +1507,14 @@ fn process_command(
                 pat.notes
                     .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
             });
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::RemoveNotesById { clip_id, note_ids } => {
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.retain(|n| !note_ids.contains(&n.id));
             });
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::UpdateNotesById { clip_id, notes } => {
@@ -1529,7 +1530,7 @@ fn process_command(
                 pat.notes
                     .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
             });
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::DuplicateNotesWithOffset {
@@ -1539,7 +1540,7 @@ fn process_command(
             delta_semitones,
         } => {
             let sources: Vec<MidiNote> = {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 match st.find_clip(clip_id) {
                     Some((track, ClipLocation::Midi(idx))) => {
                         let pid = track.midi_clips[idx].pattern_id;
@@ -1559,13 +1560,13 @@ fn process_command(
             };
 
             if sources.is_empty() {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 send_graph_snapshot(&st, snapshot_tx);
                 return;
             }
 
             let clip_len = {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 st.find_clip(clip_id)
                     .and_then(|(t, l)| {
                         if let ClipLocation::Midi(i) = l {
@@ -1599,13 +1600,13 @@ fn process_command(
             });
 
             if !new_ids.is_empty() {
-                let _ = ui_tx.send(UIUpdate::ReservedNoteIds {
+                let _ = ui_tx.send_sync(UIUpdate::ReservedNoteIds {
                     clip_id,
                     note_ids: new_ids,
                 });
             }
 
-            let st = app_state.lock().unwrap();
+            let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::MoveMidiClipToTrack {
@@ -1615,7 +1616,7 @@ fn process_command(
         } => {
             // 1) Snapshot the clip to move (immutable read)
             let clip_opt = {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 st.find_clip(clip_id).and_then(|(track, loc)| {
                     if let ClipLocation::Midi(idx) = loc {
                         track.midi_clips.get(idx).cloned()
@@ -1627,7 +1628,7 @@ fn process_command(
 
             if let Some(mut clip) = clip_opt {
                 // 2) Mutate: remove from source, insert in destination
-                let mut st = app_state.lock().unwrap();
+                let mut st = app_state.lock_sync();
 
                 // Type guard: destination track must be MIDI
                 if !st
@@ -1671,7 +1672,7 @@ fn process_command(
             new_start,
         } => {
             let clip_opt = {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 st.find_clip(clip_id).and_then(|(track, loc)| {
                     if let ClipLocation::Audio(idx) = loc {
                         track.audio_clips.get(idx).cloned()
@@ -1682,7 +1683,7 @@ fn process_command(
             };
 
             if let Some(mut clip) = clip_opt {
-                let mut st = app_state.lock().unwrap();
+                let mut st = app_state.lock_sync();
 
                 // Destination must be non-MIDI
                 if !st
@@ -1716,7 +1717,7 @@ fn process_command(
             }
         }
         AudioCommand::SetAudioClipGain(clip_id, gain) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some((track, loc)) = st.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(ac) = track.audio_clips.get_mut(idx) {
@@ -1727,7 +1728,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetAudioClipFadeIn(clip_id, dur) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some((track, loc)) = st.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(ac) = track.audio_clips.get_mut(idx) {
@@ -1738,7 +1739,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetAudioClipFadeOut(clip_id, dur) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some((track, loc)) = st.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(ac) = track.audio_clips.get_mut(idx) {
@@ -1749,7 +1750,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetAudioClipWarpMode(clip_id, warp_mode) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some((track, loc)) = st.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(ac) = track.audio_clips.get_mut(idx) {
@@ -1763,7 +1764,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::CreateMidiClipWithData { track_id, mut clip } => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
 
             if !st
                 .tracks
@@ -1799,7 +1800,7 @@ fn process_command(
         AudioCommand::SplitMidiClip { clip_id, position } => {
             // Snapshot original
             let src = {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 st.find_clip(clip_id).and_then(|(track, loc)| {
                     if let ClipLocation::Midi(idx) = loc {
                         Some((track.id, track.midi_clips[idx].clone()))
@@ -1819,7 +1820,7 @@ fn process_command(
 
             // Resolve source notes (pattern-aware)
             let (notes, _use_pattern) = {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 if let Some(pid) = clip.pattern_id {
                     let base = st
                         .patterns
@@ -1885,7 +1886,7 @@ fn process_command(
             right.notes.clear();
 
             {
-                let mut st = app_state.lock().unwrap();
+                let mut st = app_state.lock_sync();
 
                 // Install patterns
                 st.patterns.insert(
@@ -1933,7 +1934,7 @@ fn process_command(
         AudioCommand::SplitAudioClip { clip_id, position } => {
             // Immutable stage: get (track_id, clip clone, bpm)
             let (track_id, clip, bpm) = {
-                let st = app_state.lock().unwrap();
+                let st = app_state.lock_sync();
                 match st.find_clip(clip_id) {
                     Some((track, ClipLocation::Audio(idx))) => {
                         (track.id, track.audio_clips[idx].clone(), st.bpm)
@@ -1949,7 +1950,7 @@ fn process_command(
                 second.start_beat = position;
 
                 // Mutating stage: replace original and insert second right after
-                let mut st = app_state.lock().unwrap();
+                let mut st = app_state.lock_sync();
                 if let Some((track, loc)) = st.find_clip_mut(clip_id) {
                     if let ClipLocation::Audio(idx) = loc {
                         track.audio_clips[idx] = first.clone();
@@ -1977,21 +1978,21 @@ fn process_command(
             }
         }
         AudioCommand::SetTrackInput(track_id, input) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 t.input_device = input;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetTrackOutput(track_id, output) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 t.output_device = output;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::FreezeTrack(track_id) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 t.frozen = true;
                 t.frozen_buffer = None;
@@ -1999,7 +2000,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::UnfreezeTrack(track_id) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 t.frozen = false;
                 t.frozen_buffer = None;
@@ -2007,7 +2008,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::SetAutomationMode(track_id, lane_idx, automation_mode) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 if let Some(lane) = t.automation_lanes.get_mut(lane_idx) {
                     lane.write_mode = automation_mode;
@@ -2016,7 +2017,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::ClearAutomationLane(track_id, lane_idx) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 if let Some(lane) = t.automation_lanes.get_mut(lane_idx) {
                     lane.points.clear();
@@ -2025,7 +2026,7 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::RemoveAutomationLane(track_id, lane_idx) => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             if let Some(t) = st.tracks.get_mut(&track_id) {
                 if lane_idx < t.automation_lanes.len() {
                     t.automation_lanes.remove(lane_idx);
@@ -2038,7 +2039,7 @@ fn process_command(
             start_beat,
             end_beat,
         } => {
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             let (track_id, original_clip_opt) =
                 if let Some((track, ClipLocation::Audio(idx))) = st.find_clip(clip_id) {
                     (track.id, track.audio_clips.get(idx).cloned())
@@ -2094,7 +2095,7 @@ fn process_command(
             end_beat,
         } => {
             // This is more complex due to patterns. We will split the pattern's notes.
-            let mut st = app_state.lock().unwrap();
+            let mut st = app_state.lock_sync();
             let (track_id, original_clip_opt) =
                 if let Some((track, ClipLocation::Midi(idx))) = st.find_clip(clip_id) {
                     (track.id, track.midi_clips.get(idx).cloned())
@@ -2145,14 +2146,8 @@ pub fn send_graph_snapshot(state: &AppState, snapshot_tx: &Sender<AudioGraphSnap
         track_order: state.track_order.clone(),
     };
 
-    match snapshot_tx.try_send(snapshot) {
-        Ok(()) => {}
-        Err(flume::TrySendError::Full(latest)) => {
-            if snapshot_tx.send(latest).is_err() {
-                log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
-            }
-        }
-        Err(flume::TrySendError::Disconnected(_)) => {
+    if let Err(e) = snapshot_tx.try_send(snapshot) {
+        if !matches!(e, flume::TrySendError::Full(_)) {
             log::error!("Failed to send audio graph snapshot: audio thread may have crashed.");
         }
     }
@@ -2160,12 +2155,12 @@ pub fn send_graph_snapshot(state: &AppState, snapshot_tx: &Sender<AudioGraphSnap
 
 // Create a recording MIDI clip at start_beat if none spans that beat.
 fn insert_recording_clip_if_missing(
-    app_state: &Arc<std::sync::Mutex<AppState>>,
+    app_state: &Arc<Mutex<AppState>>,
     track_id: u64,
     start_beat: f64,
 ) {
     let need_insert = {
-        let st = app_state.lock().unwrap();
+        let st = app_state.lock_sync();
         match st.tracks.get(&track_id) {
             Some(t) => !t
                 .midi_clips
@@ -2178,7 +2173,7 @@ fn insert_recording_clip_if_missing(
         return;
     }
 
-    let mut st = app_state.lock().unwrap();
+    let mut st = app_state.lock_sync();
     let new_clip_id = idgen::next();
     let new_pid = idgen::next();
     st.patterns.insert(
@@ -2205,13 +2200,13 @@ fn insert_recording_clip_if_missing(
 
 // Borrow-safe helper: resolve a clip's pattern and length, then mutate in place.
 fn with_pattern_mut<T>(
-    app_state: &Arc<std::sync::Mutex<AppState>>,
+    app_state: &Arc<Mutex<AppState>>,
     clip_id: u64,
     f: impl FnOnce(&mut MidiPattern, f64) -> T,
 ) -> Option<T> {
     // Stage 1: resolve pid and clip length immutably
     let (pid_opt, clip_len) = {
-        let st = app_state.lock().unwrap();
+        let st = app_state.lock_sync();
         match st.find_clip(clip_id) {
             Some((track, ClipLocation::Midi(idx))) => {
                 let c = &track.midi_clips[idx];
@@ -2223,7 +2218,7 @@ fn with_pattern_mut<T>(
     let pid = pid_opt?;
 
     // Stage 2: short &mut borrow for pattern only
-    let mut st = app_state.lock().unwrap();
+    let mut st = app_state.lock_sync();
     let pat = st.patterns.get_mut(&pid)?;
     Some(f(pat, clip_len))
 }

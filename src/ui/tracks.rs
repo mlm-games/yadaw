@@ -90,7 +90,7 @@ impl TracksPanel {
 
         // Get ordered track IDs and clone them to avoid holding the lock
         let track_ids = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             state.track_order.clone()
         };
 
@@ -132,7 +132,7 @@ impl TracksPanel {
 
             // record the header rect and logical index for DnD
             let idx_in_order = {
-                let st = app.state.lock().unwrap();
+                let st = app.state.lock_sync();
                 st.track_order
                     .iter()
                     .position(|&id| id == track_id)
@@ -173,7 +173,7 @@ impl TracksPanel {
         mut on_action: impl FnMut(&'a str),
     ) -> egui::Response {
         let (name, is_midi, is_frozen, track_color, group_info) = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             let track = state.tracks.get(&track_id);
             let group = track
                 .and_then(|t| t.group_id)
@@ -327,7 +327,7 @@ impl TracksPanel {
 
     fn draw_mixer_strip(&mut self, ui: &mut egui::Ui, track_id: u64, app: &super::app::YadawApp) {
         let (mut volume, mut pan, muted, solo, armed, monitor_enabled, is_midi) = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             state
                 .tracks
                 .get(&track_id)
@@ -424,7 +424,7 @@ impl TracksPanel {
     ) -> Option<(u64, AutomationTarget)> {
         let mut action = None;
         let (plugin_chain, num_lanes) = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             state
                 .tracks
                 .get(&track_id)
@@ -489,7 +489,7 @@ impl TracksPanel {
 
         // Get cached chain to avoid cloning every frame
         let chain_len = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             state
                 .tracks
                 .get(&track_id)
@@ -500,7 +500,7 @@ impl TracksPanel {
         // Only lock when we need to read plugin data
         for plugin_idx in 0..chain_len {
             let (plugin_id, plugin_name, plugin_uri, backend, bypass, has_editor, params) = {
-                let state = app.state.lock().unwrap();
+                let state = app.state.lock_sync();
                 let track = match state.tracks.get(&track_id) {
                     Some(t) => t,
                     None => continue,
@@ -867,13 +867,12 @@ impl TracksPanel {
                             v,
                         ));
 
-                        if let Ok(mut state) = app.state.lock() {
-                            if let Some(track) = state.tracks.get_mut(&track_id) {
-                                if let Some(plugin) =
-                                    track.plugin_chain.iter_mut().find(|p| p.id == plugin_id)
-                                {
-                                    plugin.params.insert(pinfo.name.clone(), v);
-                                }
+                        let mut state = app.state.lock_sync();
+                        if let Some(track) = state.tracks.get_mut(&track_id) {
+                            if let Some(plugin) =
+                                track.plugin_chain.iter_mut().find(|p| p.id == plugin_id)
+                            {
+                                plugin.params.insert(pinfo.name.clone(), v);
                             }
                         }
                     }
@@ -961,7 +960,7 @@ impl TracksPanel {
 
     fn draw_io_section(&self, ui: &mut egui::Ui, track_id: u64, app: &mut super::app::YadawApp) {
         let track = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             state.tracks.get(&track_id).cloned()
         };
 
@@ -1135,7 +1134,7 @@ impl TracksPanel {
 
             // Resolve track ids by order
             let (_ids, len) = {
-                let st = app.state.lock().unwrap();
+                let st = app.state.lock_sync();
                 (st.track_order.clone(), st.track_order.len())
             };
 
@@ -1148,7 +1147,7 @@ impl TracksPanel {
                 if new_to != from && new_to < len {
                     use crate::track_manager::move_track;
                     {
-                        let mut st = app.state.lock().unwrap();
+                        let mut st = app.state.lock_sync();
                         move_track(&mut st.track_order, from, new_to);
                     }
                 }
@@ -1168,7 +1167,7 @@ impl TracksPanel {
         match action {
             "rename" => {
                 let current_name = {
-                    let state = app.state.lock().unwrap();
+                    let state = app.state.lock_sync();
                     state
                         .tracks
                         .get(&track_id)
@@ -1179,7 +1178,7 @@ impl TracksPanel {
             }
             "duplicate" => {
                 let new_id_opt = {
-                    let mut state = app.state.lock().unwrap();
+                    let mut state = app.state.lock_sync();
                     if let Some(src) = state.tracks.get(&track_id).cloned() {
                         let mut new_track = app.track_manager.duplicate_track(&src);
                         let new_id = state.fresh_id();
@@ -1209,7 +1208,7 @@ impl TracksPanel {
             }
             "delete" => {
                 let can_delete = {
-                    let st = app.state.lock().unwrap();
+                    let st = app.state.lock_sync();
                     st.track_order.len() > 1
                 };
                 if !can_delete {
@@ -1218,7 +1217,7 @@ impl TracksPanel {
                 }
 
                 let new_selected = {
-                    let mut st = app.state.lock().unwrap();
+                    let mut st = app.state.lock_sync();
                     if let Some(pos) = st.track_order.iter().position(|&id| id == track_id) {
                         st.track_order.remove(pos);
                         st.tracks.remove(&track_id);
@@ -1241,7 +1240,7 @@ impl TracksPanel {
             }
             "freeze_toggle" => {
                 let is_frozen = {
-                    let state = app.state.lock().unwrap();
+                    let state = app.state.lock_sync();
                     state
                         .tracks
                         .get(&track_id)

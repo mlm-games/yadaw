@@ -6,7 +6,7 @@ use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
 use crate::midi_import::ImportedTrack;
 use crate::input::actions::{ActionContext, AppAction};
-use crate::messages::{AudioCommand, PluginParamInfo, UIUpdate};
+use crate::messages::{AudioCommand, PluginParamInfo, UiRx, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
 use crate::model::clip::MidiPattern;
@@ -20,14 +20,16 @@ use yadaw_plugin_api::UnifiedPluginInfo;
 
 use crate::track_manager::{TrackManager, UITrackType};
 use crate::transport::Transport;
-use flume::{Receiver, Sender};
+use flume::Sender;
 
 use eframe::egui;
 use egui::ahash::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use wasm_safe_mutex::Mutex;
 use web_time::{Duration, Instant};
 
 pub enum ActiveEditTarget {
@@ -40,7 +42,7 @@ pub struct YadawApp {
     pub(super) state: Arc<Mutex<AppState>>,
     pub(super) audio_state: Arc<AudioState>,
     pub(super) command_tx: Sender<AudioCommand>,
-    pub(super) ui_rx: Receiver<UIUpdate>,
+    pub(super) ui_rx: UiRx,
 
     // Configuration
     pub(super) config: Config,
@@ -128,7 +130,7 @@ impl YadawApp {
         state: Arc<Mutex<AppState>>,
         audio_state: Arc<AudioState>,
         command_tx: Sender<AudioCommand>,
-        ui_rx: Receiver<UIUpdate>,
+        ui_rx: UiRx,
         available_plugins: Vec<UnifiedPluginInfo>,
         config: Config,
         midi_input_handler: Option<Arc<MidiInputHandler>>,
@@ -141,7 +143,7 @@ impl YadawApp {
         let mut theme_manager = super::theme::ThemeManager::new(theme);
 
         let initial_track_id = {
-            let state_guard = state.lock().unwrap();
+            let state_guard = state.lock_sync();
             state_guard.track_order.first().copied().unwrap_or(0)
         };
         let available_plugins_map = available_plugins
@@ -249,7 +251,7 @@ impl YadawApp {
 
     // Core functionality methods
     pub fn push_undo(&mut self) {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         self.undo_stack.push_back(state.snapshot());
         self.redo_stack.clear();
 
@@ -262,7 +264,7 @@ impl YadawApp {
 
     pub fn undo(&mut self) {
         if let Some(snapshot) = self.undo_stack.pop_back() {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_sync();
             let current = state.snapshot();
             self.redo_stack.push_back(current);
             state.restore(snapshot);
@@ -275,7 +277,7 @@ impl YadawApp {
 
     pub fn redo(&mut self) {
         if let Some(snapshot) = self.redo_stack.pop_back() {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_sync();
             let current = state.snapshot();
             self.undo_stack.push_back(current);
             state.restore(snapshot);
@@ -289,7 +291,7 @@ impl YadawApp {
     // Track management
     pub fn add_audio_track(&mut self) {
         self.push_undo();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         let track_id = state.fresh_id();
         let mut track = self.track_manager.create_track(UITrackType::Audio, None);
         track.id = track_id;
@@ -305,7 +307,7 @@ impl YadawApp {
 
     pub fn add_midi_track(&mut self) {
         self.push_undo();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         let track_id = state.fresh_id();
         let mut track = self.track_manager.create_track(UITrackType::Midi, None);
         track.id = track_id;
@@ -321,7 +323,7 @@ impl YadawApp {
 
     pub fn add_bus_track(&mut self) {
         self.push_undo();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         let track_id = state.fresh_id();
         let mut track = self.track_manager.create_track(UITrackType::Bus, None);
         track.id = track_id;
@@ -363,7 +365,7 @@ impl YadawApp {
 
     /// Copy selected clips (ID-based)
     pub fn copy_selected(&mut self) {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         let mut audio = Vec::new();
         let mut midi = Vec::new();
 
@@ -392,7 +394,7 @@ impl YadawApp {
         self.push_undo();
 
         let new_track_id = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_sync();
 
             if let Some(track) = state.tracks.get(&self.selected_track).cloned() {
                 // Resolve each MIDI clip's notes from pattern into clip.notes before duplicating
@@ -438,7 +440,7 @@ impl YadawApp {
     }
 
     pub fn delete_selected_track(&mut self) {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         if state.track_order.len() <= 1 {
             drop(state);
             self.dialogs.show_message("Cannot delete the last track");
@@ -449,7 +451,7 @@ impl YadawApp {
         self.push_undo();
 
         let new_selected = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_sync();
 
             if let Some(pos) = state
                 .track_order
@@ -502,8 +504,7 @@ impl YadawApp {
 
         let is_midi_track = self
             .state
-            .lock()
-            .unwrap()
+            .lock_sync()
             .tracks
             .get(&track_id)
             .map_or(false, |t| matches!(t.track_type, TrackType::Midi));
@@ -528,7 +529,7 @@ impl YadawApp {
         }
 
         let new_ids: Vec<u64> = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             (0..required_ids).map(|_| state.fresh_id()).collect()
         };
         let mut id_iter = new_ids.into_iter();
@@ -546,7 +547,7 @@ impl YadawApp {
         }
 
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if is_midi_track {
                     track.midi_clips.extend(prepared_midi_clips.iter().cloned());
@@ -597,7 +598,7 @@ impl YadawApp {
         }
 
         let clip_ids = self.selected_clips.clone();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
 
         for clip_id in clip_ids {
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
@@ -620,7 +621,7 @@ impl YadawApp {
 
     // Selection
     pub fn select_all(&mut self) {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         self.selected_clips.clear();
 
         for track in state.tracks.values() {
@@ -643,7 +644,7 @@ impl YadawApp {
 
     // Project management
     pub fn new_project(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         *state = AppState::default();
         drop(state);
 
@@ -673,7 +674,7 @@ impl YadawApp {
         let live_loop_enabled = self.audio_state.loop_enabled.load(Ordering::Relaxed);
 
         let save_result = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_sync();
             state.bpm = live_bpm;
             state.loop_start = live_loop_start;
             state.loop_end = live_loop_end;
@@ -696,7 +697,7 @@ impl YadawApp {
             .load_project(path)
             .map_err(common::project_load_failed)
             .map(|project| {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock_sync();
                 state.load_project(project);
 
                 self.audio_state.bpm.store(state.bpm);
@@ -734,7 +735,7 @@ impl YadawApp {
         }
         self.push_undo();
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         for &clip_id in &self.selected_clips {
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let crate::project::ClipLocation::Audio(idx) = loc {
@@ -760,7 +761,7 @@ impl YadawApp {
         }
         self.push_undo();
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         for &clip_id in &self.selected_clips {
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let crate::project::ClipLocation::Audio(idx) = loc {
@@ -779,7 +780,7 @@ impl YadawApp {
     }
 
     pub fn selected_audio_warp_stats(&self) -> (usize, usize) {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         let mut selected_audio = 0usize;
         let mut selected_warped = 0usize;
 
@@ -809,7 +810,7 @@ impl YadawApp {
         let mut targets = Vec::new();
 
         {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
 
             for &clip_id in &self.selected_clips {
                 if let Some((track, ClipLocation::Audio(idx))) = state.find_clip(clip_id)
@@ -853,7 +854,7 @@ impl YadawApp {
         }
         self.push_undo();
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         let bpm = state.bpm;
         for &clip_id in &self.selected_clips {
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
@@ -874,7 +875,7 @@ impl YadawApp {
         }
         self.push_undo();
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         let bpm = state.bpm;
         for &clip_id in &self.selected_clips {
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
@@ -904,7 +905,7 @@ impl YadawApp {
 
         let selected_clips = self.selected_clips.clone();
         let split_commands: Vec<AudioCommand> = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             selected_clips
                 .into_iter()
                 .filter_map(|clip_id| {
@@ -946,7 +947,7 @@ impl YadawApp {
             let _ = self.command_tx.send(AudioCommand::SetLoopEnabled(true));
         } else {
             // Use selected clips range
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             let mut min_beat: f64 = f64::MAX;
             let mut max_beat: f64 = 0.0;
 
@@ -1075,7 +1076,7 @@ impl YadawApp {
 
     pub fn zoom_to_fit(&mut self) {
         // Calculate the extent of all content
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         let mut max_beat: f64 = DEFAULT_MIN_PROJECT_BEATS; // Minimum 4 beats
 
         for track in state.tracks.values() {
@@ -1137,7 +1138,7 @@ impl YadawApp {
     }
 
     pub fn is_selected_track_midi(&self) -> bool {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         state
             .tracks
             .get(&self.selected_track)
@@ -1202,7 +1203,7 @@ impl YadawApp {
             }
             UIUpdate::RecordingFinished(track_id, mut clip) => {
                 self.push_undo();
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock_sync();
                 clip.id = state.fresh_id();
                 let clip_id = clip.id;
 
@@ -1285,7 +1286,7 @@ impl YadawApp {
                 self.clap_param_meta.insert((track_id, plugin_idx), meta);
 
                 {
-                    let mut state = self.state.lock().unwrap();
+                    let mut state = self.state.lock_sync();
                     if let Some(track) = state.tracks.get_mut(&track_id) {
                         if let Some(plugin) = track.plugin_chain.get_mut(plugin_idx) {
                             plugin.params.clear();
@@ -1329,7 +1330,7 @@ impl YadawApp {
 
     pub fn open_midi_clip_in_piano_roll(&mut self, clip_id: u64) {
         let track_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             state.clips_by_id.get(&clip_id).map(|r| r.track_id)
         };
 
@@ -1495,7 +1496,7 @@ impl YadawApp {
                 } else {
                     self.push_undo();
                     let selected_clips = self.selected_clips.clone();
-                    let state = self.state.lock().unwrap();
+                    let state = self.state.lock_sync();
                     for clip_id in selected_clips {
                         if let Some((_track, loc)) = state.find_clip(clip_id) {
                             match loc {
@@ -1613,7 +1614,7 @@ impl YadawApp {
         }
 
         let pattern_notes: Vec<MidiNote> = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             match state.find_clip(clip_id) {
                 Some((track, ClipLocation::Midi(idx))) => {
                     let clip = &track.midi_clips[idx];
@@ -1659,7 +1660,7 @@ impl YadawApp {
 
     pub fn switch_to_piano_roll(&mut self) {
         let midi_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             state
                 .tracks
                 .iter()
@@ -1676,7 +1677,7 @@ impl YadawApp {
 
     pub fn switch_to_timeline(&mut self) {
         let audio_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             state
                 .track_order
                 .iter()
@@ -1696,7 +1697,7 @@ impl YadawApp {
     }
 
     pub fn sync_views_after_model_change(&mut self) {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         let tracks_len = state.tracks.len();
         if tracks_len == 0 {
             self.selected_track = 0;
@@ -1718,7 +1719,7 @@ impl YadawApp {
         self.selected_track = track_id;
 
         let is_midi = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             state
                 .tracks
                 .get(&track_id)
@@ -1727,7 +1728,7 @@ impl YadawApp {
 
         if is_midi {
             if let Some(&last_clip_id) = self.last_active_clip_per_track.get(&track_id) {
-                let state = self.state.lock().unwrap();
+                let state = self.state.lock_sync();
                 if state.clips_by_id.contains_key(&last_clip_id) {
                     self.piano_roll_view.set_editing_clip(last_clip_id);
                     return;
@@ -1736,11 +1737,11 @@ impl YadawApp {
 
             let current_pos = self.audio_state.get_position();
             let current_beat = {
-                let state = self.state.lock().unwrap();
+                let state = self.state.lock_sync();
                 state.position_to_beats(current_pos)
             };
 
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_sync();
             let track = state.tracks.get(&track_id);
 
             let clip_under_playhead = track.and_then(|t| {
@@ -1770,12 +1771,12 @@ impl YadawApp {
     }
 
     pub fn get_selected_track(&self) -> Option<Track> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         state.tracks.get(&self.selected_track).cloned()
     }
 
     pub fn selected_track_display_index(&self) -> Option<usize> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         state
             .track_order
             .iter()
@@ -1783,18 +1784,18 @@ impl YadawApp {
     }
 
     pub fn track_index_to_id(&self, idx: usize) -> Option<u64> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         state.track_order.get(idx).copied()
     }
 
     pub fn track_id_to_index(&self, track_id: u64) -> Option<usize> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         state.track_order.iter().position(|&id| id == track_id)
     }
 
     /// Get track by ID (old)
     pub fn get_track(&self, track_id: u64) -> Option<Track> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_sync();
         state.tracks.get(&track_id).cloned()
     }
 
@@ -1864,7 +1865,7 @@ impl YadawApp {
         }
 
         self.push_undo();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_sync();
         let mut first_new_track_id = None;
 
         let track_count = imported_tracks.len();
@@ -1976,7 +1977,7 @@ impl YadawApp {
         match crate::audio_import::import_audio_file(path, bpm) {
             Ok(mut clip) => {
                 self.push_undo();
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock_sync();
                 clip.id = state.fresh_id();
 
                 if let Some(track) = state.tracks.get_mut(&track_id) {
@@ -2017,7 +2018,7 @@ impl YadawApp {
         match decode() {
             Ok(mut clip) => {
                 self.push_undo();
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock_sync();
                 clip.id = state.fresh_id();
 
                 if let Some(track) = state.tracks.get_mut(&track_id) {
@@ -2043,7 +2044,7 @@ impl YadawApp {
         #[cfg(target_arch = "wasm32")]
         {
             let entry = {
-                let state = self.state.lock().unwrap();
+                let state = self.state.lock_sync();
                 state
                     .tracks
                     .get(&self.selected_track)
@@ -2064,7 +2065,7 @@ impl YadawApp {
         #[cfg(target_arch = "wasm32")]
         {
             let entries: Vec<(u64, usize, u64)> = {
-                let state = self.state.lock().unwrap();
+                let state = self.state.lock_sync();
                 state
                     .tracks
                     .iter()
@@ -2082,7 +2083,7 @@ impl YadawApp {
                 crate::spawn_detached!(async move {
                     if let Some(cached) = crate::wasm_persist::read_cached_audio_by_hash(hash).await
                     {
-                        if let Some(track) = state_arc.lock().unwrap().tracks.get_mut(&track_id) {
+                        if let Some(track) = state_arc.lock_sync().tracks.get_mut(&track_id) {
                             if let Some(clip) = track.audio_clips.get_mut(idx) {
                                 if clip.source_hash == Some(hash) {
                                     clip.samples = cached;
@@ -2227,7 +2228,7 @@ impl eframe::App for YadawApp {
                                     let live_loop_end = self.audio_state.loop_end.load();
                                     let live_loop_enabled = self.audio_state.loop_enabled.load(std::sync::atomic::Ordering::Relaxed);
 
-                                    let mut state = self.state.lock().unwrap();
+                                    let mut state = self.state.lock_sync();
                                     state.load_project(project);
                                     state.bpm = live_bpm;
                                     state.loop_start = live_loop_start;
@@ -2287,7 +2288,7 @@ impl eframe::App for YadawApp {
         if self.project_manager.get_current_project().is_some()
             && self.last_autosave.elapsed() > self.autosave_interval
         {
-            let state_guard = self.state.lock().unwrap();
+            let state_guard = self.state.lock_sync();
             if let Err(e) = self.project_manager.auto_save(&state_guard) {
                 log::error!("Auto-save failed: {}", e);
             }

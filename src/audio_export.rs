@@ -1,7 +1,7 @@
 use crate::audio::AudioEngine;
 use crate::audio_state::AudioState;
 use crate::constants::MAX_BUFFER_SIZE;
-use crate::messages::{ExportConfig, ExportFormat, ExportState, UIUpdate};
+use crate::messages::{ExportConfig, ExportFormat, ExportState, UiTx, UIUpdate};
 use crate::project::AppState;
 use crate::time_utils::TimeConverter;
 
@@ -15,7 +15,6 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlAnchorElement;
 
-use flume::Sender;
 use std::fs::File;
 use std::io::{BufWriter, Cursor};
 use std::path::PathBuf;
@@ -74,19 +73,19 @@ impl AudioExporter {
         app_state: AppState,
         audio_state: Arc<AudioState>,
         config: ExportConfig,
-        ui_tx: Sender<UIUpdate>,
+        ui_tx: UiTx,
     ) {
         #[cfg(not(target_arch = "wasm32"))]
         crate::runtime::RT.spawn_blocking(move || {
             let result = run_export(app_state, audio_state, &config, &ui_tx);
             match result {
                 Ok(path) => {
-                    let _ = ui_tx.send(UIUpdate::ExportStateUpdate(ExportState::Complete(
+                    let _ = ui_tx.send_sync(UIUpdate::ExportStateUpdate(ExportState::Complete(
                         path.to_string_lossy().into_owned(),
                     )));
                 }
                 Err(e) => {
-                    let _ = ui_tx.send(UIUpdate::ExportStateUpdate(ExportState::Error(
+                    let _ = ui_tx.send_sync(UIUpdate::ExportStateUpdate(ExportState::Error(
                         e.to_string(),
                     )));
                 }
@@ -97,10 +96,10 @@ impl AudioExporter {
             let result = run_export_wasm(app_state, audio_state, &config).await;
             match result {
                 Ok(filename) => {
-                    let _ = ui_tx.send(UIUpdate::ExportStateUpdate(ExportState::Complete(filename)));
+                    let _ = ui_tx.send_sync(UIUpdate::ExportStateUpdate(ExportState::Complete(filename)));
                 }
                 Err(e) => {
-                    let _ = ui_tx.send(UIUpdate::ExportStateUpdate(ExportState::Error(
+                    let _ = ui_tx.send_sync(UIUpdate::ExportStateUpdate(ExportState::Error(
                         e.to_string(),
                     )));
                 }
@@ -113,7 +112,7 @@ fn run_export(
     app_state: AppState,
     audio_state: Arc<AudioState>,
     config: &ExportConfig,
-    ui_tx: &Sender<UIUpdate>,
+    ui_tx: &UiTx,
 ) -> Result<PathBuf> {
     #[cfg(target_os = "android")]
     let config = export_through_cache_then_copy(config);
@@ -353,8 +352,8 @@ fn encode_pcm_from_f32(
     Ok(())
 }
 
-fn send(ui_tx: &Sender<UIUpdate>, state: ExportState) {
-    let _ = ui_tx.send(UIUpdate::ExportStateUpdate(state));
+fn send(ui_tx: &UiTx, state: ExportState) {
+    let _ = ui_tx.send_sync(UIUpdate::ExportStateUpdate(state));
 }
 
 #[cfg(target_arch = "wasm32")]

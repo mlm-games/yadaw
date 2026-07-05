@@ -150,7 +150,7 @@ impl MixerWindow {
     fn draw_mixer_channels(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         ui.horizontal(|ui| {
             let track_data: Vec<(u64, crate::model::track::Track)> = {
-                let state = app.state.lock().unwrap();
+                let state = app.state.lock_sync();
                 state
                     .track_order
                     .iter()
@@ -300,7 +300,7 @@ impl MixerWindow {
 
                         // Fetch live sends
                         let (mut sends, _is_midi) = {
-                            let st = app.state.lock().unwrap();
+                            let st = app.state.lock_sync();
                             let t = st.tracks.get(&track_id);
                             let sends = t.map(|tt| tt.sends.clone()).unwrap_or_default();
                             (
@@ -314,7 +314,7 @@ impl MixerWindow {
                         for (idx, s) in sends.iter_mut().enumerate() {
                             // Fetch bus list
                             let bus_list: Vec<(u64, String)> = {
-                                let st = app.state.lock().unwrap();
+                                let st = app.state.lock_sync();
                                 st.track_order.iter()
                                     .filter_map(|&tid| {
                                         st.tracks.get(&tid).and_then(|t| if matches!(t.track_type, TrackType::Bus) { Some((tid, t.name.clone())) } else { None })

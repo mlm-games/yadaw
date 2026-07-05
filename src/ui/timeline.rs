@@ -214,7 +214,7 @@ impl TimelineView {
         }
 
         let track_data: Vec<(u64, Track)> = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             state
                 .track_order
                 .iter()
@@ -299,7 +299,7 @@ impl TimelineView {
 
         // Draw the grid and horizontal ruler
         let rect = response.rect;
-        self.draw_grid(&painter, rect, app.state.lock().unwrap().bpm);
+        self.draw_grid(&painter, rect, app.state.lock_sync().bpm);
 
         // loop/seek
         let ruler_h = 18.0;
@@ -826,7 +826,7 @@ impl TimelineView {
         painter.rect_filled(clip_rect, 4.0, base_color);
 
         let base_notes: Vec<MidiNote> = {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             if let Some(pid) = clip.pattern_id {
                 state
                     .patterns
@@ -1031,7 +1031,7 @@ impl TimelineView {
         // Begin drag/resize
         if response.drag_started() && self.timeline_interaction.is_none() {
             let (clip_start, clip_len) = {
-                let state = app.state.lock().unwrap();
+                let state = app.state.lock_sync();
                 if let Some((track, loc)) = state.find_clip(clip_id) {
                     match loc {
                         ClipLocation::Midi(idx) => (
@@ -1058,7 +1058,7 @@ impl TimelineView {
             // Slip content (Alt+drag)
             if alt && !hover_left && !hover_right {
                 let (start_offset, content_len, is_midi) = {
-                    let state = app.state.lock().unwrap();
+                    let state = app.state.lock_sync();
                     if let Some((track, loc)) = state.find_clip(clip_id) {
                         if let ClipLocation::Midi(idx) = loc {
                             let c = &track.midi_clips[idx];
@@ -1102,7 +1102,7 @@ impl TimelineView {
             } else {
                 // Drag whole clip (or multi-selection)
                 let mut clips_and_starts = Vec::new();
-                let state = app.state.lock().unwrap();
+                let state = app.state.lock_sync();
 
                 let selected = if app.selected_clips.contains(&clip_id) {
                     app.selected_clips.clone()
@@ -1329,7 +1329,7 @@ impl TimelineView {
                                     clip_ids_and_starts
                                         .first()
                                         .and_then(|(cid, _)| {
-                                            let st = app.state.lock().unwrap();
+                                            let st = app.state.lock_sync();
                                             st.clips_by_id.get(cid).map(|r| r.track_id)
                                         })
                                         .unwrap_or(0)
@@ -1337,7 +1337,7 @@ impl TimelineView {
 
                             // Cache destination track snapshot once
                             let (dest_is_midi, dest_clips_audio, dest_clips_midi) = {
-                                let st = app.state.lock().unwrap();
+                                let st = app.state.lock_sync();
                                 if let Some(t) = st.tracks.get(&dest_track_id) {
                                     (
                                         matches!(
@@ -1400,7 +1400,7 @@ impl TimelineView {
                             for (clip_id, original_start) in clip_ids_and_starts.iter().copied() {
                                 // Resolve source type and length
                                 let (src_track_id, is_midi, length_beats) = {
-                                    let st = app.state.lock().unwrap();
+                                    let st = app.state.lock_sync();
                                     if let Some(clip_ref) = st.clips_by_id.get(&clip_id) {
                                         let is_midi = clip_ref.is_midi;
                                         let len = if is_midi {
@@ -1519,8 +1519,7 @@ impl TimelineView {
 
                             let is_midi = app
                                 .state
-                                .lock()
-                                .unwrap()
+                                .lock_sync()
                                 .clips_by_id
                                 .get(&clip_id)
                                 .map_or(false, |r| r.is_midi);
@@ -1552,8 +1551,7 @@ impl TimelineView {
 
                             let is_midi = app
                                 .state
-                                .lock()
-                                .unwrap()
+                                .lock_sync()
                                 .clips_by_id
                                 .get(&clip_id)
                                 .map_or(false, |r| r.is_midi);
@@ -1626,7 +1624,7 @@ impl TimelineView {
                 let sel_rect = egui::Rect::from_two_pos(start_pos, current_pos);
                 let mut selected_ids: Vec<u64> = Vec::new();
 
-                let st = app.state.lock().unwrap();
+                let st = app.state.lock_sync();
                 for (track_id, track_block) in self.last_track_blocks.iter().copied() {
                     // Only the clip area height
                     let clip_area = egui::Rect::from_min_size(
@@ -1699,7 +1697,7 @@ impl TimelineView {
             {
                 if ui.input(|i| i.modifiers.ctrl) {
                     let is_midi = {
-                        let state = app.state.lock().unwrap();
+                        let state = app.state.lock_sync();
                         state
                             .tracks
                             .get(&track_id)
@@ -1784,7 +1782,7 @@ impl TimelineView {
                     // Mode combo (Read / Write / Touch / Latch / Off)
                     use crate::model::automation::AutomationMode;
                     let current_mode = {
-                        let st = app.state.lock().unwrap();
+                        let st = app.state.lock_sync();
                         st.tracks
                             .get(&track_id)
                             .and_then(|t| t.automation_lanes.get(lane_idx))
@@ -1949,8 +1947,7 @@ impl TimelineView {
                             if let Some(primary_clip_id) = app.selected_clips.first().copied() {
                                 if let Some(tid) = app
                                     .state
-                                    .lock()
-                                    .unwrap()
+                                    .lock_sync()
                                     .clips_by_id
                                     .get(&primary_clip_id)
                                     .map(|r| r.track_id)
@@ -1976,8 +1973,7 @@ impl TimelineView {
                         if let Some(primary_clip_id) = app.selected_clips.first().copied() {
                             let is_midi = app
                                 .state
-                                .lock()
-                                .unwrap()
+                                .lock_sync()
                                 .clips_by_id
                                 .get(&primary_clip_id)
                                 .map_or(false, |r| r.is_midi);
@@ -1999,7 +1995,7 @@ impl TimelineView {
                                 }
 
                                 let is_alias = {
-                                    let st = app.state.lock().unwrap();
+                                    let st = app.state.lock_sync();
                                     st.find_clip(primary_clip_id)
                                         .and_then(|(track, loc)| {
                                             if let crate::project::ClipLocation::Midi(idx) = loc {
@@ -2021,7 +2017,7 @@ impl TimelineView {
                                 }
                             } else {
                                 let warp_enabled = {
-                                    let st = app.state.lock().unwrap();
+                                    let st = app.state.lock_sync();
                                     st.find_clip(primary_clip_id)
                                         .and_then(|(track, loc)| {
                                             if let crate::project::ClipLocation::Audio(idx) = loc {
@@ -2063,7 +2059,7 @@ impl TimelineView {
     }
 
     pub fn compute_project_end_beats(&self, app: &super::app::YadawApp) -> f64 {
-        let state = app.state.lock().unwrap();
+        let state = app.state.lock_sync();
         state
             .tracks
             .values()
@@ -2125,7 +2121,7 @@ impl TimelineView {
 
         // Clip edges (starts/ends)
         if self.snap_to_clips {
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             for &tid in &state.track_order {
                 if track_filter.map_or(false, |tf| tf != tid) {
                     continue;
@@ -2247,7 +2243,7 @@ impl TimelineView {
 
                 if !target_clip_area.is_negative() {
                     let p = ui.painter();
-                    let st = app.state.lock().unwrap();
+                    let st = app.state.lock_sync();
                     for (clip_id, orig_start) in clip_ids_and_starts {
                         if let Some((track, loc)) = st.find_clip(*clip_id) {
                             let (length, is_midi, name) = match loc {
@@ -2319,7 +2315,7 @@ impl TimelineView {
             // Keep it simple (no need of checks)
             app.push_undo();
             for &cid in &app.selected_clips {
-                let st = app.state.lock().unwrap();
+                let st = app.state.lock_sync();
                 if let Some((track, loc)) = st.find_clip(cid) {
                     let (is_midi, start) = match loc {
                         ClipLocation::Midi(i) => (true, track.midi_clips[i].start_beat),
@@ -2361,7 +2357,7 @@ impl TimelineView {
                 };
                 app.push_undo();
                 for &cid in &app.selected_clips {
-                    let st = app.state.lock().unwrap();
+                    let st = app.state.lock_sync();
                     if let Some((track, loc)) = st.find_clip(cid) {
                         let (is_midi, start, len) = match loc {
                             ClipLocation::Midi(i) => (
@@ -2405,7 +2401,7 @@ impl TimelineView {
             };
             app.push_undo();
             for &cid in &app.selected_clips {
-                let st = app.state.lock().unwrap();
+                let st = app.state.lock_sync();
                 if let Some((track, loc)) = st.find_clip(cid) {
                     if let ClipLocation::Midi(i) = loc {
                         let offset = track.midi_clips[i].content_offset_beats;
@@ -2429,7 +2425,7 @@ impl TimelineView {
             };
             app.push_undo();
 
-            let st = app.state.lock().unwrap();
+            let st = app.state.lock_sync();
             let order = &st.track_order;
             if let Some(&first_cid) = app.selected_clips.first() {
                 if let Some(clip_ref) = st.clips_by_id.get(&first_cid) {
@@ -2513,7 +2509,7 @@ impl TimelineView {
                 _ => return, // Not a resize interaction, so do nothing
             };
 
-            let state = app.state.lock().unwrap();
+            let state = app.state.lock_sync();
             if let Some(clip_ref) = state.clips_by_id.get(&clip_id) {
                 // Find the track's screen rectangle
                 if let Some((_, track_block)) = self

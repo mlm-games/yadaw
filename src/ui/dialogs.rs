@@ -59,7 +59,7 @@ fn save_project_wasm(app: &mut super::app::YadawApp, filename: &str) {
         .load(std::sync::atomic::Ordering::Relaxed);
 
     let json = {
-        let mut state = app.state.lock().unwrap();
+        let mut state = app.state.lock_sync();
         state.bpm = live_bpm;
         state.loop_start = live_loop_start;
         state.loop_end = live_loop_end;
@@ -112,7 +112,7 @@ fn save_project_to_uri(app: &mut super::app::YadawApp, file: &PlatformFile) {
         .load(std::sync::atomic::Ordering::Relaxed);
 
     let save_result = {
-        let mut state = app.state.lock().unwrap();
+        let mut state = app.state.lock_sync();
         state.bpm = live_bpm;
         state.loop_start = live_loop_start;
         state.loop_end = live_loop_end;
@@ -638,7 +638,7 @@ impl OpenDialog {
                                         .loop_enabled
                                         .load(std::sync::atomic::Ordering::Relaxed);
 
-                                    let mut state = app.state.lock().unwrap();
+                                    let mut state = app.state.lock_sync();
                                     state.load_project(project);
                                     state.bpm = live_bpm;
                                     state.loop_start = live_loop_start;
@@ -871,7 +871,7 @@ impl PluginBrowserDialog {
                             let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
 
                             let plugin_idx = {
-                                let state = app.state.lock().unwrap();
+                                let state = app.state.lock_sync();
                                 state.tracks.get(&track_id).map(|t| t.plugin_chain.len()).unwrap_or(0)
                             };
 
@@ -921,7 +921,7 @@ impl PluginBrowserDialog {
                             // Warning for MIDI track with effect
                             let track_id = app.selected_track_for_plugin.unwrap_or(app.selected_track);
                             let is_midi = {
-                                let state = app.state.lock().unwrap();
+                                let state = app.state.lock_sync();
                                 state.tracks.get(&track_id).map(|t| matches!(t.track_type, TrackType::Midi)).unwrap_or(false)
                             };
 
@@ -936,7 +936,7 @@ impl PluginBrowserDialog {
                             }
 
                             let plugin_idx = {
-                                let state = app.state.lock().unwrap();
+                                let state = app.state.lock_sync();
                                 state.tracks.get(&track_id).map(|t| t.plugin_chain.len()).unwrap_or(0)
                             };
                             let _ = app.command_tx.send(AudioCommand::AddPluginUnified {
@@ -1209,7 +1209,7 @@ impl ProjectSettingsDialog {
                         }
 
                         {
-                            let mut state = app.state.lock().unwrap();
+                            let mut state = app.state.lock_sync();
                             state.sample_rate = selected_rate as f32;
                         }
 
@@ -2884,7 +2884,7 @@ impl TrackGroupingDialog {
                     Vec<u64>,
                     Vec<(u64, String, Option<u64>)>,
                 ) = {
-                    let st = app.state.lock().unwrap();
+                    let st = app.state.lock_sync();
                     let groups: Vec<_> = st.groups.values().cloned().collect();
                     let order = st.track_order.clone();
                     let info = order
@@ -3138,7 +3138,7 @@ impl TrackRenameDialog {
                     if ui.button("OK").clicked() {
                         // Apply
                         {
-                            let mut state = app.state.lock().unwrap();
+                            let mut state = app.state.lock_sync();
                             if let Some(t) = state.tracks.get_mut(&self.track_id) {
                                 t.name = self.name.trim().to_string();
                             }

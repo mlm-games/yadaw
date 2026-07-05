@@ -1,13 +1,13 @@
 use crate::audio;
 use crate::audio_state::{AudioGraphSnapshot, AudioState, RealtimeCommand};
 use crate::config::Config;
-use crate::messages::AudioCommand;
-use crate::messages::UIUpdate;
+use crate::messages::{AudioCommand, UiRx, UiTx};
 use crate::midi_input::MidiInputHandler;
 use crate::spawn_detached;
 use crate::{project, ui};
 use flume::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use wasm_safe_mutex::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::constants;
@@ -25,8 +25,8 @@ use yadaw_plugin_host::plugin_host;
 
 struct AppChannels {
     command_tx: Sender<AudioCommand>,
-    ui_tx: Sender<UIUpdate>,
-    ui_rx: flume::Receiver<UIUpdate>,
+    ui_tx: UiTx,
+    ui_rx: UiRx,
     midi_handler: Option<Arc<MidiInputHandler>>,
 }
 
@@ -36,13 +36,13 @@ fn setup_channels_and_start_audio(
     start_audio: impl FnOnce(
         flume::Receiver<RealtimeCommand>,
         flume::Receiver<AudioGraphSnapshot>,
-        Sender<UIUpdate>,
+        UiTx,
     ),
 ) -> AppChannels {
     let (command_tx, command_rx) = flume::unbounded::<AudioCommand>();
     let (realtime_tx, realtime_rx) = flume::unbounded::<RealtimeCommand>();
     let (snapshot_tx, snapshot_rx) = flume::bounded::<AudioGraphSnapshot>(1);
-    let (ui_tx, ui_rx) = flume::unbounded::<UIUpdate>();
+    let (ui_tx, ui_rx) = wasm_safe_mutex::mpsc::channel();
 
     start_audio(realtime_rx, snapshot_rx, ui_tx.clone());
 
@@ -108,7 +108,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let host_sample_rate = audio::resolve_output_sample_rate(preferred_sample_rate);
     audio_state.sample_rate.store(host_sample_rate);
     {
-        let mut state = app_state.lock().unwrap();
+        let mut state = app_state.lock_sync();
         state.sample_rate = host_sample_rate;
     }
 
@@ -204,7 +204,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     let host_sample_rate = audio::resolve_output_sample_rate(preferred_sample_rate);
     audio_state.sample_rate.store(host_sample_rate);
     {
-        let mut state = app_state.lock().unwrap();
+        let mut state = app_state.lock_sync();
         state.sample_rate = host_sample_rate;
     }
 

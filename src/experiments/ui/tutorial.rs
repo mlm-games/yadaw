@@ -95,7 +95,7 @@ impl InteractiveTutorial {
                 ui.separator();
                 ui.label(format!(
                     "Tracks in project: {}",
-                    app.state.lock().unwrap().tracks.len()
+                    app.state.lock_sync().tracks.len()
                 ));
             }
 
@@ -128,8 +128,7 @@ impl InteractiveTutorial {
                 // Check if user has MIDI track with notes
                 let has_midi_notes = app
                     .state
-                    .lock()
-                    .unwrap()
+                    .lock_sync()
                     .tracks
                     .iter()
                     .any(|t| t.is_midi && !t.patterns.is_empty());
@@ -155,8 +154,7 @@ impl InteractiveTutorial {
 
                 let has_plugins = app
                     .state
-                    .lock()
-                    .unwrap()
+                    .lock_sync()
                     .tracks
                     .iter()
                     .any(|t| !t.plugin_chain.is_empty());
@@ -272,7 +270,7 @@ impl InteractiveTutorial {
         match self.current_step {
             TutorialStep::AddTrack => {
                 // Auto-advance if tracks were added
-                if app.state.lock().unwrap().tracks.len() > 2 {
+                if app.state.lock_sync().tracks.len() > 2 {
                     self.next_step();
                 }
             }

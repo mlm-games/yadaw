@@ -378,3 +378,8 @@ pub enum ExportState {
     Cancelled,
     Error(String),
 }
+
+/// (spins instead of Atomics.wait).
+pub type UiTx = wasm_safe_mutex::mpsc::Sender<UIUpdate>;
+
+pub type UiRx = wasm_safe_mutex::mpsc::Receiver<UIUpdate>;

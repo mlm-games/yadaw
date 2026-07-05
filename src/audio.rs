@@ -15,15 +15,32 @@ use crate::time_utils::TimeConverter;
 use yadaw_plugin_api::{BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEvent};
 use yadaw_plugin_host::HostFacade;
 
+use crate::messages::UiTx;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use dashmap::DashMap;
-use flume::{Receiver, Sender};
+use flume::Receiver;
 use rtrb::{Consumer, RingBuffer};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
-use web_time::Instant;
+
+/// (`globalThis.performance` is unavailable in AudioWorkletGlobalScope).
+fn now_secs() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // js_sys::Date::now() works in every JS context including AudioWorklet.
+        js_sys::Date::now() * 0.001
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+    }
+}
 
 use yadaw_plugin_api::PluginInstance as UnifiedInstance;
 
@@ -55,12 +72,12 @@ pub struct AudioEngine {
     recording_state: RecordingState,
     preview_note: Option<PreviewNote>,
     sample_rate: f64,
-    updates: Sender<UIUpdate>,
+    updates: UiTx,
     channel_strips: HashMap<u64, ChannelStrip>,
     xrun_count: u64,
     paused_last: bool,
     host_facade: HostFacade,
-    last_ui_meter_update: Instant,
+    last_ui_meter_update: f64,
 
     free_running_samples: f64,
 }
@@ -215,12 +232,12 @@ fn build_audio_callback(
     channels: usize,
     realtime_commands: Receiver<RealtimeCommand>,
     snapshot_rx: Receiver<AudioGraphSnapshot>,
-    updates: Sender<UIUpdate>,
+    updates: UiTx,
 ) -> impl FnMut(&mut [f32], &cpal::OutputCallbackInfo) {
     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         if let Err(panic) = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let num_frames = data.len() / channels;
-            let cb_start = Instant::now();
+            let cb_start = now_secs();
 
             data.fill(0.0);
 
@@ -249,14 +266,14 @@ fn build_audio_callback(
                     engine.recording_state.accumulated_samples.clear();
                     let _ = engine
                         .updates
-                        .try_send(UIUpdate::RecordingStateChanged(true));
+                        .send_sync(UIUpdate::RecordingStateChanged(true));
                 }
             } else if (!is_playing || !should_be_recording) && is_actually_recording {
                 engine.recording_state.is_recording = false;
                 engine.audio_state.recording.store(false, Ordering::Relaxed);
                 let _ = engine
                     .updates
-                    .try_send(UIUpdate::RecordingStateChanged(false));
+                    .send_sync(UIUpdate::RecordingStateChanged(false));
 
                 if let Some(track_id) = engine.recording_state.recording_track {
                     if !engine.recording_state.accumulated_samples.is_empty() {
@@ -282,7 +299,7 @@ fn build_audio_callback(
 
                         let _ = engine
                             .updates
-                            .try_send(UIUpdate::RecordingFinished(track_id, clip));
+                            .send_sync(UIUpdate::RecordingFinished(track_id, clip));
                         engine.recording_state.accumulated_samples.clear();
                     }
                 }
@@ -311,13 +328,13 @@ fn build_audio_callback(
                     }
                 }
 
-                let elapsed = cb_start.elapsed();
+                let elapsed = now_secs() - cb_start;
                 let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
-                let cpu = (elapsed.as_secs_f64() / budget) as f32;
+                let cpu = (elapsed / budget) as f32;
                 let health = (1.0 - cpu).clamp(0.0, 1.0);
                 let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
 
-                let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
+                let _ = engine.updates.send_sync(UIUpdate::PerformanceMetric {
                     cpu_usage: cpu,
                     buffer_fill: health,
                     xruns: engine.xrun_count as u32,
@@ -341,19 +358,19 @@ fn build_audio_callback(
             );
             engine.audio_state.set_position(next_position);
 
-            let elapsed = cb_start.elapsed();
+            let elapsed = now_secs() - cb_start;
             let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
-            let cpu = (elapsed.as_secs_f64() / budget) as f32;
+            let cpu = (elapsed / budget) as f32;
             if cpu > 1.0 {
                 engine.xrun_count += 1;
             }
             let health = (1.0 - cpu).clamp(0.0, 1.0);
             let latency_ms = (num_frames as f32 / engine.sample_rate as f32) * 1000.0;
 
-            let now = Instant::now();
-            if now - engine.last_ui_meter_update >= web_time::Duration::from_millis(16) {
+            let now = now_secs();
+            if now - engine.last_ui_meter_update >= 0.016 {
                 engine.last_ui_meter_update = now;
-                let _ = engine.updates.try_send(UIUpdate::PerformanceMetric {
+                let _ = engine.updates.send_sync(UIUpdate::PerformanceMetric {
                     cpu_usage: cpu,
                     buffer_fill: health,
                     xruns: engine.xrun_count as u32,
@@ -361,7 +378,7 @@ fn build_audio_callback(
                     latency_ms,
                 });
 
-                let _ = engine.updates.try_send(UIUpdate::Position(next_position));
+                let _ = engine.updates.send_sync(UIUpdate::Position(next_position));
             }
         })) {
             data.fill(0.0);
@@ -374,7 +391,7 @@ fn build_audio_callback(
                 "Audio callback panicked with unknown error".to_string()
             };
 
-            let _ = updates.try_send(UIUpdate::Error(msg));
+            let _ = updates.send_sync(UIUpdate::Error(msg));
             engine.audio_state.playing.store(false, Ordering::Relaxed);
         }
     }
@@ -384,7 +401,7 @@ fn build_audio_callback(
 pub fn run_audio_thread(
     audio_state: Arc<AudioState>,
     realtime_commands: Receiver<RealtimeCommand>,
-    updates: Sender<UIUpdate>,
+    updates: UiTx,
     snapshot_rx: Receiver<AudioGraphSnapshot>,
     preferred_sample_rate: f32,
 ) {
@@ -449,7 +466,7 @@ pub fn run_audio_thread(
         xrun_count: 0,
         paused_last: false,
         host_facade,
-        last_ui_meter_update: Instant::now(),
+        last_ui_meter_update: now_secs(),
         free_running_samples: 0.0,
     };
 
@@ -481,7 +498,7 @@ pub fn run_audio_thread(
                     let level = peak_acc;
                     peak_acc = 0.0;
                     last_meter = web_time::Instant::now();
-                    let _ = updates_clone.try_send(UIUpdate::RecordingLevel(level));
+                    let _ = updates_clone.send_sync(UIUpdate::RecordingLevel(level));
                 }
             };
 
@@ -521,11 +538,38 @@ pub fn run_audio_thread(
     std::thread::park();
 }
 
+/// Wrapper to make `cpal::Stream` `Sync` for wasm storage.
+///
+/// The audioworklet backend's `Stream` contains `web_sys::AudioContext`
+/// (which wraps `JsValue` → `*mut u8`) and is missing `unsafe impl Sync`.
+/// On wasm, the stream is only accessed for `play()` from the main thread
+/// (user gesture), so this is safe.
+#[cfg(target_arch = "wasm32")]
+struct SyncStream(cpal::Stream);
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for SyncStream {}
+#[cfg(target_arch = "wasm32")]
+unsafe impl Sync for SyncStream {}
+
+#[cfg(target_arch = "wasm32")]
+static AUDIO_STREAM: OnceLock<SyncStream> = OnceLock::new();
+
+/// Must be called from a user-gesture handler (click, keypress, etc.)
+/// so the browser's autoplay policy allows the AudioContext to start.
+#[cfg(target_arch = "wasm32")]
+pub fn resume_audio() {
+    if let Some(stream) = AUDIO_STREAM.get() {
+        if stream.0.play().is_err() {
+            log::warn!("resume_audio: stream.play() failed");
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn run_audio_wasm(
     audio_state: Arc<AudioState>,
     realtime_commands: Receiver<RealtimeCommand>,
-    updates: Sender<UIUpdate>,
+    updates: UiTx,
     snapshot_rx: Receiver<AudioGraphSnapshot>,
     preferred_sample_rate: f32,
 ) {
@@ -592,7 +636,7 @@ pub fn run_audio_wasm(
         xrun_count: 0,
         paused_last: false,
         host_facade,
-        last_ui_meter_update: Instant::now(),
+        last_ui_meter_update: now_secs(),
         free_running_samples: 0.0,
     };
 
@@ -608,11 +652,35 @@ pub fn run_audio_wasm(
         )
         .expect("Failed to create audio stream");
 
-    stream.play().expect("Failed to start audio stream");
-
-    // Leak the stream so it lives for the lifetime of the page.
+    // Store the stream so it lives for the lifetime of the page.
     // Dropping it would close the AudioContext and stop audio.
-    std::mem::forget(stream);
+    // Playback will be started on first user gesture via resume_audio().
+    if AUDIO_STREAM.set(SyncStream(stream)).is_err() {
+        log::error!("Audio stream already initialized");
+    }
+
+    // Register a click handler to resume the AudioContext during a genuine
+    // user-gesture event (rAF callbacks may not carry transient activation).
+    // Must use FnMut, not FnOnce — the listener fires on every click.
+    let canvas = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("yadaw_canvas"));
+    if let Some(canvas) = canvas {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen::prelude::*;
+        let mut resumed = false;
+        let closure = Closure::wrap(Box::new(move || {
+            if !resumed {
+                resumed = true;
+                if let Some(s) = AUDIO_STREAM.get() {
+                    let _ = s.0.play();
+                }
+            }
+        }) as Box<dyn FnMut()>);
+        let cb: &js_sys::Function = closure.as_ref().unchecked_ref();
+        let _ = canvas.add_event_listener_with_callback("click", cb);
+        closure.forget();
+    }
 }
 
 impl AudioEngine {
@@ -622,7 +690,7 @@ impl AudioEngine {
         export_sample_rate: f32,
     ) -> Result<Self, anyhow::Error> {
         // Create a dummy channel since we don't send UI updates
-        let (dummy_tx, _) = flume::unbounded::<UIUpdate>();
+        let (dummy_tx, _) = wasm_safe_mutex::mpsc::channel::<UIUpdate>();
 
         let host_cfg = HostConfig {
             sample_rate: export_sample_rate as f64,
@@ -661,7 +729,7 @@ impl AudioEngine {
             xrun_count: 0,
             paused_last: false,
             host_facade,
-            last_ui_meter_update: Instant::now(),
+            last_ui_meter_update: now_secs(),
             free_running_samples: 0.0,
         };
 
@@ -888,7 +956,7 @@ impl AudioEngine {
                             .position(|&id| id == plugin_id)
                             .unwrap_or(proc.plugin_order.len().saturating_sub(1));
 
-                        let _ = self.updates.try_send(UIUpdate::PluginParamsDiscovered {
+                        let _ = self.updates.send_sync(UIUpdate::PluginParamsDiscovered {
                             track_id,
                             plugin_idx,
                             has_editor,
@@ -898,7 +966,7 @@ impl AudioEngine {
                     Err(e) => {
                         let msg = format!("Failed to instantiate plugin {}: {}", uri, e);
                         log::error!("{}", msg);
-                        let _ = self.updates.try_send(UIUpdate::Error(msg));
+                        let _ = self.updates.send_sync(UIUpdate::Error(msg));
                     }
                 }
             }
@@ -999,7 +1067,7 @@ impl AudioEngine {
                                 if let Err(e) = guard.open_editor() {
                                     let msg = format!("Failed to open editor: {e}");
                                     log::error!("{}", msg);
-                                    let _ = self.updates.try_send(UIUpdate::Error(msg));
+                                    let _ = self.updates.send_sync(UIUpdate::Error(msg));
                                 }
                             }
                         }
@@ -1434,15 +1502,15 @@ impl AudioEngine {
         }
 
         // Send meters at ~60 FPS
-        let now = Instant::now();
-        if now - self.last_ui_meter_update >= web_time::Duration::from_millis(16) {
+        let now = now_secs();
+        if now - self.last_ui_meter_update >= 0.016 {
             self.last_ui_meter_update = now;
             let _ = self
                 .updates
-                .try_send(crate::messages::UIUpdate::TrackLevels(track_peaks));
+                .send_sync(crate::messages::UIUpdate::TrackLevels(track_peaks));
             let _ = self
                 .updates
-                .try_send(crate::messages::UIUpdate::MasterLevel(
+                .send_sync(crate::messages::UIUpdate::MasterLevel(
                     master_peak_l,
                     master_peak_r,
                 ));
@@ -1602,7 +1670,7 @@ impl AudioEngine {
                         })
                         .collect();
 
-                    let _ = self.updates.try_send(UIUpdate::PluginParamsDiscovered {
+                    let _ = self.updates.send_sync(UIUpdate::PluginParamsDiscovered {
                         track_id,
                         plugin_idx,
                         has_editor: inst.has_editor(),
@@ -1632,7 +1700,7 @@ impl AudioEngine {
                         "Failed to load plugin '{}' on track {}: {}",
                         pdesc.name, track_id, e
                     );
-                    let _ = self.updates.try_send(UIUpdate::Error(msg));
+                    let _ = self.updates.send_sync(UIUpdate::Error(msg));
 
                     let pp = PluginProcessorUnified {
                         rt_instance_id: None,
@@ -1873,7 +1941,9 @@ impl AudioEngine {
                         log::error!("{}", &msg);
                         ppu.bypass = true;
 
-                        let _ = self.updates.try_send(crate::messages::UIUpdate::Error(msg));
+                        let _ = self
+                            .updates
+                            .send_sync(crate::messages::UIUpdate::Error(msg));
                     }
                 }
                 // Do not feed bad output forward; fall back to silence in out_l/out_r (already zeroed)
