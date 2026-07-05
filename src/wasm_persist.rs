@@ -12,64 +12,19 @@ static CONFIG_CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::
 
 #[cfg(target_arch = "wasm32")]
 mod opfs_io {
-    use super::*;
-    use opfs as opfs_crate;
-    use opfs_crate::persistent;
-    use opfs_crate::{
-        DirectoryHandle as _, FileHandle as _, WritableFileStream as _,
-    };
-
-    async fn ensure_dir_path(
-        root: &mut persistent::DirectoryHandle,
-        path: &str,
-    ) -> Result<persistent::DirectoryHandle, String> {
-        let mut dir = root.clone();
-        for segment in path.split('/') {
-            dir = dir
-                .get_directory_handle_with_options(
-                    segment,
-                    &opfs_crate::GetDirectoryHandleOptions { create: true },
-                )
-                .await
-                .map_err(|e| format!("create dir {segment}: {e}"))?;
-        }
-        Ok(dir)
-    }
-
-    async fn dir_path(
-        root: &mut persistent::DirectoryHandle,
-        path: &str,
-    ) -> Result<persistent::DirectoryHandle, String> {
-        if let Some(parent) = path.rsplit_once('/') {
-            let mut dir = root.clone();
-            for segment in parent.0.split('/') {
-                dir = dir
-                    .get_directory_handle_with_options(
-                        segment,
-                        &opfs_crate::GetDirectoryHandleOptions { create: true },
-                    )
-                    .await
-                    .map_err(|e| format!("create dir {segment}: {e}"))?;
-            }
-            Ok(dir)
-        } else {
-            Ok(root.clone())
-        }
-    }
+    use std::collections::HashMap;
 
     pub async fn init() -> Result<(), String> {
-        let mut root = persistent::app_specific_dir()
-            .await
-            .map_err(|e| format!("OPFS init: {e}"))?;
-        for name in &[
-            crate::paths::opfs::DIR_CONFIG,
-            crate::paths::opfs::DIR_CACHE,
+        // Ensure directories exist for features that may not have
+        // written files yet (projects, presets, plugins).
+        for path in &[
             crate::paths::opfs::DIR_PROJECTS,
             crate::paths::opfs::DIR_PRESETS,
             crate::paths::opfs::DIR_PLUGINS,
-            crate::paths::opfs::DIR_LAYOUTS,
         ] {
-            ensure_dir_path(&mut root, name).await?;
+            opfs::ensure_dir(path)
+                .await
+                .map_err(|e| format!("OPFS init: {e}"))?;
         }
         let mut map = HashMap::new();
         for key in &[
@@ -85,60 +40,20 @@ mod opfs_io {
                 map.insert(*key, data);
             }
         }
-        let _ = PRELOADED.set(map);
+        let _ = super::PRELOADED.set(map);
         Ok(())
     }
 
     pub(super) fn get_preloaded(key: &str) -> Option<&str> {
-        PRELOADED.get().and_then(|m| m.get(key).map(|s| s.as_str()))
+        super::PRELOADED.get().and_then(|m| m.get(key).map(|s| s.as_str()))
     }
 
     async fn read_string(name: &str) -> Result<String, String> {
-        let data = read_file(name).await?;
+        let data = opfs::read(name)
+            .await
+            .map_err(|e| format!("read {name}: {e}"))?;
         String::from_utf8(data).map_err(|e| format!("decode {name}: {e}"))
     }
-
-    pub(super) async fn read_file(name: &str) -> Result<Vec<u8>, String> {
-        let mut root = persistent::app_specific_dir()
-            .await
-            .map_err(|e| format!("OPFS root: {e}"))?;
-        let mut dir = dir_path(&mut root, name).await?;
-        let file_name = name.rsplit_once('/').map(|(_, f)| f).unwrap_or(name);
-        let mut file = dir
-            .get_file_handle_with_options(file_name, &opfs_crate::GetFileHandleOptions { create: false })
-            .await
-            .map_err(|e| format!("open {name}: {e}"))?;
-        file.read().await.map_err(|e| format!("read {name}: {e}"))
-    }
-
-    pub(super) async fn write_file(name: &str, data: &[u8]) -> Result<(), String> {
-        let mut root = persistent::app_specific_dir()
-            .await
-            .map_err(|e| format!("OPFS root: {e}"))?;
-        let mut dir = dir_path(&mut root, name).await?;
-        let file_name = name.rsplit_once('/').map(|(_, f)| f).unwrap_or(name);
-        let mut file = dir
-            .get_file_handle_with_options(file_name, &opfs_crate::GetFileHandleOptions { create: true })
-            .await
-            .map_err(|e| format!("open {name}: {e}"))?;
-        let mut writer = file
-            .create_writable_with_options(&opfs_crate::CreateWritableOptions {
-                keep_existing_data: false,
-                mode: opfs_crate::WritableMode::Siloed,
-            })
-            .await
-            .map_err(|e| format!("writer {name}: {e}"))?;
-        writer
-            .write_at_cursor_pos(data)
-            .await
-            .map_err(|e| format!("write {name}: {e}"))?;
-        writer
-            .close()
-            .await
-            .map_err(|e| format!("close {name}: {e}"))
-    }
-
-
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -175,7 +90,7 @@ pub async fn cache_audio_by_hash(hash: u64, samples: &[f32]) -> anyhow::Result<(
     #[cfg(target_arch = "wasm32")]
     {
         let full_key = format!("{}/{}", crate::paths::opfs::DIR_CACHE, key);
-        opfs_io::write_file(&full_key, data)
+        opfs::write(&full_key, data)
             .await
             .map_err(|e| anyhow::anyhow!("cache audio: {e}"))?;
     }
@@ -193,7 +108,7 @@ pub async fn read_cached_audio_by_hash(hash: u64) -> Option<Vec<f32>> {
     #[cfg(target_arch = "wasm32")]
     {
         let full_key = format!("{}/{}", crate::paths::opfs::DIR_CACHE, key);
-        let data = opfs_io::read_file(&full_key).await.ok()?;
+        let data = opfs::read(&full_key).await.ok()?;
         let (_prefix, samples, _suffix) = unsafe { data.align_to::<f32>() };
         Some(samples.to_vec())
     }
@@ -211,7 +126,7 @@ pub fn save_config_string(wasm_key: &str, fs_path: &Path, data: &str) -> anyhow:
         let key = wasm_key.to_string();
         let data = data.to_string();
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = opfs_io::write_file(&key, data.as_bytes()).await;
+            let _ = opfs::write(&key, data.as_bytes()).await;
         });
         return Ok(());
     }

@@ -3241,7 +3241,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "opfs"
 version = "0.2.0"
-source = "git+https://github.com/mlm-games/opfs#6fa7e7d093515ed971d6cf4037da4a47614c82a3"
+source = "git+https://github.com/mlm-games/opfs#ecf5916ad0ba98769b8bc5d8812676bfa6ea6283"
 dependencies = [
  "dirs",
  "futures",
