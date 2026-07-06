@@ -17,7 +17,7 @@ Current intention is to not fill the app with patches for outdated/non-standardi
 
 #### Missing common features (would not be done in the near future)
 
-- Partial plugin support (LV2, VST3 (experimental), and CLAP only).
+- Partial plugin support (LV2, VST3 (experimental and lacks few features, will not work with timer based UIs like geonkick's), and CLAP only).
 - No Web runtime plugin support (via .clap bundle import), since libloading cant be used on wasm
 
 ## Quick start
