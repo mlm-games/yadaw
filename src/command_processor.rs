@@ -408,12 +408,7 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if from_idx < track.plugin_chain.len() && to_idx < track.plugin_chain.len() {
                     let plugin = track.plugin_chain.remove(from_idx);
-                    let insert_pos = if from_idx < to_idx {
-                        to_idx - 1
-                    } else {
-                        to_idx
-                    };
-                    track.plugin_chain.insert(insert_pos, plugin);
+                    track.plugin_chain.insert(to_idx, plugin);
                 }
             }
             send_graph_snapshot(&state, snapshot_tx);
