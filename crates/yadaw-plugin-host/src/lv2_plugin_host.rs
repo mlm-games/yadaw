@@ -1,9 +1,11 @@
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
-use livi::event::LV2AtomSequence;
-use livi::{Features, FeaturesBuilder, Instance, PortCounts, PortType, World};
 use std::collections::HashMap;
 use std::sync::Arc;
+use yeli::{
+    AtomSequence, EmptyPortConnections, Features, FeaturesBuilder, PortIndex, PortType, PortCounts,
+    World,
+};
 
 #[derive(Clone, Debug)]
 pub struct PluginInfo {
@@ -18,7 +20,7 @@ pub struct PluginInfo {
 
 #[derive(Clone, Debug)]
 pub struct ControlPortInfo {
-    pub index: usize,
+    pub index: u32,
     pub name: String,
     pub symbol: String,
     pub default: f32,
@@ -36,7 +38,7 @@ pub struct LV2PluginHost {
 
 impl LV2PluginHost {
     pub fn new(sample_rate: f64, max_block_size: usize) -> Result<Self> {
-        let world = World::new();
+        let world = World::discover();
 
         let features = world.build_features(FeaturesBuilder {
             min_block_length: 1,
@@ -50,20 +52,21 @@ impl LV2PluginHost {
 
                 let control_ports = plugin
                     .ports()
-                    .filter(|p| p.port_type == PortType::ControlInput)
+                    .iter()
+                    .filter(|p| p.port_type() == PortType::ControlInput)
                     .map(|p| ControlPortInfo {
-                        index: p.index.0,
+                        index: p.index,
                         name: p.name.clone(),
                         symbol: p.symbol.clone(),
-                        default: p.default_value,
-                        min: p.min_value.unwrap_or(0.0),
-                        max: p.max_value.unwrap_or(1.0),
+                        default: p.default.unwrap_or(0.0),
+                        min: p.minimum.unwrap_or(0.0),
+                        max: p.maximum.unwrap_or(1.0),
                     })
                     .collect();
 
                 PluginInfo {
-                    uri: plugin.uri(),
-                    name: plugin.name(),
+                    uri: plugin.uri.clone(),
+                    name: plugin.name.clone(),
                     is_instrument: plugin.is_instrument(),
                     audio_inputs: port_counts.audio_inputs,
                     audio_outputs: port_counts.audio_outputs,
@@ -92,26 +95,25 @@ impl LV2PluginHost {
             .plugin_by_uri(uri)
             .ok_or_else(|| anyhow!("Plugin not found: {}", uri))?;
 
-        let instance = unsafe {
-            plugin
-                .instantiate(self.features.clone(), self.sample_rate)
-                .map_err(|_| anyhow!("Failed to instantiate plugin"))?
-        };
+        let instance = self
+            .world
+            .instantiate_with_features(plugin, self.sample_rate, &self.features)
+            .map_err(|_| anyhow!("Failed to instantiate plugin"))?;
 
         let params = Arc::new(DashMap::new());
         let mut control_port_indices = HashMap::new();
 
         for port in plugin.ports() {
-            if port.port_type == PortType::ControlInput {
-                params.insert(port.symbol.clone(), port.default_value);
-                control_port_indices.insert(port.symbol.clone(), port.index);
+            if port.port_type() == PortType::ControlInput {
+                params.insert(port.symbol.clone(), port.default.unwrap_or(0.0));
+                control_port_indices.insert(port.symbol.clone(), PortIndex(port.index));
             }
         }
 
         if cfg!(debug_assertions) {
             println!(
                 "[LV2][instantiate] {} | audio_in={} audio_out={} atom_in={} atom_out={}",
-                plugin.uri(),
+                plugin.uri,
                 plugin.port_counts().audio_inputs,
                 plugin.port_counts().audio_outputs,
                 plugin.port_counts().atom_sequence_inputs,
@@ -122,13 +124,13 @@ impl LV2PluginHost {
         Ok(LV2PluginInstance {
             instance,
             features: self.features.clone(),
-            port_counts: *plugin.port_counts(),
+            port_counts: plugin.port_counts(),
             params,
-            midi_sequence: Some(LV2AtomSequence::new(&self.features, 4096)),
+            midi_sequence: Some(AtomSequence::with_features(4096, &self.features, true)),
             control_port_indices,
-            empty_atom_in: LV2AtomSequence::new(&self.features, 1024),
+            empty_atom_in: AtomSequence::with_features(1024, &self.features, true),
             atom_outputs: (0..plugin.port_counts().atom_sequence_outputs)
-                .map(|_| LV2AtomSequence::new(&self.features, 4096))
+                .map(|_| AtomSequence::with_features(4096, &self.features, false))
                 .collect(),
 
             max_block_size: self.max_block_size,
@@ -146,18 +148,16 @@ impl LV2PluginHost {
     }
 }
 
-#[derive(Debug)]
-
 pub struct LV2PluginInstance {
-    instance: Instance,
+    instance: yeli::Instance,
     features: Arc<Features>,
     port_counts: PortCounts,
     params: Arc<DashMap<String, f32>>,
-    pub midi_sequence: Option<LV2AtomSequence>,
-    control_port_indices: HashMap<String, livi::PortIndex>,
+    pub midi_sequence: Option<AtomSequence>,
+    control_port_indices: HashMap<String, PortIndex>,
 
-    empty_atom_in: LV2AtomSequence,
-    atom_outputs: Vec<LV2AtomSequence>,
+    empty_atom_in: AtomSequence,
+    atom_outputs: Vec<AtomSequence>,
 
     max_block_size: usize,
     silent_audio: Vec<f32>,
@@ -174,7 +174,7 @@ impl LV2PluginInstance {
     pub fn has_midi_events(&self) -> bool {
         self.midi_sequence
             .as_ref()
-            .map(|s| s.iter().next().is_some())
+            .map(|s| !s.events().is_empty())
             .unwrap_or(false)
     }
 
@@ -246,7 +246,7 @@ impl LV2PluginInstance {
             out_refs.push(&mut buf[..len]);
         }
 
-        let atom_in_refs: Vec<&LV2AtomSequence> = if ai > 0 {
+        let atom_in_refs: Vec<&AtomSequence> = if ai > 0 {
             let atom = if use_midi && self.has_midi_events() {
                 self.midi_sequence.as_ref().unwrap()
             } else {
@@ -257,17 +257,16 @@ impl LV2PluginInstance {
             Vec::new()
         };
 
-        let ports = livi::EmptyPortConnections::new()
+        let ports = EmptyPortConnections::new()
             .with_audio_inputs(in_refs.into_iter())
             .with_audio_outputs(out_refs.into_iter())
             .with_atom_sequence_inputs(atom_in_refs.into_iter())
             .with_atom_sequence_outputs(atom_outputs.iter_mut());
 
-        let result = unsafe {
-            self.instance
-                .run(samples, ports)
-                .map_err(|e| anyhow!("[LV2] run() error: {}", e))
-        };
+        let result = self
+            .instance
+            .run_with_ports(samples, ports)
+            .map_err(|e| anyhow!("[LV2] run() error: {}", e));
 
         self.atom_outputs = atom_outputs;
         self.scratch_audio_out = scratch_audio;
@@ -301,16 +300,12 @@ impl LV2PluginInstance {
         let mut sequence = self
             .midi_sequence
             .take()
-            .unwrap_or_else(|| LV2AtomSequence::new(&self.features, 4096));
+            .unwrap_or_else(|| AtomSequence::with_features(4096, &self.features, true));
         sequence.clear();
 
         for &(status, data1, data2, time_in_frames) in events {
             let midi_data = [status, data1, data2];
-            let _ = sequence.push_midi_event::<3>(
-                time_in_frames,
-                self.features.midi_urid(),
-                &midi_data,
-            );
+            let _ = sequence.push_event(time_in_frames, self.features.midi_urid(), &midi_data);
         }
 
         self.midi_sequence = Some(sequence);
@@ -320,12 +315,12 @@ impl LV2PluginInstance {
         let mut sequence = self
             .midi_sequence
             .take()
-            .unwrap_or_else(|| LV2AtomSequence::new(&self.features, 4096));
+            .unwrap_or_else(|| AtomSequence::with_features(4096, &self.features, true));
         sequence.clear();
 
         for &(pitch, velocity, time) in notes {
             let midi_data = [0x90, pitch, velocity];
-            let _ = sequence.push_midi_event::<3>(time, self.features.midi_urid(), &midi_data);
+            let _ = sequence.push_event(time, self.features.midi_urid(), &midi_data);
         }
 
         self.midi_sequence = Some(sequence);
