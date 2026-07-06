@@ -4,12 +4,8 @@ mod clap_impl {
     #[cfg(feature = "clap-host")]
     use clack_host::utils::Cookie;
     use std::collections::HashMap;
-    #[cfg(unix)]
-    use std::mem;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::Path;
-    #[cfg(unix)]
-    use std::ptr;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex, OnceLock};
@@ -33,19 +29,6 @@ mod clap_impl {
     #[cfg(feature = "clap-host")]
     use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
     use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
-
-    #[cfg(unix)]
-    use x11_dl::xlib;
-
-    #[cfg(not(unix))]
-    mod xlib {
-        pub struct Xlib;
-        impl Xlib {
-            pub fn open() -> Result<Xlib, ()> {
-                Err(())
-            }
-        }
-    }
 
     use yadaw_plugin_api::{
         BackendKind, HostConfig, MidiEvent, ParamKey, ParamKind, PluginBackend,
@@ -810,7 +793,6 @@ mod clap_impl {
         instance_id: MainThreadId,
         timer_state: Arc<Mutex<TimerState>>,
     ) {
-        let xlib = xlib::Xlib::open().ok();
         let mut editor: Option<EditorState> = None;
 
         loop {
@@ -842,17 +824,17 @@ mod clap_impl {
             // Process commands (non-blocking, wake immediately on arrival)
             match cmd_rx.recv_timeout(Duration::from_millis(16)) {
                 Ok(MainThreadCommand::OpenEditor(result_tx)) => {
-                    let result = open_editor_on_main_thread(&mut instance, &xlib, &mut editor);
+                    let result = open_editor_on_main_thread(&mut instance, &mut editor);
                     if result.is_err() {
                         if let Some(state) = editor.take() {
-                            close_editor_state(&mut instance, &xlib, state);
+                            close_editor_state(&mut instance, state);
                         }
                     }
                     let _ = result_tx.send(result);
                 }
                 Ok(MainThreadCommand::CloseEditor) => {
                     if let Some(state) = editor.take() {
-                        close_editor_state(&mut instance, &xlib, state);
+                        close_editor_state(&mut instance, state);
                     }
                 }
                 Ok(MainThreadCommand::RequestResize(new_size)) => {
@@ -865,7 +847,7 @@ mod clap_impl {
                 Ok(MainThreadCommand::GuiClosed) => {
                     log::info!("Plugin GUI closed by plugin");
                     if let Some(state) = editor.take() {
-                        close_editor_state(&mut instance, &xlib, state);
+                        close_editor_state(&mut instance, state);
                     }
                 }
                 Ok(MainThreadCommand::Shutdown {
@@ -873,7 +855,7 @@ mod clap_impl {
                     result_tx,
                 }) => {
                     if let Some(state) = editor.take() {
-                        close_editor_state(&mut instance, &xlib, state);
+                        close_editor_state(&mut instance, state);
                     }
                     let stopped = processor.stop_processing();
                     instance.deactivate(stopped);
@@ -883,7 +865,7 @@ mod clap_impl {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     if let Some(state) = editor.take() {
-                        close_editor_state(&mut instance, &xlib, state);
+                        close_editor_state(&mut instance, state);
                     }
                     break;
                 }
@@ -892,9 +874,9 @@ mod clap_impl {
             // Poll X11 events for embedded editor
             #[cfg(unix)]
             if let Some(ref mut state) = editor {
-                if pump_x11_events(&xlib, state) {
+                if pump_x11_events(state) {
                     if let Some(state) = editor.take() {
-                        close_editor_state(&mut instance, &xlib, state);
+                        close_editor_state(&mut instance, state);
                     }
                 }
             }
@@ -906,58 +888,15 @@ mod clap_impl {
     enum EditorState {
         Floating,
         #[cfg(unix)]
-        Embedded {
-            display: *mut xlib::Display,
-            parent_win: xlib::Window,
-            child_win: xlib::Window,
-            wm_delete_window: u64,
-            wm_protocols: u64,
-            size: (u32, u32),
-            expose_tick: u32,
-        },
+        Embedded(crate::editor_host::x11::X11State),
     }
 
     unsafe impl Send for EditorState {}
     unsafe impl Sync for EditorState {}
 
-    #[cfg(unix)]
-    fn send_expose_event(
-        xlib: &xlib::Xlib,
-        display: *mut xlib::Display,
-        win: xlib::Window,
-        w: i32,
-        h: i32,
-    ) {
-        unsafe {
-            let mut ev: xlib::XEvent = mem::zeroed();
-            ev.type_ = xlib::Expose as i32;
-            let expose = &mut ev.expose;
-            expose.type_ = xlib::Expose as i32;
-            expose.window = win;
-            expose.x = 0;
-            expose.y = 0;
-            expose.width = w;
-            expose.height = h;
-            expose.count = 0;
-            (xlib.XSendEvent)(display, win, 0, 0, &mut ev);
-            (xlib.XFlush)(display);
-        }
-    }
-
-    #[cfg(unix)]
-    unsafe fn cleanup_x11_window(
-        xlib: &xlib::Xlib,
-        display: *mut xlib::Display,
-        win: xlib::Window,
-    ) {
-        unsafe { (xlib.XDestroyWindow)(display, win) };
-        unsafe { (xlib.XCloseDisplay)(display) };
-    }
-
     /// Tries floating first, falls back to embedded.
     fn open_editor_on_main_thread(
         instance: &mut PluginInstance<MyHost>,
-        _xlib: &Option<xlib::Xlib>,
         editor: &mut Option<EditorState>,
     ) -> Result<()> {
         if editor.is_some() {
@@ -1022,64 +961,25 @@ mod clap_impl {
                 ));
             }
 
-            let xlib = _xlib.as_ref().ok_or_else(|| anyhow!("Xlib not available"))?;
+            let (xlib, display) = crate::editor_host::x11::open_display()?;
 
-            // Open X11 display
-            let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
-            if display.is_null() {
-                return Err(anyhow!("Cannot open X11 display"));
-            }
+            let preferred_size = gui_ext.get_size(&mut instance.plugin_handle());
+            log::info!("Plugin preferred size: {:?}", preferred_size);
+            let size = preferred_size
+                .map(|s| (s.width, s.height))
+                .unwrap_or((800, 600));
+            let parent_win =
+                crate::editor_host::x11::create_parent_window(&xlib, display, size.0, size.1)?;
 
-            let screen = unsafe { (xlib.XDefaultScreen)(display) };
-            let root = unsafe { (xlib.XRootWindow)(display, screen) };
-            let white = unsafe { (xlib.XWhitePixel)(display, screen) };
-
-            let parent_win = unsafe {
-                (xlib.XCreateSimpleWindow)(display, root, 100, 100, 800, 600, 0, 0, white)
-            };
-
-            unsafe {
-                (xlib.XSelectInput)(
-                    display,
-                    parent_win,
-                    (xlib::StructureNotifyMask
-                        | xlib::ExposureMask
-                        | xlib::SubstructureNotifyMask
-                        | xlib::PropertyChangeMask) as i64,
-                );
-            }
-
-            let wm_delete_window =
-                unsafe { (xlib.XInternAtom)(display, c"WM_DELETE_WINDOW".as_ptr(), 0) };
-            let wm_protocols =
-                unsafe { (xlib.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
-            unsafe {
-                (xlib.XSetWMProtocols)(
-                    display,
-                    parent_win,
-                    &wm_delete_window as *const _ as *mut _,
-                    1,
-                );
-            }
-
-            unsafe {
-                (xlib.XMapWindow)(display, parent_win);
-                (xlib.XFlush)(display);
-            }
-
-            // Now, create (embedded)
+            // create (embedded)
             gui_ext
                 .create(&mut instance.plugin_handle(), embedded_cfg)
                 .map_err(|e| {
-                    unsafe {
-                        cleanup_x11_window(xlib, display, parent_win);
-                    }
+                    crate::editor_host::x11::cleanup_x11_window(&xlib, display, parent_win);
                     anyhow!("Plugin GUI create (embedded) failed: {e:?}")
                 })?;
 
-            // Preferred size
-            let preferred_size = gui_ext.get_size(&mut instance.plugin_handle());
-            log::info!("Plugin preferred size: {:?}", preferred_size);
+            // Resize parent window to preferred size
             if let Some(size) = preferred_size {
                 unsafe {
                     (xlib.XResizeWindow)(display, parent_win, size.width, size.height);
@@ -1094,9 +994,7 @@ mod clap_impl {
             log::info!("set_parent result: {:?}", sp_result);
             if let Err(e) = sp_result {
                 let _ = gui_ext.destroy(&mut instance.plugin_handle());
-                unsafe {
-                    cleanup_x11_window(xlib, display, parent_win);
-                }
+                crate::editor_host::x11::cleanup_x11_window(&xlib, display, parent_win);
                 return Err(anyhow!("set_parent failed: {e:?}"));
             }
 
@@ -1116,9 +1014,7 @@ mod clap_impl {
             log::info!("show result: {:?}", show_result);
             if let Err(e) = show_result {
                 let _ = gui_ext.destroy(&mut instance.plugin_handle());
-                unsafe {
-                    cleanup_x11_window(xlib, display, parent_win);
-                }
+                crate::editor_host::x11::cleanup_x11_window(&xlib, display, parent_win);
                 return Err(anyhow!("show failed: {e:?}"));
             }
 
@@ -1138,43 +1034,23 @@ mod clap_impl {
                 (xlib.XSync)(display, 0);
             }
 
-            // get ID for Expose-based paint triggering
-            let child_win = unsafe {
-                let mut root_ret: xlib::Window = 0;
-                let mut parent_ret: xlib::Window = 0;
-                let mut children: *mut xlib::Window = ptr::null_mut();
-                let mut nchildren: std::os::raw::c_uint = 0;
-                let ok = (xlib.XQueryTree)(
-                    display,
-                    parent_win,
-                    &mut root_ret,
-                    &mut parent_ret,
-                    &mut children,
-                    &mut nchildren,
-                );
-                let found = if ok != 0 && !children.is_null() && nchildren > 0 {
-                    *children.offset(0)
-                } else {
-                    0
-                };
-                if !children.is_null() {
-                    (xlib.XFree)(children as *mut _);
-                }
-                found
-            };
-
-            let size = preferred_size
-                .map(|s| (s.width, s.height))
-                .unwrap_or((800, 600));
+            let child_win = crate::editor_host::x11::find_child_window(&xlib, display, parent_win);
 
             // Send initial Expose to child to kick-start painting
             if child_win != 0 {
-                let (w, h) = size;
-                send_expose_event(xlib, display, child_win, w as i32, h as i32);
+                crate::editor_host::x11::send_expose_event(
+                    &xlib, display, child_win, size.0 as i32, size.1 as i32,
+                );
                 log::info!("Sent initial Expose to child 0x{:x}", child_win);
             }
 
-            *editor = Some(EditorState::Embedded {
+            let wm_delete_window =
+                unsafe { (xlib.XInternAtom)(display, c"WM_DELETE_WINDOW".as_ptr(), 0) };
+            let wm_protocols =
+                unsafe { (xlib.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
+
+            *editor = Some(EditorState::Embedded(crate::editor_host::x11::X11State {
+                xlib,
                 display,
                 parent_win,
                 child_win,
@@ -1182,7 +1058,7 @@ mod clap_impl {
                 wm_protocols,
                 size,
                 expose_tick: 0,
-            });
+            }));
             log::info!("Plugin GUI opened in embedded mode");
             return Ok(());
         }
@@ -1195,7 +1071,6 @@ mod clap_impl {
 
     fn close_editor_state(
         instance: &mut PluginInstance<MyHost>,
-        _xlib: &Option<xlib::Xlib>,
         state: EditorState,
     ) {
         if let Some(gui_ext) = instance.plugin_handle().get_extension::<PluginGui>() {
@@ -1207,76 +1082,25 @@ mod clap_impl {
             EditorState::Floating => {}
 
             #[cfg(unix)]
-            EditorState::Embedded {
-                display,
-                parent_win,
-                ..
-            } => {
-                if let Some(xlib) = _xlib {
-                    unsafe {
-                        (xlib.XDestroyWindow)(display, parent_win);
-                        (xlib.XCloseDisplay)(display);
-                    }
-                }
+            EditorState::Embedded(x11_state) => {
+                crate::editor_host::x11::cleanup_x11_window(
+                    &x11_state.xlib,
+                    x11_state.display,
+                    x11_state.parent_win,
+                );
             }
         }
     }
 
     /// Returns `true` if the editor was closed (user clicked the close button).
     #[cfg(unix)]
-    fn pump_x11_events(xlib: &Option<xlib::Xlib>, state: &mut EditorState) -> bool {
-        let xlib = match xlib {
-            Some(x) => x,
-            None => return false,
-        };
-
-        let (display, child_win, wm_delete_window, wm_protocols, size, expose_tick) = match state {
-            EditorState::Embedded {
-                display,
-                child_win,
-                wm_delete_window,
-                wm_protocols,
-                size,
-                expose_tick,
-                ..
-            } => (
-                display,
-                child_win,
-                wm_delete_window,
-                wm_protocols,
-                size,
-                expose_tick,
-            ),
-            _ => return false,
-        };
-
-        while unsafe { (xlib.XPending)(*display) } > 0 {
-            let mut event: xlib::XEvent = unsafe { mem::zeroed() };
-            unsafe { (xlib.XNextEvent)(*display, &mut event) };
-
-            match unsafe { event.type_ } {
-                xlib::ClientMessage => {
-                    let msg = unsafe { event.client_message };
-                    if msg.message_type == *wm_protocols
-                        && msg.data.as_longs()[0] as u64 == *wm_delete_window
-                    {
-                        return true;
-                    }
-                }
-                _ => {}
+    fn pump_x11_events(state: &mut EditorState) -> bool {
+        match state {
+            EditorState::Embedded(x11_state) => {
+                crate::editor_host::x11::pump_events(x11_state)
             }
+            _ => false,
         }
-
-        // Periodically send Expose to child as a paint kick
-        if *child_win != 0 {
-            *expose_tick += 1;
-            // Send Expose every ~8 calls (~128ms at 16ms loop)
-            if *expose_tick % 8 == 0 {
-                let (w, h) = *size;
-                send_expose_event(xlib, *display, *child_win, w as i32, h as i32);
-            }
-        }
-        false
     }
 
     pub use ClapHostBackend as Backend;

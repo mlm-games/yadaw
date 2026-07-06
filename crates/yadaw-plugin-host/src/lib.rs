@@ -1,5 +1,7 @@
 pub mod plugin_facade;
 
+pub mod editor_host;
+
 #[cfg(feature = "clap-host")]
 pub mod backend_clap;
 
