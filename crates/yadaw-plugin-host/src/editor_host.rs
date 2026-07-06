@@ -125,8 +125,8 @@ pub(crate) mod x11 {
 
     pub fn cleanup_x11_window(xlib: &xlib::Xlib, display: *mut xlib::Display, win: xlib::Window) {
         unsafe {
-            (xlib.XDestroyWindow)(display, win);
             (xlib.XCloseDisplay)(display);
+            let _ = win;
         }
     }
 
@@ -160,6 +160,23 @@ pub(crate) mod x11 {
 
         closed
     }
+}
+
+/// Install a silent X11 error handler so stale-window errors during cleanup
+pub fn silence_x11_errors() {
+    use std::sync::OnceLock;
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        if let Ok(xlib) = x11_dl::xlib::Xlib::open() {
+            extern "C" fn handler(
+                _: *mut x11_dl::xlib::Display,
+                _: *mut x11_dl::xlib::XErrorEvent,
+            ) -> i32 {
+                0 // ignore all errors
+            }
+            unsafe { (xlib.XSetErrorHandler)(Some(handler as extern "C" fn(_, _) -> i32)) };
+        }
+    });
 }
 
 /// Interface each plugin backend implements so the shared [`EditorHost`] can

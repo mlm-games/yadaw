@@ -205,12 +205,20 @@ impl PluginInstance for Lv2Instance {
     }
 
     fn open_editor(&mut self) -> Result<()> {
+        // Re-open after close: shut down the old editor thread first
         if self.editor_host.is_some() {
-            return Ok(());
+            if let Some(mut old) = self.editor_host.take() {
+                old.shutdown();
+            }
+            // Drop the old UiInstance only after the thread has exited.
+            self.inner.set_active_ui(None);
         }
+
+        crate::editor_host::silence_x11_errors();
 
         use crate::editor_host::x11;
 
+        // First-time open: spawn EditorHost from scratch.
         let (xlib, display) = x11::open_display()?;
         let size = (800, 600);
         let parent_win = x11::create_parent_window(&xlib, display, size.0, size.1)?;
@@ -222,10 +230,14 @@ impl PluginInstance for Lv2Instance {
         let ui = self.inner.open_editor_with_parent(parent_win as usize)?;
         let ui = Arc::new(ui);
         self.inner.set_active_ui(Some(ui.clone()));
+        self.inner.update_ui(&ui);
 
         let widget = ui.widget();
         let child_win = widget as u64;
-        eprintln!("[lv2 debug] widget={:p} child_win=0x{:x}", widget, child_win);
+        eprintln!(
+            "[lv2 debug] widget={:p} child_win=0x{:x}",
+            widget, child_win
+        );
 
         unsafe {
             (xlib.XMapSubwindows)(display, parent_win);

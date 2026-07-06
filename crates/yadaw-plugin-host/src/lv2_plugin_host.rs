@@ -185,6 +185,15 @@ impl LV2PluginInstance {
         self.active_ui = ui;
     }
 
+    pub fn take_active_ui(&mut self) -> Option<Arc<UiInstance>> {
+        self.active_ui.take()
+    }
+
+    /// Forward current control-port values to the given UI.
+    pub fn update_ui(&self, ui: &Arc<UiInstance>) {
+        self.instance.update_ui(ui);
+    }
+
     fn ensure_scratch_out(&mut self, n: usize, samples: usize) {
         if self.scratch_audio_out.len() < n {
             let add = n - self.scratch_audio_out.len();
@@ -270,7 +279,7 @@ impl LV2PluginInstance {
             .map_err(|e| anyhow!("[LV2] run() error: {}", e));
 
         if let Some(ref ui) = self.active_ui {
-            self.instance.update_ui(ui);
+            self.update_ui(ui);
         }
 
         for (symbol, pi) in &self.control_port_indices {
