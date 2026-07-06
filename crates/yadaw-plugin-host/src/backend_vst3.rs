@@ -11,6 +11,9 @@ mod vst3_impl {
         PluginInstance as UniInstance, ProcessCtx, UnifiedParamInfo, UnifiedPluginInfo,
     };
 
+    #[cfg(unix)]
+    use crate::editor_host::{EditorBackend, EditorHost};
+
     pub struct Vst3HostBackend {
         cfg: HostConfig,
     }
@@ -138,7 +141,8 @@ mod vst3_impl {
                 params: param_infos,
                 param_values,
                 sample_rate: self.cfg.sample_rate,
-                editor_window: None,
+                #[cfg(unix)]
+                editor_host: None,
             }))
         }
     }
@@ -148,14 +152,68 @@ mod vst3_impl {
         params: Vec<UnifiedParamInfo>,
         param_values: HashMap<u32, f32>,
         sample_rate: f64,
-        editor_window: Option<vst3_host::PluginWindow>,
+        #[cfg(unix)]
+        editor_host: Option<EditorHost>,
     }
 
     impl Drop for Vst3PluginInstance {
         fn drop(&mut self) {
+            #[cfg(unix)]
+            if let Some(mut host) = self.editor_host.take() {
+                host.shutdown();
+            }
             if let Ok(mut plugin) = self.plugin.lock() {
                 let _ = plugin.stop_processing();
             }
+        }
+    }
+
+    /// Backend used by [`EditorHost`] to manage the VST3 editor lifecycle.
+    #[cfg(unix)]
+    struct Vst3EditorBackend {
+        plugin: Arc<Mutex<vst3_host::Plugin>>,
+    }
+
+    #[cfg(unix)]
+    impl Vst3EditorBackend {
+        fn new(plugin: Arc<Mutex<vst3_host::Plugin>>) -> Self {
+            Self { plugin }
+        }
+    }
+
+    #[cfg(unix)]
+    impl EditorBackend for Vst3EditorBackend {
+        fn has_editor(&self) -> bool {
+            self.plugin.lock().map(|p| p.has_editor()).unwrap_or(false)
+        }
+
+        fn try_open_floating(&mut self) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn open_embedded(&mut self, parent_window: u32) -> Result<()> {
+            let handle = vst3_host::WindowHandle::from_x11(parent_window);
+            self.plugin
+                .lock()
+                .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?
+                .open_editor(handle)
+                .map_err(|e| anyhow!("Failed to open VST3 editor: {e}"))
+        }
+
+        fn close(&mut self) -> Result<()> {
+            self.plugin
+                .lock()
+                .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?
+                .close_editor()
+                .map_err(|e| anyhow!("Failed to close VST3 editor: {e}"))
+        }
+
+        fn preferred_size(&self) -> Option<(u32, u32)> {
+            self.plugin
+                .lock()
+                .ok()
+                .and_then(|p| p.get_editor_size().ok())
+                .map(|(w, h)| (w as u32, h as u32))
         }
     }
 
@@ -251,10 +309,6 @@ mod vst3_impl {
         }
 
         fn open_editor(&mut self) -> Result<()> {
-            if self.editor_window.is_some() {
-                return Ok(());
-            }
-
             let has_editor = self
                 .plugin
                 .lock()
@@ -264,13 +318,23 @@ mod vst3_impl {
                 return Err(anyhow!("VST3 plugin has no editor"));
             }
 
-            let mut window = vst3_host::PluginWindow::new(self.plugin.clone());
-            window
-                .open()
-                .map_err(|e| anyhow!("Failed to open VST3 editor: {e}"))?;
+            #[cfg(unix)]
+            {
+                if self.editor_host.is_none() {
+                    let backend = Vst3EditorBackend::new(self.plugin.clone());
+                    let host = EditorHost::spawn(Box::new(backend))
+                        .map_err(|e| anyhow!("Failed to spawn editor thread: {e}"))?;
+                    self.editor_host = Some(host);
+                }
+                self.editor_host
+                    .as_ref()
+                    .unwrap()
+                    .open_editor()
+                    .map_err(|e| anyhow!("Failed to open VST3 editor: {e}"))
+            }
 
-            self.editor_window = Some(window);
-            Ok(())
+            #[cfg(not(unix))]
+            Err(anyhow!("VST3 editor not supported on this platform"))
         }
 
         fn has_editor(&self) -> bool {
