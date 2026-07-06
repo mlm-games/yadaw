@@ -7,7 +7,7 @@ use crate::messages::{AudioCommand, PluginParamInfo};
 use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
 use crate::model::track::TrackType;
-use crate::plugin::get_control_port_info;
+
 use yadaw_plugin_api::{BackendKind, ParamKind};
 
 pub struct TracksPanel {
@@ -542,7 +542,7 @@ impl TracksPanel {
                         if plugin_idx < chain_len - 1 && ui.small_button("⏷").clicked() {
                             move_action = Some((plugin_idx, plugin_idx + 1));
                         }
-                        #[cfg(all(feature = "clap-host", not(target_os = "android")))]
+                        #[cfg(not(target_os = "android"))]
                         if has_editor && ui.button("Open Editor").clicked() {
                             app.open_plugin_editor(track_id, plugin_id);
                         }
@@ -610,26 +610,8 @@ impl TracksPanel {
 
                     // Draw parameters based on backend
                     match backend {
-                        BackendKind::Lv2 => {
-                            self.draw_lv2_params(
-                                ui,
-                                app,
-                                track_id,
-                                plugin_id,
-                                &plugin_uri,
-                                &params,
-                            );
-                        }
-                        BackendKind::Clap => {
-                            self.draw_clap_params(
-                                ui, app, track_id, plugin_id, plugin_idx, &params,
-                            );
-                        }
-                        BackendKind::Vst3 => {
-                            self.draw_clap_params(
-                                ui, app, track_id, plugin_id, plugin_idx, &params,
-                            );
-                        }
+                        BackendKind::Lv2 | BackendKind::Clap | BackendKind::Vst3 => self
+                            .draw_plugin_params(ui, app, track_id, plugin_id, plugin_idx, &params),
                     }
                 });
         }
@@ -655,78 +637,7 @@ impl TracksPanel {
         }
     }
 
-    fn draw_lv2_params(
-        &self,
-        ui: &mut egui::Ui,
-        app: &super::app::YadawApp,
-        track_id: u64,
-        plugin_id: u64,
-        plugin_uri: &str,
-        params: &HashMap<String, f32>,
-    ) {
-        for (pname, &pval) in params {
-            let mut v = pval;
-            ui.horizontal(|ui| {
-                ui.label(pname);
-
-                let meta = get_control_port_info(plugin_uri, pname);
-                let (min_v, max_v, default_v) = meta
-                    .as_ref()
-                    .map(|m| (m.min, m.max, m.default))
-                    .unwrap_or((0.0, 1.0, 0.0));
-                if ui
-                    .add(egui::Slider::new(&mut v, min_v..=max_v).show_value(true))
-                    .changed()
-                {
-                    let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                        track_id,
-                        plugin_id,
-                        pname.clone(),
-                        v,
-                    ));
-                }
-                if ui
-                    .small_button("↺")
-                    .on_hover_text(format!("Reset to default ({:.3})", default_v))
-                    .clicked()
-                {
-                    let _ = app.command_tx.send(AudioCommand::SetPluginParam(
-                        track_id,
-                        plugin_id,
-                        pname.clone(),
-                        default_v,
-                    ));
-                }
-
-                if ui
-                    .weak("⚡")
-                    .on_hover_text("Insert automation keyframe at current position")
-                    .clicked()
-                {
-                    let position = app.audio_state.get_position();
-                    let sample_rate = app.audio_state.sample_rate.load();
-                    let bpm = app.audio_state.bpm.load();
-                    let current_beat = if sample_rate > 0.0 && bpm > 0.0 {
-                        (position / sample_rate as f64) * (bpm as f64 / 60.0)
-                    } else {
-                        0.0
-                    };
-                    let target = AutomationTarget::PluginParam {
-                        plugin_id,
-                        param_name: pname.clone(),
-                    };
-                    let _ = app.command_tx.send(AudioCommand::AddAutomationPoint(
-                        track_id,
-                        target,
-                        current_beat,
-                        v,
-                    ));
-                }
-            });
-        }
-    }
-
-    fn draw_clap_params(
+    fn draw_plugin_params(
         &self,
         ui: &mut egui::Ui,
         app: &super::app::YadawApp,

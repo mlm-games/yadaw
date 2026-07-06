@@ -339,4 +339,17 @@ impl LV2PluginInstance {
     pub fn set_params_arc(&mut self, params: Arc<DashMap<String, f32>>) {
         self.params = params;
     }
+
+    /// Whether the plugin has a discoverable UI.
+    pub fn has_editor(&self) -> bool {
+        self.instance.has_editor()
+    }
+
+    /// Open the first discoverable UI. Returns the [`yeli::UiInstance`] that
+    /// keeps the editor alive — the caller must keep it alive.
+    pub fn open_editor(&self) -> Result<yeli::UiInstance> {
+        self.instance
+            .open_editor()
+            .map_err(|e| anyhow!("Failed to open LV2 UI: {e}"))
+    }
 }

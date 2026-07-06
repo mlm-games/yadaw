@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 
+use crate::editor_host::{EditorBackend, EditorHost};
 use yadaw_plugin_api::{
     BackendKind, HostConfig, MidiEvent, ParamKey, PluginBackend, PluginInstance, ProcessCtx,
     UnifiedParamInfo, UnifiedPluginInfo,
@@ -87,6 +88,7 @@ impl PluginBackend for Lv2HostBackend {
             uri: uri.to_string(),
             params,
             inner: instance,
+            editor_host: None,
         }))
     }
 }
@@ -96,6 +98,44 @@ pub struct Lv2Instance {
     uri: String,
     params: Vec<UnifiedParamInfo>,
     inner: crate::lv2_plugin_host::LV2PluginInstance,
+    editor_host: Option<EditorHost>,
+}
+
+/// Backend used by [`EditorHost`] to manage the LV2 UI lifecycle.
+///
+/// The UI is pre-opened by `Lv2Instance::open_editor` and handed into this
+/// backend, so `try_open_floating` is a no-op that returns `true`.
+struct Lv2EditorBackend {
+    ui: Option<yeli::UiInstance>,
+}
+
+impl Lv2EditorBackend {
+    fn new(ui: yeli::UiInstance) -> Self {
+        Self { ui: Some(ui) }
+    }
+}
+
+impl EditorBackend for Lv2EditorBackend {
+    fn has_editor(&self) -> bool {
+        true
+    }
+
+    fn try_open_floating(&mut self) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn open_embedded(&mut self, _parent_window: u32) -> Result<()> {
+        Err(anyhow!("Embedded LV2 UI not yet supported"))
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.ui.take();
+        Ok(())
+    }
+
+    fn preferred_size(&self) -> Option<(u32, u32)> {
+        None
+    }
 }
 
 #[cfg(feature = "lv2-legacy")]
@@ -145,5 +185,21 @@ impl PluginInstance for Lv2Instance {
 
     fn load_state(&mut self, _data: &[u8]) -> bool {
         false
+    }
+
+    fn has_editor(&self) -> bool {
+        self.inner.has_editor()
+    }
+
+    fn open_editor(&mut self) -> Result<()> {
+        if self.editor_host.is_some() {
+            return Ok(());
+        }
+        let ui = self.inner.open_editor()?;
+        let backend = Lv2EditorBackend::new(ui);
+        let host = EditorHost::spawn(Box::new(backend))?;
+        host.open_editor()?;
+        self.editor_host = Some(host);
+        Ok(())
     }
 }
