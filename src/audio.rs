@@ -990,19 +990,15 @@ impl AudioEngine {
                     if let Some(plugin) = proc.plugins.get(&plugin_id) {
                         if let Some(handle) = plugin.rt_instance_id {
                             // handle is (id, gen)
-                            let key = match plugin.backend {
-                                BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
-                                BackendKind::Clap => plugin
-                                    .param_name_to_key
-                                    .get(&param_name)
-                                    .cloned()
-                                    .unwrap_or(ParamKey::Clap(0)),
-                                BackendKind::Vst3 => plugin
-                                    .param_name_to_key
-                                    .get(&param_name)
-                                    .cloned()
-                                    .unwrap_or(ParamKey::Vst3(0)),
-                            };
+                            let key = plugin
+                                .param_name_to_key
+                                .get(&param_name)
+                                .cloned()
+                                .unwrap_or_else(|| match plugin.backend {
+                                    BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
+                                    BackendKind::Clap => ParamKey::Clap(0),
+                                    BackendKind::Vst3 => ParamKey::Vst3(0),
+                                });
 
                             if let Some(cell) = self.plugin_instances.get(&handle) {
                                 cell.lock().set_param(&key, value);
@@ -1867,19 +1863,15 @@ impl AudioEngine {
                     for kv in proc.automated_plugin_params.iter() {
                         let ((pid, param_name), value) = (kv.key().clone(), *kv.value());
                         if pid == plugin_id {
-                            let key = match ppu.backend {
-                                BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
-                                BackendKind::Clap => ppu
-                                    .param_name_to_key
-                                    .get(&param_name)
-                                    .cloned()
-                                    .unwrap_or(ParamKey::Clap(0)),
-                                BackendKind::Vst3 => ppu
-                                    .param_name_to_key
-                                    .get(&param_name)
-                                    .cloned()
-                                    .unwrap_or(ParamKey::Vst3(0)),
-                            };
+                            let key = ppu
+                                .param_name_to_key
+                                .get(&param_name)
+                                .cloned()
+                                .unwrap_or_else(|| match ppu.backend {
+                                    BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
+                                    BackendKind::Clap => ParamKey::Clap(0),
+                                    BackendKind::Vst3 => ParamKey::Vst3(0),
+                                });
                             up.push((key, value));
                         }
                     }

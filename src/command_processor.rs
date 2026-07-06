@@ -384,17 +384,7 @@ fn process_command(
             };
 
             if let Some(uri) = uri_opt {
-                // Only clamp for LV2, CLAP plugins handle their own bounds
-                let v = match backend {
-                    BackendKind::Lv2 => {
-                        let (min, max) = get_control_port_info(&uri, &param_name)
-                            .map(|m| (m.min, m.max))
-                            .unwrap_or((0.0, 1.0));
-                        value.clamp(min, max)
-                    }
-                    BackendKind::Clap => value,
-                    BackendKind::Vst3 => value,
-                };
+                let v = value;
 
                 let mut state = app_state.lock_sync();
                 if let Some(track) = state.tracks.get_mut(&track_id) {
