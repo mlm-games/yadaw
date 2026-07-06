@@ -2614,7 +2614,8 @@ dependencies = [
 [[package]]
 name = "lv2-sys"
 version = "2.0.0"
-source = "git+https://github.com/mlm-games/rust-lv2#7256eb42048f787e07541c9c2fab58e31eba587b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dd0f9e7de3649dcec348de51cbf611ab88688b97c0ce038f8c07b996b2a8e30"
 
 [[package]]
 name = "mach2"
@@ -4927,6 +4928,7 @@ dependencies = [
 [[package]]
 name = "vst3-host"
 version = "0.5.0"
+source = "git+https://github.com/mlm-games/rust-vst3-host#5c0b0b1643159a6ba44804051070b6b07ca381f2"
 dependencies = [
  "core-foundation 0.10.1",
  "crossbeam-queue",
@@ -6058,6 +6060,8 @@ dependencies = [
 [[package]]
 name = "yeli"
 version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43d0ab4d05640405ad6e0e9ddd9f6f96faa5f0691fcdf4210740b145276180e6"
 dependencies = [
  "hound",
  "libloading 0.9.0",

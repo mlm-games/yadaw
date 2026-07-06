@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 
 use crate::editor_host::{EditorBackend, EditorHost};
@@ -106,11 +108,11 @@ pub struct Lv2Instance {
 /// The UI is pre-opened by `Lv2Instance::open_editor` and handed into this
 /// backend, so `try_open_floating` is a no-op that returns `true`.
 struct Lv2EditorBackend {
-    ui: Option<yeli::UiInstance>,
+    ui: Option<Arc<yeli::UiInstance>>,
 }
 
 impl Lv2EditorBackend {
-    fn new(ui: yeli::UiInstance) -> Self {
+    fn new(ui: Arc<yeli::UiInstance>) -> Self {
         Self { ui: Some(ui) }
     }
 }
@@ -126,6 +128,17 @@ impl EditorBackend for Lv2EditorBackend {
 
     fn open_embedded(&mut self, _parent_window: u32) -> Result<()> {
         Err(anyhow!("Embedded LV2 UI not yet supported"))
+    }
+
+    fn on_idle(&mut self) {
+        if let Some(ref ui) = self.ui {
+            if let Some(ret) = ui.idle() {
+                if ret != 0 {
+                    // UI requested close; let the event loop handle it via
+                    // on_gui_closed, but for now just swallow.
+                }
+            }
+        }
     }
 
     fn close(&mut self) -> Result<()> {
@@ -195,10 +208,55 @@ impl PluginInstance for Lv2Instance {
         if self.editor_host.is_some() {
             return Ok(());
         }
-        let ui = self.inner.open_editor()?;
+
+        use crate::editor_host::x11;
+
+        let (xlib, display) = x11::open_display()?;
+        let size = (800, 600);
+        let parent_win = x11::create_parent_window(&xlib, display, size.0, size.1)?;
+        eprintln!(
+            "[lv2 debug] parent_win=0x{:x} size={}x{}",
+            parent_win, size.0, size.1
+        );
+
+        let ui = self.inner.open_editor_with_parent(parent_win as usize)?;
+        let ui = Arc::new(ui);
+        self.inner.set_active_ui(Some(ui.clone()));
+
+        let widget = ui.widget();
+        let child_win = widget as u64;
+        eprintln!("[lv2 debug] widget={:p} child_win=0x{:x}", widget, child_win);
+
+        unsafe {
+            (xlib.XMapSubwindows)(display, parent_win);
+            (xlib.XSync)(display, 0);
+        }
+
+        let wm_delete_window =
+            unsafe { (xlib.XInternAtom)(display, c"WM_DELETE_WINDOW".as_ptr(), 0) };
+        let wm_protocols = unsafe { (xlib.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
+
+        if child_win != 0 {
+            eprintln!("[lv2 debug] sending expose to child");
+            x11::send_expose_event(&xlib, display, child_win, size.0 as i32, size.1 as i32);
+        } else {
+            eprintln!("[lv2 debug] child_win is 0 – DPF did not create a window");
+        }
+
+        let state = x11::X11State {
+            xlib,
+            display,
+            parent_win,
+            child_win,
+            wm_delete_window,
+            wm_protocols,
+            size,
+            expose_tick: 0,
+        };
+
         let backend = Lv2EditorBackend::new(ui);
         let host = EditorHost::spawn(Box::new(backend))?;
-        host.open_editor()?;
+        host.open_editor_with_state(state)?;
         self.editor_host = Some(host);
         Ok(())
     }

@@ -3,8 +3,8 @@ use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use yeli::{
-    AtomSequence, EmptyPortConnections, Features, FeaturesBuilder, PortIndex, PortType, PortCounts,
-    World,
+    AtomSequence, EmptyPortConnections, Features, FeaturesBuilder, PortCounts, PortIndex, PortType,
+    UiInstance, World,
 };
 
 #[derive(Clone, Debug)]
@@ -136,6 +136,7 @@ impl LV2PluginHost {
             max_block_size: self.max_block_size,
             silent_audio: vec![0.0; self.max_block_size],
             scratch_audio_out: Vec::new(),
+            active_ui: None,
         })
     }
 
@@ -162,6 +163,8 @@ pub struct LV2PluginInstance {
     max_block_size: usize,
     silent_audio: Vec<f32>,
     scratch_audio_out: Vec<Vec<f32>>,
+
+    active_ui: Option<Arc<UiInstance>>,
 }
 
 impl LV2PluginInstance {
@@ -176,6 +179,10 @@ impl LV2PluginInstance {
             .as_ref()
             .map(|s| !s.events().is_empty())
             .unwrap_or(false)
+    }
+
+    pub fn set_active_ui(&mut self, ui: Option<Arc<UiInstance>>) {
+        self.active_ui = ui;
     }
 
     fn ensure_scratch_out(&mut self, n: usize, samples: usize) {
@@ -200,12 +207,6 @@ impl LV2PluginInstance {
         let need_ai = self.port_counts.audio_inputs;
         let need_ao = self.port_counts.audio_outputs;
         let ai = self.port_counts.atom_sequence_inputs;
-
-        for entry in self.params.iter() {
-            if let Some(&pi) = self.control_port_indices.get(entry.key()) {
-                self.instance.set_control_input(pi, *entry.value());
-            }
-        }
 
         let mut atom_outputs = std::mem::take(&mut self.atom_outputs);
         let mut scratch_audio = std::mem::take(&mut self.scratch_audio_out);
@@ -268,6 +269,16 @@ impl LV2PluginInstance {
             .run_with_ports(samples, ports)
             .map_err(|e| anyhow!("[LV2] run() error: {}", e));
 
+        if let Some(ref ui) = self.active_ui {
+            self.instance.update_ui(ui);
+        }
+
+        for (symbol, pi) in &self.control_port_indices {
+            if let Some(value) = self.instance.control_input(*pi) {
+                self.params.insert(symbol.clone(), value);
+            }
+        }
+
         self.atom_outputs = atom_outputs;
         self.scratch_audio_out = scratch_audio;
 
@@ -290,6 +301,9 @@ impl LV2PluginInstance {
 
     pub fn set_parameter(&mut self, symbol: &str, value: f32) {
         self.params.insert(symbol.to_string(), value);
+        if let Some(&pi) = self.control_port_indices.get(symbol) {
+            self.instance.set_control_input(pi, value);
+        }
     }
 
     pub fn get_parameter(&self, symbol: &str) -> Option<f32> {
@@ -350,6 +364,13 @@ impl LV2PluginInstance {
     pub fn open_editor(&self) -> Result<yeli::UiInstance> {
         self.instance
             .open_editor()
+            .map_err(|e| anyhow!("Failed to open LV2 UI: {e}"))
+    }
+
+    /// Open the first discoverable UI with a parent window for embedding.
+    pub fn open_editor_with_parent(&self, parent_window: usize) -> Result<yeli::UiInstance> {
+        self.instance
+            .open_editor_with_parent(parent_window)
             .map_err(|e| anyhow!("Failed to open LV2 UI: {e}"))
     }
 }

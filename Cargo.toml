@@ -154,6 +154,9 @@ target_sdk_version = 36
 [patch.crates-io]
 midir = { git = "https://github.com/mlm-games/midir" }
 midly = { git = "https://github.com/mlm-games/midly" }
+# yeli = { path = "../yeli" }
+vst3-host = { git = "https://github.com/mlm-games/rust-vst3-host" }
+# lv2-sys = { path = "../rust-lv2/sys" }
 
 # dissonia = { path = "../dissonia/dissonia" }
 

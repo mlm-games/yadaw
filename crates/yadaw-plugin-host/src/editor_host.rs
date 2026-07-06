@@ -192,9 +192,17 @@ pub trait EditorBackend: Send + 'static {
 }
 
 enum EditorCommand {
-    OpenEditor { result_tx: mpsc::Sender<Result<()>> },
+    OpenEditor {
+        result_tx: mpsc::Sender<Result<()>>,
+    },
+    OpenEditorWithState {
+        state: x11::X11State,
+        result_tx: mpsc::Sender<Result<()>>,
+    },
     CloseEditor,
-    Shutdown { result_tx: mpsc::Sender<()> },
+    Shutdown {
+        result_tx: mpsc::Sender<()>,
+    },
 }
 
 pub struct EditorHost {
@@ -228,6 +236,18 @@ impl EditorHost {
             .map_err(|e| anyhow!("Editor thread did not respond: {}", e))?
     }
 
+    /// Open the editor with a pre-created X11 parent window.
+    pub fn open_editor_with_state(&self, state: x11::X11State) -> Result<()> {
+        let (result_tx, result_rx) = mpsc::channel();
+        self.cmd_tx
+            .send(EditorCommand::OpenEditorWithState { state, result_tx })
+            .map_err(|e| anyhow!("Editor thread disconnected: {}", e))?;
+        result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|e| anyhow!("Editor thread did not respond: {}", e))?;
+        Ok(())
+    }
+
     /// Close the editor.
     pub fn close_editor(&self) {
         let _ = self.cmd_tx.send(EditorCommand::CloseEditor);
@@ -253,6 +273,15 @@ impl EditorHost {
             match cmd_rx.recv_timeout(Duration::from_millis(16)) {
                 Ok(EditorCommand::OpenEditor { result_tx }) => {
                     let result = Self::open_impl(&mut *backend, &mut x11_state);
+                    let _ = result_tx.send(result);
+                }
+                Ok(EditorCommand::OpenEditorWithState { state, result_tx }) => {
+                    let result = if x11_state.is_some() {
+                        Ok(())
+                    } else {
+                        x11_state = Some(state);
+                        Ok(())
+                    };
                     let _ = result_tx.send(result);
                 }
                 Ok(EditorCommand::CloseEditor) => {
