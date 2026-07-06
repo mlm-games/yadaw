@@ -547,7 +547,7 @@ mod clap_impl {
 
             let (processor, params, param_values, has_gui) = result_rx
                 .recv()
-                .map_err(|_| anyhow!("CLAP main thread failed to start"))??;
+                .map_err(|e| anyhow!("CLAP main thread failed to start: {}", e))??;
 
             Ok(Box::new(ClapAudioInstance {
                 processor: Some(processor),
@@ -758,7 +758,7 @@ mod clap_impl {
                 .ok_or_else(|| anyhow!("CLAP main thread not found"))?;
             let (result_tx, result_rx) = mpsc::channel();
             tx.send(MainThreadCommand::OpenEditor(result_tx))
-                .map_err(|_| anyhow!("CLAP main thread disconnected"))?;
+                .map_err(|e| anyhow!("CLAP main thread disconnected: {}", e))?;
             thread::spawn(move || match result_rx.recv() {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => log::error!("Failed to open CLAP editor: {e}"),
@@ -1039,15 +1039,18 @@ mod clap_impl {
             // Send initial Expose to child to kick-start painting
             if child_win != 0 {
                 crate::editor_host::x11::send_expose_event(
-                    &xlib, display, child_win, size.0 as i32, size.1 as i32,
+                    &xlib,
+                    display,
+                    child_win,
+                    size.0 as i32,
+                    size.1 as i32,
                 );
                 log::info!("Sent initial Expose to child 0x{:x}", child_win);
             }
 
             let wm_delete_window =
                 unsafe { (xlib.XInternAtom)(display, c"WM_DELETE_WINDOW".as_ptr(), 0) };
-            let wm_protocols =
-                unsafe { (xlib.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
+            let wm_protocols = unsafe { (xlib.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
 
             *editor = Some(EditorState::Embedded(crate::editor_host::x11::X11State {
                 xlib,
@@ -1069,10 +1072,7 @@ mod clap_impl {
         ));
     }
 
-    fn close_editor_state(
-        instance: &mut PluginInstance<MyHost>,
-        state: EditorState,
-    ) {
+    fn close_editor_state(instance: &mut PluginInstance<MyHost>, state: EditorState) {
         if let Some(gui_ext) = instance.plugin_handle().get_extension::<PluginGui>() {
             let _ = gui_ext.hide(&mut instance.plugin_handle());
             gui_ext.destroy(&mut instance.plugin_handle());
@@ -1096,9 +1096,7 @@ mod clap_impl {
     #[cfg(unix)]
     fn pump_x11_events(state: &mut EditorState) -> bool {
         match state {
-            EditorState::Embedded(x11_state) => {
-                crate::editor_host::x11::pump_events(x11_state)
-            }
+            EditorState::Embedded(x11_state) => crate::editor_host::x11::pump_events(x11_state),
             _ => false,
         }
     }

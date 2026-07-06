@@ -39,7 +39,8 @@ pub fn import_audio_file(path: &Path, bpm: f32) -> Result<AudioClip> {
     let data = std::fs::read(path)?;
 
     import_audio_data(
-        &path.file_stem()
+        &path
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Imported Audio"),
         &data,
@@ -48,12 +49,7 @@ pub fn import_audio_file(path: &Path, bpm: f32) -> Result<AudioClip> {
     )
 }
 
-pub fn import_audio_data(
-    name: &str,
-    data: &[u8],
-    extension: &str,
-    bpm: f32,
-) -> Result<AudioClip> {
+pub fn import_audio_data(name: &str, data: &[u8], extension: &str, bpm: f32) -> Result<AudioClip> {
     let source_hash = Some(hash_source_bytes(data));
     let ext = extension.to_lowercase();
 
@@ -64,7 +60,7 @@ pub fn import_audio_data(
         }
         _ => decode_wav_bytes(data, name, bpm, source_hash)
             .or_else(|_| decode_with_symphonia_bytes(data, name, &ext, bpm, source_hash))
-            .map_err(|_| anyhow!("Unsupported audio format: {}", extension)),
+            .map_err(|e| anyhow!("Unsupported audio format: {}, {}", extension, e)),
     }
 }
 
@@ -80,27 +76,32 @@ fn decode_wav_bytes(
     let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<Vec<_>, _>>()?,
         hound::SampleFormat::Int => match spec.bits_per_sample {
-            8 => reader.samples::<i8>()
+            8 => reader
+                .samples::<i8>()
                 .map(|s| s.map(|v| (v as f32) / 128.0))
                 .collect::<Result<Vec<_>, _>>()?,
-            16 => reader.samples::<i16>()
+            16 => reader
+                .samples::<i16>()
                 .map(|s| s.map(|v| (v as f32) / 32768.0))
                 .collect::<Result<Vec<_>, _>>()?,
-            24 => reader.samples::<i32>()
+            24 => reader
+                .samples::<i32>()
                 .map(|s| s.map(|v| (v as f32) / 8_388_608.0))
                 .collect::<Result<Vec<_>, _>>()?,
-            32 => reader.samples::<i32>()
+            32 => reader
+                .samples::<i32>()
                 .map(|s| s.map(|v| (v as f32) / 2_147_483_648.0))
                 .collect::<Result<Vec<_>, _>>()?,
             bits => return Err(anyhow!("Unsupported PCM bit depth: {}", bits)),
-        }
+        },
     };
 
     let channels = spec.channels.max(1) as usize;
     let mono_samples: Vec<f32> = if channels == 1 {
         samples
     } else {
-        samples.chunks(channels)
+        samples
+            .chunks(channels)
             .map(|ch| ch.iter().copied().sum::<f32>() / channels as f32)
             .collect()
     };
@@ -173,7 +174,9 @@ fn decode_with_symphonia_bytes(
     loop {
         match format.next_packet() {
             Ok(Some(packet)) => {
-                if packet.track_id != track_id { continue; }
+                if packet.track_id != track_id {
+                    continue;
+                }
                 match decoder.decode(&packet) {
                     Ok(decoded) => {
                         let mut packet_samples = Vec::new();
@@ -194,7 +197,8 @@ fn decode_with_symphonia_bytes(
     }
 
     let mono_samples = if channels == 2 {
-        all_samples.chunks(2)
+        all_samples
+            .chunks(2)
             .map(|chunk| (chunk[0] + chunk.get(1).copied().unwrap_or(0.0)) / 2.0)
             .collect()
     } else {

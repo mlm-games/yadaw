@@ -23,7 +23,8 @@ pub(crate) mod x11 {
     unsafe impl Send for X11State {}
 
     pub fn open_display() -> Result<(xlib::Xlib, *mut xlib::Display)> {
-        let xlib = xlib::Xlib::open().map_err(|_| anyhow!("Cannot open X11 shared library"))?;
+        let xlib =
+            xlib::Xlib::open().map_err(|e| anyhow!("Cannot open X11 shared library {}", e))?;
         let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
         if display.is_null() {
             return Err(anyhow!("Cannot open X11 display"));
@@ -221,10 +222,10 @@ impl EditorHost {
         let (result_tx, result_rx) = mpsc::channel();
         self.cmd_tx
             .send(EditorCommand::OpenEditor { result_tx })
-            .map_err(|_| anyhow!("Editor thread disconnected"))?;
+            .map_err(|e| anyhow!("Editor thread disconnected: {}", e))?;
         result_rx
             .recv_timeout(Duration::from_secs(10))
-            .map_err(|_| anyhow!("Editor thread did not respond"))?
+            .map_err(|e| anyhow!("Editor thread did not respond: {}", e))?
     }
 
     /// Close the editor.

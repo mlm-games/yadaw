@@ -1,7 +1,7 @@
 use crate::audio::AudioEngine;
 use crate::audio_state::AudioState;
 use crate::constants::MAX_BUFFER_SIZE;
-use crate::messages::{ExportConfig, ExportFormat, ExportState, UiTx, UIUpdate};
+use crate::messages::{ExportConfig, ExportFormat, ExportState, UIUpdate, UiTx};
 use crate::project::AppState;
 use crate::time_utils::TimeConverter;
 
@@ -96,7 +96,8 @@ impl AudioExporter {
             let result = run_export_wasm(app_state, audio_state, &config).await;
             match result {
                 Ok(filename) => {
-                    let _ = ui_tx.send_sync(UIUpdate::ExportStateUpdate(ExportState::Complete(filename)));
+                    let _ = ui_tx
+                        .send_sync(UIUpdate::ExportStateUpdate(ExportState::Complete(filename)));
                 }
                 Err(e) => {
                     let _ = ui_tx.send_sync(UIUpdate::ExportStateUpdate(ExportState::Error(
@@ -442,17 +443,17 @@ async fn run_export_wasm(
     let parts = js_sys::Array::new();
     parts.push(&uint8.into());
     let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)
-        .map_err(|_| anyhow!("Failed to create Blob"))?;
+        .map_err(|e| anyhow!("Failed to create Blob: {}", e))?;
     let url = web_sys::Url::create_object_url_with_blob(&blob)
-        .map_err(|_| anyhow!("Failed to create object URL"))?;
+        .map_err(|e| anyhow!("Failed to create object URL: {}", e))?;
 
     let window = web_sys::window().ok_or_else(|| anyhow!("No window"))?;
     let document = window.document().ok_or_else(|| anyhow!("No document"))?;
     let anchor = document
         .create_element("a")
-        .map_err(|_| anyhow!("Failed to create anchor"))?
+        .map_err(|e| anyhow!("Failed to create anchor: {}, e"))?
         .dyn_into::<HtmlAnchorElement>()
-        .map_err(|_| anyhow!("Failed to cast anchor"))?;
+        .map_err(|e| anyhow!("Failed to cast anchor: {}", e))?;
 
     anchor.set_href(&url);
     anchor.set_download(&filename);

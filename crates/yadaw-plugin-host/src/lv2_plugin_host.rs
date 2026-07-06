@@ -98,7 +98,7 @@ impl LV2PluginHost {
         let instance = self
             .world
             .instantiate_with_features(plugin, self.sample_rate, &self.features)
-            .map_err(|_| anyhow!("Failed to instantiate plugin"))?;
+            .map_err(|e| anyhow!("Failed to instantiate plugin: {e}"))?;
 
         let params = Arc::new(DashMap::new());
         let mut control_port_indices = HashMap::new();

@@ -106,9 +106,7 @@ mod vst3_impl {
                         Some(p.unit.clone())
                     };
 
-                    let value_to_text = plugin
-                        .format_parameter(p.id, p.default)
-                        .ok();
+                    let value_to_text = plugin.format_parameter(p.id, p.default).ok();
 
                     UnifiedParamInfo {
                         key: ParamKey::Vst3(p.id),
@@ -172,7 +170,7 @@ mod vst3_impl {
             let mut plugin = self
                 .plugin
                 .lock()
-                .map_err(|_| anyhow!("VST3 plugin lock poisoned"))?;
+                .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?;
 
             let frames = ctx.frames;
             let block_size = plugin.block_size();
@@ -241,10 +239,7 @@ mod vst3_impl {
         }
 
         fn save_state(&mut self) -> Option<Vec<u8>> {
-            self.plugin
-                .lock()
-                .ok()
-                .and_then(|p| p.save_state().ok())
+            self.plugin.lock().ok().and_then(|p| p.save_state().ok())
         }
 
         fn load_state(&mut self, data: &[u8]) -> bool {
@@ -263,7 +258,7 @@ mod vst3_impl {
             let has_editor = self
                 .plugin
                 .lock()
-                .map_err(|_| anyhow!("VST3 plugin lock poisoned"))?
+                .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?
                 .has_editor();
             if !has_editor {
                 return Err(anyhow!("VST3 plugin has no editor"));
@@ -279,10 +274,7 @@ mod vst3_impl {
         }
 
         fn has_editor(&self) -> bool {
-            self.plugin
-                .lock()
-                .map(|p| p.has_editor())
-                .unwrap_or(false)
+            self.plugin.lock().map(|p| p.has_editor()).unwrap_or(false)
         }
     }
 
