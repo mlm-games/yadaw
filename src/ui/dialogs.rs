@@ -849,8 +849,11 @@ impl PluginBrowserDialog {
 
                         let selected = self.selected_plugin == Some(plugin.uri.clone());
 
-                        let backend_badge =
-                            if plugin.uri.starts_with("file://") { "[CLAP]" } else { "[LV2]" };
+                        let backend_badge = match plugin.backend {
+                            BackendKind::Clap => "[CLAP]",
+                            BackendKind::Vst3 => "[VST3]",
+                            BackendKind::Lv2 => "[LV2]",
+                        };
 
                         // Show category hint in "All"
                         let display_name = if self.selected_category == "All" {
@@ -865,6 +868,8 @@ impl PluginBrowserDialog {
                         if resp.double_clicked() {
                             let backend = if plugin.uri.starts_with("file://") {
                                 BackendKind::Clap
+                            } else if plugin.uri.ends_with(".vst3") || plugin.uri.contains(".vst3") {
+                                BackendKind::Vst3
                             } else {
                                 BackendKind::Lv2
                             };
@@ -927,6 +932,8 @@ impl PluginBrowserDialog {
 
                             let backend = if plugin.uri.starts_with("file://") {
                                 BackendKind::Clap
+                            } else if plugin.uri.ends_with(".vst3") || plugin.uri.contains(".vst3") {
+                                BackendKind::Vst3
                             } else {
                                 BackendKind::Lv2
                             };

@@ -625,6 +625,11 @@ impl TracksPanel {
                                 ui, app, track_id, plugin_id, plugin_idx, &params,
                             );
                         }
+                        BackendKind::Vst3 => {
+                            self.draw_clap_params(
+                                ui, app, track_id, plugin_id, plugin_idx, &params,
+                            );
+                        }
                     }
                 });
         }

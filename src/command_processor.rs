@@ -393,6 +393,7 @@ fn process_command(
                         value.clamp(min, max)
                     }
                     BackendKind::Clap => value,
+                    BackendKind::Vst3 => value,
                 };
 
                 let mut state = app_state.lock_sync();

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum BackendKind {
     Clap,
     Lv2,
+    Vst3,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +31,7 @@ pub struct HostConfig {
 pub enum ParamKey {
     Clap(u32),
     Lv2(String),
+    Vst3(u32),
 }
 
 #[derive(Clone, Debug)]

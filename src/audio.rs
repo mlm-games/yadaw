@@ -997,6 +997,11 @@ impl AudioEngine {
                                     .get(&param_name)
                                     .cloned()
                                     .unwrap_or(ParamKey::Clap(0)),
+                                BackendKind::Vst3 => plugin
+                                    .param_name_to_key
+                                    .get(&param_name)
+                                    .cloned()
+                                    .unwrap_or(ParamKey::Vst3(0)),
                             };
 
                             if let Some(cell) = self.plugin_instances.get(&handle) {
@@ -1643,6 +1648,17 @@ impl AudioEngine {
                                     );
                                 }
                             }
+                            BackendKind::Vst3 => {
+                                if let Some(actual_key) = param_map.get(&name) {
+                                    inst.set_param(actual_key, val);
+                                } else {
+                                    log::warn!(
+                                        "VST3 param '{}' not found for plugin {} when rebuilding chain",
+                                        name,
+                                        pdesc.uri
+                                    );
+                                }
+                            }
                         }
                     }
 
@@ -1858,6 +1874,11 @@ impl AudioEngine {
                                     .get(&param_name)
                                     .cloned()
                                     .unwrap_or(ParamKey::Clap(0)),
+                                BackendKind::Vst3 => ppu
+                                    .param_name_to_key
+                                    .get(&param_name)
+                                    .cloned()
+                                    .unwrap_or(ParamKey::Vst3(0)),
                             };
                             up.push((key, value));
                         }

@@ -6,6 +6,9 @@ pub mod backend_clap;
 #[cfg(feature = "lv2-legacy")]
 pub mod backend_lv2;
 
+#[cfg(feature = "vst3-host")]
+pub mod backend_vst3;
+
 #[cfg(feature = "lv2-legacy")]
 pub mod lv2_plugin_host;
 

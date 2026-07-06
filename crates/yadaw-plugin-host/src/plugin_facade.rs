@@ -22,6 +22,12 @@ impl HostFacade {
             b.init(&cfg)?;
             backs.push(Box::new(b));
         }
+        #[cfg(feature = "vst3-host")]
+        {
+            let b = crate::backend_vst3::Backend::new(cfg.clone());
+            b.init(&cfg)?;
+            backs.push(Box::new(b));
+        }
         Ok(Self { backends: backs })
     }
 

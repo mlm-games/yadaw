@@ -19,10 +19,15 @@ yeli = { version = "0.1", optional = true }
 
 yadaw-plugin-api = { path = "../yadaw-plugin-api" }
 
+vst3-host = { version = "0.5", optional = true, default-features = false, features = [
+    "egui-widgets",
+] }
+
 [features]
 default = []
 clap-host = ["clack-extensions", "clack-host"]
 lv2-legacy = ["yeli"]
+vst3-host = ["dep:vst3-host"]
 
 [dependencies.clack-host]
 git = "https://github.com/prokopyl/clack"
