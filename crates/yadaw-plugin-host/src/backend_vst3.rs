@@ -192,7 +192,11 @@ mod vst3_impl {
         }
 
         fn open_embedded(&mut self, parent_window: u32) -> Result<()> {
-            let handle = vst3_host::WindowHandle::from_x11(parent_window);
+            // HACK: from_x11 does the same cast internally, but is gated behind
+            // target_os = "linux" in vst3-host
+            let handle = unsafe {
+                vst3_host::WindowHandle::from_raw(parent_window as usize as *mut std::ffi::c_void)
+            };
             self.plugin
                 .lock()
                 .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?
