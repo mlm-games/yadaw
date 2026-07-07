@@ -10,9 +10,8 @@ Current intention is to not fill the app with patches for outdated/non-standardi
 #### Desktop
 - Just run using `cargo run` for windows, mac or linux, and install any missing libs (mostly pkgconfig, lv2 headers & livi components, windows doesn't have a release build, and needs to be compiled manually for now, maybe donation only in future? Need some sort of revenue ig).
 #### Android
-- Follow the instructions in the third_party folder's md.
-- Plugins should be compiled beforehand for android (tested vitsel-clap and works well on android)
-- Hint: Saving and loading works by scrolling fully to the bottom and clicking on the last 4th (or 5th) entry (is a hack for now, will implement proper perms later; currently only works for certain internal folders)
+- Build using `cargo rapk build --target aarch64-linux-android --lib`
+- CLAP/LV2/VST3 plugins must be cross-compiled with the Android NDK. For CLAP plugins, see [vitsel-clap](https://github.com/mlm-games/vitsel-clap)
 
 
 #### Missing common features (would not be done in the near future)

@@ -300,21 +300,10 @@ jobs:
     name: Build Android APK (aarch64)
     needs: prepare-version
     runs-on: ubuntu-latest
-    env:
-      LILV_TERMUX_LIB: ${{ github.workspace }}/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare-version.outputs.commit_sha }}
-
-      - name: Verify Termux libraries presence
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -d "$LILV_TERMUX_LIB" || { echo "Missing Termux libs at $LILV_TERMUX_LIB"; exit 1; }
-          if [ ! -f "$LILV_TERMUX_LIB/pkgconfig/lilv-0.pc" ]; then
-            echo "Missing $LILV_TERMUX_LIB/pkgconfig/lilv-0.pc (ensure termux libs are committed or provided)"; exit 1;
-          fi
 
       - uses: actions/setup-java@v5
         with:
