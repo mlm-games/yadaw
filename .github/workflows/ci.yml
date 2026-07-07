@@ -148,7 +148,19 @@ jobs:
       - uses: obi1kenobi/cargo-semver-checks-action@v2
 
   android-apk:
-    name: Android (aarch64) APK build
+    name: Android (${{ matrix.abi }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            abi: arm64-v8a
+          - target: armv7-linux-androideabi
+            abi: armeabi-v7a
+          - target: x86_64-linux-android
+            abi: x86_64
+          - target: i686-linux-android
+            abi: x86
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -169,29 +181,27 @@ jobs:
             "build-tools;36.0.0" \
             "ndk;28.2.13676358"
 
-      - name: Install Rust (host) + Android target
-        run: rustup target add aarch64-linux-android
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install cargo-rapk
         run: cargo install cargo-rapk --locked
 
-      - name: Build Android APK (aarch64)
+      - name: Build Android APK
         env:
-          # reproducible
           SOURCE_DATE_EPOCH: ${{ github.event.repository.pushed_at || 0 }}
         run: |
-          cargo rapk build --target aarch64-linux-android --lib
-          # Collect artifact
-          OUT_DIR="target/aarch64-linux-android/debug/apk"
-          if [ -d "target/aarch64-linux-android/release/apk" ]; then
-            OUT_DIR="target/aarch64-linux-android/release/apk"
+          cargo rapk build --target ${{ matrix.target }} --lib
+          OUT_DIR="target/${{ matrix.target }}/debug/apk"
+          if [ -d "target/${{ matrix.target }}/release/apk" ]; then
+            OUT_DIR="target/${{ matrix.target }}/release/apk"
           fi
           ls -l "$OUT_DIR"
           mkdir -p artifacts
-          cp "$(ls -1t "$OUT_DIR"/*.apk | head -n1)" "artifacts/app-aarch64.apk"
+          cp "$(ls -1t "$OUT_DIR"/*.apk | head -n1)" "artifacts/app-${{ matrix.abi }}.apk"
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-aarch64-apk
+          name: android-${{ matrix.abi }}
           path: artifacts/*.apk

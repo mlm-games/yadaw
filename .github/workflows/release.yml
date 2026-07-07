@@ -35,7 +35,6 @@ env:
   ANDROID_NDK_VERSION: "28.2.13676358"
   ANDROID_D8_VERSION: "8.10.9-dev"
   CARGO_RAPK_PAGE_SIZE_KB: "16"
-  ANDROID_TARGET: "aarch64-linux-android"
   CARGO_RAPK_VERSION: "0.15.8"
   JAVA_VERSION: "21"
   JAVA_DISTRIBUTION: "temurin"
@@ -291,8 +290,20 @@ jobs:
             dist/**/*.zip
 
   build-android:
-    name: Build Android APK (aarch64)
+    name: Build Android APK (${{ matrix.abi }})
     needs: prepare-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            abi: arm64-v8a
+          - target: armv7-linux-androideabi
+            abi: armeabi-v7a
+          - target: x86_64-linux-android
+            abi: x86_64
+          - target: i686-linux-android
+            abi: x86
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -316,8 +327,8 @@ jobs:
             "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" \
             "ndk;${{ env.ANDROID_NDK_VERSION }}"
 
-      - name: Rust (host) Android target
-        run: rustup target add ${{ env.ANDROID_TARGET }}
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install cargo-rapk
         shell: bash
@@ -375,7 +386,7 @@ jobs:
           echo "CARGO_RAPK_RELEASE_KEYSTORE=$PWD/release.keystore" >> "$GITHUB_ENV"
           echo "CARGO_RAPK_RELEASE_KEYSTORE_PASSWORD=$KS_PASS"      >> "$GITHUB_ENV"
 
-      - name: Build Android APK (release, aarch64)
+      - name: Build Android APK
         shell: bash
         env:
           TAG: ${{ needs.prepare-version.outputs.version_name }}
@@ -386,18 +397,18 @@ jobs:
           export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
           export ANDROID_BUILD_TOOLS="${{ env.ANDROID_BUILD_TOOLS }}"
 
-          cargo rapk build --release --deterministic --target ${{ env.ANDROID_TARGET }} --lib
+          cargo rapk build --release --deterministic --target ${{ matrix.target }} --lib
           OUT_DIR="target/release/apk"
           APK_SRC=$(ls -1t "$OUT_DIR"/*.apk | head -n1)
           VER="${TAG#v}"
           mkdir -p dist
-          cp "$APK_SRC" "dist/${{ env.APP_SLUG }}-${VER}-fdroid-arm64-v8a.apk"
+          cp "$APK_SRC" "dist/${{ env.APP_SLUG }}-${VER}-fdroid-${{ matrix.abi }}.apk"
           ls -la dist
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dist-android
+          name: dist-android-${{ matrix.abi }}
           path: dist/*.apk
 
   release:

@@ -121,7 +121,7 @@ vst3-host = ["yadaw-plugin-host/vst3-host"]
 [package.metadata.android]
 package = "org.mlm.yadaw"
 label = "Yadaw"
-build_targets = ["aarch64-linux-android"]
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android"]
 resources = "others/packaging/res"
 
 [[package.metadata.android.uses_permission]]
