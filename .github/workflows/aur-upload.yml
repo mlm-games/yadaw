@@ -72,7 +72,7 @@ jobs:
           arch=('x86_64' 'aarch64')
           url="https://github.com/mlm-games/yadaw"
           license=('GPL3')
-          depends=('alsa-lib' 'lilv' 'suil' 'sratom' 'libx11' 'libxcursor' 'libxinerama' 'libxrandr' 'libxi')
+          depends=('alsa-lib' 'libx11' 'libxcursor' 'libxinerama' 'libxrandr' 'libxi')
           optdepends=(
             'pipewire-pulse: for PipeWire audio support'
             'pulseaudio: for PulseAudio audio support'

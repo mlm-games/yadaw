@@ -38,18 +38,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libasound2-dev libudev-dev pkg-config \
-            liblilv-dev libsuil-dev libsratom-dev
+            libasound2-dev libudev-dev pkg-config
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install pkg-config lilv suil sratom
+          brew install pkg-config
       - name: Configure pkg-config (macOS)
         if: runner.os == 'macOS'
         run: |
-          # Cover both arm64 (/opt/homebrew) and intel (/usr/local)
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> $GITHUB_ENV
 
       # - name: Set up MSYS2 and install Windows dependencies
@@ -61,20 +59,6 @@ jobs:
       #     install: >-
       #       base-devel
       #       mingw-w64-x86_64-pkgconf
-      #       mingw-w64-x86_64-lilv
-      #       mingw-w64-x86_64-sratom
-      #       mingw-w64-x86_64-sord
-      #       mingw-w64-x86_64-serd
-      #       mingw-w64-x86_64-suil
-      # - name: Configure pkg-config (Windows)
-      #   if: runner.os == 'Windows'
-      #   shell: pwsh
-      #   run: |
-      #     # Ensure pkg-config points to Mingw64 and sees the .pc files
-      #     Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG=C:\msys64\mingw64\bin\pkg-config.exe"
-      #     Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig"
-      #     # Ensure Mingw64 DLLs and tools are on PATH for the build
-      #     Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\mingw64\bin"
 
       - uses: Swatinem/rust-cache@v2
 
@@ -102,8 +86,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libasound2-dev libudev-dev pkg-config \
-            liblilv-dev libsuil-dev libsratom-dev
+            libasound2-dev libudev-dev pkg-config
 
       - uses: Swatinem/rust-cache@v2
       - name: Build docs
@@ -121,8 +104,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libasound2-dev libudev-dev pkg-config \
-            liblilv-dev libsuil-dev libsratom-dev
+            libasound2-dev libudev-dev pkg-config
 
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-features
@@ -139,8 +121,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libasound2-dev libudev-dev pkg-config \
-            liblilv-dev libsuil-dev libsratom-dev
+            libasound2-dev libudev-dev pkg-config
 
       - uses: Swatinem/rust-cache@v2
       - run: cargo generate-lockfile -Z minimal-versions || true
