@@ -7,15 +7,15 @@ use std::time::Duration;
 pub(crate) mod x11 {
     use anyhow::{Result, anyhow};
     use std::ptr;
-    use x11_dl::xlib;
+    pub use x11_dl::xlib;
 
     pub struct X11State {
         pub xlib: xlib::Xlib,
         pub display: *mut xlib::Display,
         pub parent_win: xlib::Window,
         pub child_win: xlib::Window,
-        pub wm_delete_window: u64,
-        pub wm_protocols: u64,
+        pub wm_delete_window: xlib::Atom,
+        pub wm_protocols: xlib::Atom,
         pub size: (u32, u32),
         pub expose_tick: u32,
     }
@@ -52,7 +52,7 @@ pub(crate) mod x11 {
                 (xlib::StructureNotifyMask
                     | xlib::ExposureMask
                     | xlib::SubstructureNotifyMask
-                    | xlib::PropertyChangeMask) as i64,
+                    | xlib::PropertyChangeMask) as std::os::raw::c_long,
             );
 
             let wm_delete_window = (xlib.XInternAtom)(display, c"WM_DELETE_WINDOW".as_ptr(), 0);
@@ -143,7 +143,7 @@ pub(crate) mod x11 {
             if unsafe { event.type_ } == xlib::ClientMessage as i32 {
                 let msg = unsafe { event.client_message };
                 if msg.message_type == state.wm_protocols
-                    && msg.data.as_longs()[0] as u64 == state.wm_delete_window
+                    && msg.data.as_longs()[0] as xlib::Atom == state.wm_delete_window
                 {
                     closed = true;
                 }
