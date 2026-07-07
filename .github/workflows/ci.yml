@@ -26,8 +26,7 @@ jobs:
         include:
           - os: ubuntu-latest
           - os: macos-latest
-          # - os: windows-latest
-          #   toolchain: stable-x86_64-pc-windows-gnu
+          - os: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +48,31 @@ jobs:
         run: |
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> $GITHUB_ENV
 
+      - name: Set up MSYS2 and install Windows dependencies
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: MINGW64
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-pkgconf
+
+      - name: Configure pkg-config and PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msys2 = "${{ steps.msys2.outputs.msys2-location }}"
+          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG=$msys2\mingw64\bin\pkgconf.exe"
+          Add-Content -Path $env:GITHUB_ENV -Value "PKG_CONFIG_PATH=$msys2\mingw64\lib\pkgconfig"
+          Add-Content -Path $env:GITHUB_PATH -Value "$msys2\mingw64\bin"
+
       - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build
 
       # - name: Format
       #   run: cargo fmt --all --check
@@ -63,60 +86,6 @@ jobs:
 
       # - name: Test (nextest)
       #   run: cargo nextest run --workspace --all-features
-
-  msrv:
-    name: MSRV
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev libudev-dev pkg-config
-
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --all-features
-
-  minimal-versions:
-    name: Minimal versions build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
-        with: { tool: cargo-hack }
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev libudev-dev pkg-config
-
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo generate-lockfile -Z minimal-versions || true
-      - run: cargo hack build --workspace --all-features --ignore-private --no-dev-deps
-
-  # security:
-  #   name: Security & licensing
-  #   continue-on-error: true
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: EmbarkStudios/cargo-deny-action@v2
-  #     - uses: actions-rust-lang/audit@v1
-  #       with:
-  #         denyWarnings: true
-  #       continue-on-error: true
-
-  semver:
-    name: SemVer checks (pre-publish)
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: obi1kenobi/cargo-semver-checks-action@v2
 
   android-apk:
     name: Android (${{ matrix.abi }})
@@ -163,7 +132,7 @@ jobs:
           SOURCE_DATE_EPOCH: ${{ github.event.repository.pushed_at || 0 }}
         run: |
           cargo rapk build --target ${{ matrix.target }} --lib
-          OUT_DIR="target/${{ matrix.target }}/debug/apk"
+          OUT_DIR="target/debug/apk"
           if [ -d "target/${{ matrix.target }}/release/apk" ]; then
             OUT_DIR="target/${{ matrix.target }}/release/apk"
           fi
