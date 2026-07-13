@@ -128,7 +128,7 @@ resources = "others/packaging/res"
 name = "android.permission.RECORD_AUDIO"
 
 [package.metadata.android.application]
-icon = "@drawable/ic_launcher_monochrome"
+icon = "@mipmap/ic_launcher"
 
 # [[package.metadata.android.application.activity]]
 # name = "android.app.NativeActivity"
