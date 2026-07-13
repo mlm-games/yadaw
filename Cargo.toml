@@ -1,6 +1,6 @@
 [package]
 name = "yadaw"
-version = "0.9.2"
+version = "0.10.0"
 edition = "2024"
 default-run = "yadaw"
 
@@ -121,7 +121,12 @@ vst3-host = ["yadaw-plugin-host/vst3-host"]
 [package.metadata.android]
 package = "org.mlm.yadaw"
 label = "Yadaw"
-build_targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android"]
+build_targets = [
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "x86_64-linux-android",
+    "i686-linux-android",
+]
 resources = "others/packaging/res"
 
 [[package.metadata.android.uses_permission]]
@@ -156,7 +161,7 @@ midir = { git = "https://github.com/mlm-games/midir" }
 midly = { git = "https://github.com/mlm-games/midly" }
 yeli = { git = "https://github.com/mlm-games/yeli" }
 # yeli = { path = "../yeli" }
-vst3-host = { git = "https://github.com/mlm-games/rust-vst3-host" }
+# vst3-host = { git = "https://github.com/mlm-games/rust-vst3-host" }
 # lv2-sys = { path = "../rust-lv2/sys" }
 
 # dissonia = { path = "../dissonia/dissonia" }
