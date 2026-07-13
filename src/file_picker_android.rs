@@ -79,7 +79,7 @@ pub fn pick_directory(title: &str) -> Picker<PlatformFile> {
             .await
             .map_err(|e| e.to_string())?;
         Ok(result.map(|dir| {
-            PlatformFile::from_path(dir.name().unwrap_or_default(), dir.path().to_path_buf())
+            PlatformFile::from_path(dir.name().unwrap_or_default(), dir.path().map(|p| p.to_path_buf()).unwrap_or_default())
         }))
     })
 }
