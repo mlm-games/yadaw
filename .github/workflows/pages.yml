@@ -12,5 +12,3 @@ permissions:
 jobs:
   deploy:
     uses: mlm-games/ci/.github/workflows/pages.yml@main
-    with:
-      build-std: true
