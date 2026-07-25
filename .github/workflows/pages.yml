@@ -1,13 +1,8 @@
 name: Deploy to GitHub Pages
-
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
-
-concurrency:
-  group: pages-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -15,40 +10,5 @@ permissions:
   id-token: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install trunk
-        uses: taiki-e/install-action@v2
-        with:
-          tool: trunk
-
-      - name: Install wasm target + rust-src (needed for -Zbuild-std)
-        run: |
-          rustup target add wasm32-unknown-unknown
-          rustup component add rust-src
-
-      - name: Build with trunk
-        run: |
-          trunk build --release --dist dist/public --public-url /${{ github.event.repository.name }}/
-          touch dist/public/.nojekyll
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist/public
-
   deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+    uses: mlm-games/ci/.github/workflows/pages.yml@main
