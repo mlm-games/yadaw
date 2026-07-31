@@ -2545,9 +2545,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "lv2-sys"
-version = "2.0.0"
-source = "git+https://github.com/mlm-games/rust-lv2#7256eb42048f787e07541c9c2fab58e31eba587b"
+name = "lv2_raw"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6dd8e859491c39ac8b3f4f1306bad2458d467f3057a19ebb5a6b133df0caee8"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "mach2"
@@ -5962,13 +5966,14 @@ dependencies = [
 
 [[package]]
 name = "yeli"
-version = "0.3.2"
-source = "git+https://github.com/mlm-games/yeli#cbe35d9073381ca9c49eebc7a681aba3367be4be"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5276d5fe0a7596c165daa0348402f92fddbce10dcdac0e54e95b73eebf90be0e"
 dependencies = [
  "hound",
  "libc",
  "libloading 0.9.0",
- "lv2-sys",
+ "lv2_raw",
  "oxrdf",
  "oxttl",
 ]
