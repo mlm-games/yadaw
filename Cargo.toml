@@ -23,8 +23,8 @@ resolver = "3"
 yadaw-plugin-api = { path = "crates/yadaw-plugin-api" }
 
 chrono = { version = "0.4", features = ["serde"] }
-egui = "0.34"
-eframe = { version = "0.34", features = ["wgpu"] }
+egui = "0.36"
+eframe = { version = "0.36", features = ["wgpu"] }
 
 symphonia-adapter-oporus = "0.1.3"
 rtrb = "0.3"
