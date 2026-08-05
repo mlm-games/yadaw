@@ -95,9 +95,9 @@ mod vst3_impl {
             let param_infos: Vec<UnifiedParamInfo> = params
                 .iter()
                 .map(|p| {
-                    let (kind, stepped) = if p.step_count == 2 {
+                    let (kind, stepped) = if p.step_count == 1 {
                         (ParamKind::Bool, true)
-                    } else if p.step_count > 2 {
+                    } else if p.step_count > 1 {
                         (ParamKind::Int, true)
                     } else {
                         (ParamKind::Float, false)
@@ -189,6 +189,12 @@ mod vst3_impl {
 
         fn try_open_floating(&mut self) -> Result<bool> {
             Ok(false)
+        }
+
+        fn on_idle(&mut self) {
+            if let Ok(mut plugin) = self.plugin.lock() {
+                plugin.service_run_loop();
+            }
         }
 
         fn open_embedded(&mut self, parent_window: u32) -> Result<()> {
