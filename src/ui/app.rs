@@ -6,7 +6,7 @@ use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
 use crate::midi_import::ImportedTrack;
 use crate::input::actions::{ActionContext, AppAction};
-use crate::messages::{AudioCommand, PluginParamInfo, UiRx, UIUpdate};
+use crate::messages::{AudioCommand, PluginParamInfo, UiRx, UiTx, UIUpdate};
 use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
 use crate::model::clip::MidiPattern;
@@ -23,7 +23,7 @@ use crate::transport::Transport;
 use flume::Sender;
 
 use eframe::egui;
-use egui::ahash::HashMap;
+use ahash::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -43,6 +43,7 @@ pub struct YadawApp {
     pub(super) audio_state: Arc<AudioState>,
     pub(super) command_tx: Sender<AudioCommand>,
     pub(super) ui_rx: UiRx,
+    pub(super) ui_tx: UiTx,
 
     // Configuration
     pub(super) config: Config,
@@ -131,6 +132,7 @@ impl YadawApp {
         audio_state: Arc<AudioState>,
         command_tx: Sender<AudioCommand>,
         ui_rx: UiRx,
+        ui_tx: UiTx,
         available_plugins: Vec<UnifiedPluginInfo>,
         config: Config,
         midi_input_handler: Option<Arc<MidiInputHandler>>,
@@ -201,6 +203,7 @@ impl YadawApp {
             audio_state,
             command_tx,
             ui_rx,
+            ui_tx,
             config: config.clone(),
             available_plugins: available_plugins_map,
             clap_param_meta: std::collections::HashMap::new(),
@@ -1146,21 +1149,21 @@ impl YadawApp {
             .unwrap_or(false)
     }
 
-    fn show_main_panels(&mut self, ctx: &egui::Context) {
+    fn show_main_panels(&mut self, ui: &mut egui::Ui) {
         let show_midi = self.is_selected_track_midi();
 
         // Left panel - Tracks
-        egui::SidePanel::left("tracks_panel")
-            .default_width(300.0)
+        egui::Panel::left("tracks_panel")
+            .default_size(300.0)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 let mut tracks_ui = std::mem::take(&mut self.tracks_ui);
                 tracks_ui.show(ui, self);
                 self.tracks_ui = tracks_ui;
             });
 
         // Central panel - Timeline or Piano Roll
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default_margins().show(ui, |ui| {
             if show_midi {
                 // ui.heading("Piano Roll View");
                 let mut piano_roll = std::mem::take(&mut self.piano_roll_view);
@@ -1325,6 +1328,61 @@ impl YadawApp {
             UIUpdate::Error(_) => {}
             UIUpdate::Warning(_) => {}
             UIUpdate::Info(_) => {}
+            #[cfg(target_arch = "wasm32")]
+            UIUpdate::ImportedFileBlob {
+                name,
+                extension,
+                bytes,
+            } => {
+                let bpm = self.audio_state.bpm.load();
+                match extension.as_str() {
+                    "mid" | "midi" => {
+                        self.import_midi_blob_to_new_track(&name, &bytes);
+                    }
+                    "yadaw" | "ydw" => {
+                        if let Ok(contents) = String::from_utf8(bytes.to_vec())
+                            && let Ok(project) =
+                                serde_json::from_str::<crate::project::Project>(&contents)
+                        {
+                            let live_bpm = self.audio_state.bpm.load();
+                            let live_loop_start = self.audio_state.loop_start.load();
+                            let live_loop_end = self.audio_state.loop_end.load();
+                            let live_loop_enabled = self
+                                .audio_state
+                                .loop_enabled
+                                .load(Ordering::Relaxed);
+
+                            let mut state = self.state.lock_sync();
+                            state.load_project(project);
+                            state.bpm = live_bpm;
+                            state.loop_start = live_loop_start;
+                            state.loop_end = live_loop_end;
+                            state.loop_enabled = live_loop_enabled;
+                            drop(state);
+
+                            self.audio_state.bpm.store(live_bpm);
+                            self.audio_state.loop_start.store(live_loop_start);
+                            self.audio_state.loop_end.store(live_loop_end);
+
+                            let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+                            let _ = self
+                                .command_tx
+                                .send(AudioCommand::RebuildAllRtChains);
+                            self.dialogs
+                                .show_success(&format!("Loaded project: {name}"));
+                        }
+                    }
+                    "wav" | "flac" | "mp3" | "ogg" | "m4a" | "aac" => {
+                        self.import_audio_blob_to_new_track(
+                            &name,
+                            &bytes,
+                            extension.as_str(),
+                            bpm,
+                        );
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -2038,6 +2096,35 @@ impl YadawApp {
         }
     }
 
+    /// On wasm, egui 0.36 only hands out the dropped file's name/path, not its
+    /// bytes, so read them asynchronously and route the blob back through the
+    /// UI queue where the import runs on the next frame.
+    #[cfg(target_arch = "wasm32")]
+    fn spawn_import_blob(
+        &self,
+        dropped: &egui::DroppedFileHandle,
+        name: String,
+        extension: String,
+    ) {
+        let ui_tx = self.ui_tx.clone();
+        let dropped = dropped.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match dropped.bytes_async().await {
+                Ok(bytes) => {
+                    let _ = ui_tx.send_sync(UIUpdate::ImportedFileBlob {
+                        name,
+                        extension,
+                        bytes,
+                    });
+                }
+                Err(e) => {
+                    let _ = ui_tx
+                        .send_sync(UIUpdate::Error(format!("Failed to read dropped file: {e}")));
+                }
+            }
+        });
+    }
+
     /// Spawn an async background task to persist decoded audio to the OPFS
     /// cache on wasm. No-op on native.
     fn cache_audio_after_import(&self) {
@@ -2098,12 +2185,8 @@ impl YadawApp {
 }
 
 impl eframe::App for YadawApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let _ = ctx;
-    }
-
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx();
+        let ctx = ui.ctx().clone();
 
         if ctx.input(|i| i.viewport().close_requested()) {
             if self.project_manager.is_dirty() {
@@ -2113,7 +2196,7 @@ impl eframe::App for YadawApp {
         }
 
         if self.show_close_confirmation {
-            egui::Modal::new(egui::Id::new("close_confirm_modal")).show(ctx, |ui| {
+            egui::Modal::new(egui::Id::new("close_confirm_modal")).show(&ctx, |ui| {
                 ui.set_width(300.0);
                 ui.heading("Unsaved Changes");
                 ui.label("You have unsaved changes. Do you want to save before closing?");
@@ -2143,7 +2226,7 @@ impl eframe::App for YadawApp {
             });
         }
 
-        self.theme_manager.apply_theme(ctx);
+        self.theme_manager.apply_theme(&ctx);
 
         while let Ok(update) = self.ui_rx.try_recv() {
             self.process_ui_update(update);
@@ -2155,131 +2238,100 @@ impl eframe::App for YadawApp {
             self.input_manager.set_context(ActionContext::Timeline);
         }
 
-        let actions = self.input_manager.poll_actions(ctx);
+        let actions = self.input_manager.poll_actions(&ctx);
 
         for action in actions {
             self.handle_action(action);
         }
 
         {
-            let dropped_files: Vec<egui::DroppedFile> = ctx.input(|i| i.raw.dropped_files.clone());
-            let bpm = self.audio_state.bpm.load();
+            let dropped_files: Vec<egui::DroppedFileHandle> =
+                ctx.input(|i| i.raw.dropped_files.clone());
             for dropped in &dropped_files {
-                if let Some(path) = &dropped.path {
-                    let extension = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|s| s.to_lowercase());
+                let name = dropped
+                    .path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("dropped")
+                    .to_string();
+                let extension = dropped
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|s| s.to_lowercase());
 
-                    log::info!("Dropped file: {:?} (ext: {:?})", path, extension);
-
-                    match extension.as_deref() {
-                        Some("mid") | Some("midi") => {
-                            self.import_midi_file_to_new_track(path);
-                        }
-                        Some("yadaw") | Some("ydw") => {
-                            #[cfg(not(target_arch = "wasm32"))]
-                            match std::env::current_exe() {
-                                Ok(exe) => match std::process::Command::new(&exe).arg(path).spawn() {
-                                    Ok(_) => {
-                                        log::info!("Launched new YADAW instance for project: {:?}", path);
-                                    }
-                                    Err(e) => {
-                                        log::error!("Failed to launch new YADAW instance: {}", e);
-                                        self.dialogs.show_error(&format!(
-                                            "Failed to open project in new window: {}",
-                                            e
-                                        ));
-                                    }
-                                },
-                                Err(e) => {
-                                    log::error!("Failed to get current executable path: {}", e);
-                                }
-                            }
-                        }
-                        Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a")
-                        | Some("aac") => {
-                            self.import_audio_file_to_new_track(path);
-                        }
-                        _ => {
-                            log::warn!("Unknown file type dropped: {:?}", path);
-                            self.dialogs.show_warning(&format!(
-                                "Cannot open dropped file: unknown type '{}'",
-                                extension.unwrap_or_default()
-                            ));
-                        }
+                match extension.as_deref() {
+                    Some("mid") | Some("midi") => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        self.import_midi_file_to_new_track(dropped.path());
+                        #[cfg(target_arch = "wasm32")]
+                        self.spawn_import_blob(dropped, name, "mid".to_string());
                     }
-                } else if let Some(bytes) = &dropped.bytes {
-                    let name = &dropped.name;
-                    let extension = name
-                        .rsplit('.')
-                        .next()
-                        .map(|s| s.to_lowercase());
-
-                    match extension.as_deref() {
-                        Some("mid") | Some("midi") => {
-                            self.import_midi_blob_to_new_track(name, bytes);
-                        }
-                        Some("yadaw") | Some("ydw") => {
-                            if let Ok(contents) = String::from_utf8(bytes.to_vec()) {
-                                if let Ok(project) = serde_json::from_str::<crate::project::Project>(&contents) {
-                                    let live_bpm = self.audio_state.bpm.load();
-                                    let live_loop_start = self.audio_state.loop_start.load();
-                                    let live_loop_end = self.audio_state.loop_end.load();
-                                    let live_loop_enabled = self.audio_state.loop_enabled.load(std::sync::atomic::Ordering::Relaxed);
-
-                                    let mut state = self.state.lock_sync();
-                                    state.load_project(project);
-                                    state.bpm = live_bpm;
-                                    state.loop_start = live_loop_start;
-                                    state.loop_end = live_loop_end;
-                                    state.loop_enabled = live_loop_enabled;
-
-                                    self.audio_state.bpm.store(state.bpm);
-                                    self.audio_state.loop_start.store(state.loop_start);
-                                    self.audio_state.loop_end.store(state.loop_end);
-                                    self.audio_state.loop_enabled.store(state.loop_enabled, std::sync::atomic::Ordering::Relaxed);
-
-                                    state.ensure_ids();
-                                    drop(state);
-
-                                    self.project_path = Some(name.to_string());
-                                    self.select_track(0);
-                                    self.selected_clips.clear();
-                                    self.undo_stack.clear();
-                                    self.redo_stack.clear();
-
-                                    let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-                                    let _ = self.command_tx.send(AudioCommand::RebuildAllRtChains);
-
-                                    self.hydrate_audio_cache();
-                                    self.dialogs.show_success(&format!("Loaded project: {name}"));
+                    Some("yadaw") | Some("ydw") => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        match std::env::current_exe() {
+                            Ok(exe) => match std::process::Command::new(&exe)
+                                .arg(dropped.path())
+                                .spawn()
+                            {
+                                Ok(_) => {
+                                    log::info!(
+                                        "Launched new YADAW instance for project: {:?}",
+                                        dropped.path()
+                                    );
                                 }
+                                Err(e) => {
+                                    log::error!("Failed to launch new YADAW instance: {}", e);
+                                    self.dialogs.show_error(&format!(
+                                        "Failed to open project in new window: {}",
+                                        e
+                                    ));
+                                }
+                            },
+                            Err(e) => {
+                                log::error!("Failed to get current executable path: {}", e);
                             }
                         }
-                        Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a")
-                        | Some("aac") => {
-                            self.import_audio_blob_to_new_track(name, bytes, extension.as_deref().unwrap_or("wav"), bpm);
-                        }
-                        _ => {
-                            log::warn!("Unknown dropped file type: {:?}", name);
-                        }
+                        #[cfg(target_arch = "wasm32")]
+                        self.spawn_import_blob(
+                            dropped,
+                            name,
+                            extension.clone().unwrap_or_default(),
+                        );
+                    }
+                    Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a")
+                    | Some("aac") => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        self.import_audio_file_to_new_track(dropped.path());
+                        #[cfg(target_arch = "wasm32")]
+                        self.spawn_import_blob(
+                            dropped,
+                            name,
+                            extension.clone().unwrap_or_default(),
+                        );
+                    }
+                    _ => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        self.dialogs.show_warning(&format!(
+                            "Cannot open dropped file: unknown type '{}'",
+                            extension.unwrap_or_default()
+                        ));
                     }
                 }
             }
         }
 
         let mut menu_bar = std::mem::take(&mut self.menu_bar);
-        menu_bar.show(ctx, self);
+        menu_bar.show(ui, self);
         self.menu_bar = menu_bar;
 
         let mut transport_ui = std::mem::take(&mut self.transport_ui);
-        transport_ui.show(ctx, self);
+        transport_ui.show(ui, self);
         self.transport_ui = transport_ui;
 
-        self.show_main_panels(ctx);
+        self.show_main_panels(ui);
 
-        self.show_floating_windows(ctx);
+        self.show_floating_windows(&ctx);
 
         if self.audio_state.playing.load(Ordering::Relaxed) {
             ctx.request_repaint();

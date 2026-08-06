@@ -21,8 +21,9 @@ impl MenuBar {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+    pub fn show(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
+        let ctx = ui.ctx().clone();
+        egui::Panel::top("menu_bar").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 self.file_menu(ui, app);
                 self.edit_menu(ui, app);
@@ -36,7 +37,7 @@ impl MenuBar {
         });
 
         // Show dialogs
-        self.show_dialogs(ctx, app);
+        self.show_dialogs(&ctx, app);
     }
 
     fn file_menu(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {

@@ -365,6 +365,12 @@ pub enum UIUpdate {
         params: Vec<PluginParamInfo>,
     },
     NotesCutToClipboard(Vec<MidiNote>),
+    #[cfg(target_arch = "wasm32")]
+    ImportedFileBlob {
+        name: String,
+        extension: String,
+        bytes: Vec<u8>,
+    },
     ExportStateUpdate(ExportState),
     RecordingStateChanged(bool),
 }

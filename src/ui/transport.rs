@@ -35,8 +35,8 @@ impl TransportUI {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, app: &mut super::app::YadawApp) {
-        egui::TopBottomPanel::bottom("transport").show(ctx, |ui| {
+    pub fn show(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
+        egui::Panel::bottom("transport").show(ui, |ui| {
             egui::ScrollArea::horizontal()
                 .id_salt("tbp_tool_strip")
                 .scroll_source(ScrollSource::MOUSE_WHEEL)
@@ -92,7 +92,7 @@ impl TransportUI {
 
                         let record_button = egui::Button::new("⏺").fill(if is_recording_active {
                             // Blinking effect
-                            let time = ctx.input(|i| i.time);
+                            let time = ui.input(|i| i.time);
                             let alpha = (time.sin() * 0.5 + 0.5) as f32;
                             egui::Color32::from_rgb(150 + (105.0 * alpha) as u8, 0, 0)
                         } else {
