@@ -52,6 +52,36 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.10.1" date="2026-08-13" type="stable">
+      <description>
+        <ul>
+          <li>bump egui to 0.36</li>
+          <li>revert: build-std handled by rust-toolchain.toml</li>
+          <li>feat: enable build-std</li>
+          <li>refactor: use reusable pages workflow</li>
+          <li>bump ver and cargo update (for plugin hosts)</li>
+          <li>add adaptive icons for android</li>
+          <li>update comment</li>
+          <li>fix the lv2 reopen crash</li>
+          <li>lv2 basic UI display</li>
+          <li>fix move plugin down button</li>
+          <li>web: gating for x11</li>
+          <li>web: more switching</li>
+          <li>Replace SafeMutex and flume channels with wasm_safe_mutex variants for the UI</li>
+          <li>add service worker for gh pages coep</li>
+          <li>auto save cfg files on every change</li>
+          <li>web: audio caching cont (not ready yet)</li>
+          <li>web: audio caching init via opfs</li>
+          <li>rm the gatings for wasm export</li>
+          <li>fix example</li>
+          <li>web: wire export (test)</li>
+          <li>pin to nightly for rayon</li>
+          <li>fix: the plugin is added to the track for which + was clicked (even when not focused)</li>
+          <li>add provides for clap and lv2 to aur pkgbuild</li>
+          <li>snap icon</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.2" date="2026-06-25" type="stable">
       <description>
         <ul/>
