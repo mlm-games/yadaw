@@ -2,7 +2,6 @@
 mod clap_impl {
     use anyhow::{Result, anyhow};
     #[cfg(feature = "clap-host")]
-    use clack_host::utils::Cookie;
     use std::collections::HashMap;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::Path;
@@ -89,7 +88,11 @@ mod clap_impl {
 
     impl HostParamsImplShared for MyHostShared {
         fn request_flush(&self) {
-            if self.gui_cmd_tx.send(MainThreadCommand::RequestFlush).is_err() {
+            if self
+                .gui_cmd_tx
+                .send(MainThreadCommand::RequestFlush)
+                .is_err()
+            {
                 log::debug!("request_flush: CLAP main thread is gone");
             }
         }
@@ -107,15 +110,15 @@ mod clap_impl {
     impl<'a> MainThreadHandler<'a> for MyHostMainThread {}
 
     impl HostParamsImplMainThread for MyHostMainThread {
-        fn rescan(&mut self, _flags: ParamRescanFlags) {
+        fn rescan(&self, _flags: ParamRescanFlags) {
             // We always re-query parameter info on each (re)instantiation
         }
 
-        fn clear(&mut self, _param_id: ClapId, _flags: ParamClearFlags) {}
+        fn clear(&self, _param_id: ClapId, _flags: ParamClearFlags) {}
     }
 
     impl HostTimerImpl for MyHostMainThread {
-        fn register_timer(&mut self, period_ms: u32) -> Result<TimerId, HostError> {
+        fn register_timer(&self, period_ms: u32) -> Result<TimerId, HostError> {
             let mut state = self.timer_state.lock().unwrap();
             let id = TimerId(state.next_id);
             state.next_id += 1;
@@ -123,7 +126,7 @@ mod clap_impl {
             Ok(id)
         }
 
-        fn unregister_timer(&mut self, timer_id: TimerId) -> Result<(), HostError> {
+        fn unregister_timer(&self, timer_id: TimerId) -> Result<(), HostError> {
             let mut state = self.timer_state.lock().unwrap();
             state.timers.retain(|(id, _, _)| *id != timer_id);
             Ok(())
@@ -716,7 +719,6 @@ mod clap_impl {
                     ClapId::new(id),
                     Pckn::match_all(),
                     value,
-                    Cookie::empty(),
                 ));
             }
 
@@ -815,7 +817,13 @@ mod clap_impl {
             _get_value: *const core::ffi::c_void,
             _value_to_text: *const core::ffi::c_void,
             _text_to_value: *const core::ffi::c_void,
-            flush: Option<unsafe extern "C" fn(*const core::ffi::c_void, *const core::ffi::c_void, *mut core::ffi::c_void)>,
+            flush: Option<
+                unsafe extern "C" fn(
+                    *const core::ffi::c_void,
+                    *const core::ffi::c_void,
+                    *mut core::ffi::c_void,
+                ),
+            >,
         }
 
         let plugin_ptr = instance.plugin_handle().as_raw_ptr();
