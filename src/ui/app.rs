@@ -4,9 +4,9 @@ use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
-use crate::midi_import::ImportedTrack;
 use crate::input::actions::{ActionContext, AppAction};
-use crate::messages::{AudioCommand, PluginParamInfo, UiRx, UiTx, UIUpdate};
+use crate::messages::{AudioCommand, PluginParamInfo, UIUpdate, UiRx, UiTx};
+use crate::midi_import::ImportedTrack;
 use crate::midi_input::MidiInputHandler;
 use crate::model::automation::AutomationTarget;
 use crate::model::clip::MidiPattern;
@@ -22,15 +22,15 @@ use crate::track_manager::{TrackManager, UITrackType};
 use crate::transport::Transport;
 use flume::Sender;
 
-use eframe::egui;
 use ahash::HashMap;
+use eframe::egui;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use web_workers::sync::Mutex;
 use web_time::{Duration, Instant};
+use web_workers::sync::Mutex;
 
 pub enum ActiveEditTarget {
     Clips,
@@ -377,7 +377,7 @@ impl YadawApp {
                 match loc {
                     crate::project::ClipLocation::Midi(idx) => {
                         if let Some(clip) = track.midi_clips.get(idx) {
-                            midi.push(clip.clone());
+                            midi.push(state.materialize_midi_clip(clip));
                         }
                     }
                     crate::project::ClipLocation::Audio(idx) => {
@@ -403,11 +403,7 @@ impl YadawApp {
                 // Resolve each MIDI clip's notes from pattern into clip.notes before duplicating
                 let mut resolved = track.clone();
                 for mc in &mut resolved.midi_clips {
-                    if let Some(pid) = mc.pattern_id {
-                        if let Some(p) = state.patterns.get(&pid) {
-                            mc.notes = p.notes.clone();
-                        }
-                    }
+                    *mc = state.materialize_midi_clip(mc);
                 }
 
                 let mut new_track = self.track_manager.duplicate_track(&resolved);
@@ -488,22 +484,20 @@ impl YadawApp {
     }
 
     pub fn paste_at_playhead(&mut self) {
-        self.push_undo();
-
-        let current_beat = {
+        let beat = {
             let position = self.audio_state.get_position();
             let sample_rate = self.audio_state.sample_rate.load();
             let bpm = self.audio_state.bpm.load();
             (position / sample_rate as f64) * (bpm as f64 / 60.0)
         };
+        self.paste_at_beat(self.selected_track, beat);
+    }
 
-        let track_id = self.selected_track;
+    pub fn paste_at_beat(&mut self, track_id: u64, beat: f64) {
+        self.push_undo();
+
         let midi_clipboard = self.midi_clipboard.clone();
         let audio_clipboard = self.clipboard.clone();
-
-        let mut prepared_midi_clips: Vec<crate::model::clip::MidiClip> = Vec::new();
-        let mut prepared_audio_clips: Vec<crate::model::clip::AudioClip> = Vec::new();
-        let mut required_ids: usize = 0;
 
         let is_midi_track = self
             .state
@@ -512,72 +506,53 @@ impl YadawApp {
             .get(&track_id)
             .map_or(false, |t| matches!(t.track_type, TrackType::Midi));
 
+        let mut prepared_midi = Vec::new();
+        let mut prepared_audio = Vec::new();
+
         if is_midi_track {
-            if let Some(clips_src) = midi_clipboard {
-                required_ids += clips_src.len();
-                for clip in &clips_src {
-                    required_ids += clip.notes.len();
+            if let Some(clips) = midi_clipboard {
+                let origin = clips
+                    .iter()
+                    .map(|c| c.start_beat)
+                    .fold(f64::INFINITY, f64::min);
+                let origin = if origin.is_finite() { origin } else { 0.0 };
+                for mut clip in clips {
+                    clip.start_beat = beat + (clip.start_beat - origin);
+                    clip.id = 0;
+                    clip.pattern_id = None; // notes already materialized in clipboard
+                    for n in &mut clip.notes {
+                        n.id = 0;
+                    }
+                    prepared_midi.push(clip);
                 }
-                prepared_midi_clips = clips_src;
             }
-        } else {
-            if let Some(clips_src) = audio_clipboard {
-                required_ids += clips_src.len();
-                prepared_audio_clips = clips_src;
+        } else if let Some(clips) = audio_clipboard {
+            let origin = clips
+                .iter()
+                .map(|c| c.start_beat)
+                .fold(f64::INFINITY, f64::min);
+            let origin = if origin.is_finite() { origin } else { 0.0 };
+            for mut clip in clips {
+                clip.start_beat = beat + (clip.start_beat - origin);
+                clip.id = 0;
+                prepared_audio.push(clip);
             }
         }
 
-        if required_ids == 0 {
-            return; // Nothing to paste
-        }
-
-        let new_ids: Vec<u64> = {
-            let state = self.state.lock_sync();
-            (0..required_ids).map(|_| state.fresh_id()).collect()
-        };
-        let mut id_iter = new_ids.into_iter();
-
-        for clip in &mut prepared_midi_clips {
-            clip.id = id_iter.next().unwrap();
-            clip.start_beat = current_beat;
-            for n in &mut clip.notes {
-                n.id = id_iter.next().unwrap();
-            }
-        }
-        for clip in &mut prepared_audio_clips {
-            clip.id = id_iter.next().unwrap();
-            clip.start_beat = current_beat;
+        if prepared_midi.is_empty() && prepared_audio.is_empty() {
+            return;
         }
 
         {
             let mut state = self.state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if is_midi_track {
-                    track.midi_clips.extend(prepared_midi_clips.iter().cloned());
-                    for c in &prepared_midi_clips {
-                        state.clips_by_id.insert(
-                            c.id,
-                            crate::project::ClipRef {
-                                track_id,
-                                is_midi: true,
-                            },
-                        );
-                    }
+                    track.midi_clips.extend(prepared_midi);
                 } else {
-                    track
-                        .audio_clips
-                        .extend(prepared_audio_clips.iter().cloned());
-                    for c in &prepared_audio_clips {
-                        state.clips_by_id.insert(
-                            c.id,
-                            crate::project::ClipRef {
-                                track_id,
-                                is_midi: false,
-                            },
-                        );
-                    }
+                    track.audio_clips.extend(prepared_audio);
                 }
             }
+            state.ensure_ids(); // assigns clip/pattern/note ids + rebuilds index
         }
 
         let _ = self.command_tx.send(AudioCommand::UpdateTracks);
@@ -1249,10 +1224,7 @@ impl YadawApp {
                 let clip_id = state.fresh_id();
                 let clip = crate::model::clip::AudioClip {
                     id: clip_id,
-                    name: format!(
-                        "Rec {}",
-                        chrono::Local::now().format("%H:%M:%S")
-                    ),
+                    name: format!("Rec {}", chrono::Local::now().format("%H:%M:%S")),
                     start_beat,
                     length_beats,
                     samples,
@@ -1397,10 +1369,8 @@ impl YadawApp {
                             let live_bpm = self.audio_state.bpm.load();
                             let live_loop_start = self.audio_state.loop_start.load();
                             let live_loop_end = self.audio_state.loop_end.load();
-                            let live_loop_enabled = self
-                                .audio_state
-                                .loop_enabled
-                                .load(Ordering::Relaxed);
+                            let live_loop_enabled =
+                                self.audio_state.loop_enabled.load(Ordering::Relaxed);
 
                             let mut state = self.state.lock_sync();
                             state.load_project(project);
@@ -1415,20 +1385,13 @@ impl YadawApp {
                             self.audio_state.loop_end.store(live_loop_end);
 
                             let _ = self.command_tx.send(AudioCommand::UpdateTracks);
-                            let _ = self
-                                .command_tx
-                                .send(AudioCommand::RebuildAllRtChains);
+                            let _ = self.command_tx.send(AudioCommand::RebuildAllRtChains);
                             self.dialogs
                                 .show_success(&format!("Loaded project: {name}"));
                         }
                     }
                     "wav" | "flac" | "mp3" | "ogg" | "m4a" | "aac" => {
-                        self.import_audio_blob_to_new_track(
-                            &name,
-                            &bytes,
-                            extension.as_str(),
-                            bpm,
-                        );
+                        self.import_audio_blob_to_new_track(&name, &bytes, extension.as_str(), bpm);
                     }
                     _ => {}
                 }
@@ -1945,7 +1908,11 @@ impl YadawApp {
         let bpm = self.audio_state.bpm.load();
         match crate::midi_import::import_midi_file(path, bpm) {
             Ok(tracks) => {
-                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 self.apply_imported_midi(tracks, name)
             }
             Err(e) => self.dialogs.show_error(&format!(
@@ -1961,7 +1928,9 @@ impl YadawApp {
         let bpm = self.audio_state.bpm.load();
         match crate::midi_import::import_midi_data(data, bpm) {
             Ok(tracks) => self.apply_imported_midi(tracks, name.to_string()),
-            Err(e) => self.dialogs.show_error(&format!("Failed to import MIDI '{name}': {e}")),
+            Err(e) => self
+                .dialogs
+                .show_error(&format!("Failed to import MIDI '{name}': {e}")),
         }
     }
 
@@ -2321,24 +2290,23 @@ impl eframe::App for YadawApp {
                     Some("yadaw") | Some("ydw") => {
                         #[cfg(not(target_arch = "wasm32"))]
                         match std::env::current_exe() {
-                            Ok(exe) => match std::process::Command::new(&exe)
-                                .arg(dropped.path())
-                                .spawn()
-                            {
-                                Ok(_) => {
-                                    log::info!(
-                                        "Launched new YADAW instance for project: {:?}",
-                                        dropped.path()
-                                    );
+                            Ok(exe) => {
+                                match std::process::Command::new(&exe).arg(dropped.path()).spawn() {
+                                    Ok(_) => {
+                                        log::info!(
+                                            "Launched new YADAW instance for project: {:?}",
+                                            dropped.path()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to launch new YADAW instance: {}", e);
+                                        self.dialogs.show_error(&format!(
+                                            "Failed to open project in new window: {}",
+                                            e
+                                        ));
+                                    }
                                 }
-                                Err(e) => {
-                                    log::error!("Failed to launch new YADAW instance: {}", e);
-                                    self.dialogs.show_error(&format!(
-                                        "Failed to open project in new window: {}",
-                                        e
-                                    ));
-                                }
-                            },
+                            }
                             Err(e) => {
                                 log::error!("Failed to get current executable path: {}", e);
                             }

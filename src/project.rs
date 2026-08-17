@@ -348,6 +348,30 @@ impl AppState {
         }
     }
 
+    /// Resolve pattern-backed notes into a standalone clip copy.
+    pub fn resolve_midi_clip_notes(
+        &self,
+        clip: &crate::model::clip::MidiClip,
+    ) -> Vec<crate::model::clip::MidiNote> {
+        if let Some(pid) = clip.pattern_id {
+            if let Some(p) = self.patterns.get(&pid) {
+                return p.notes.clone();
+            }
+        }
+        clip.notes.clone()
+    }
+
+    /// Resolve pattern notes into an independent clip copy with no shared pattern.
+    pub fn materialize_midi_clip(
+        &self,
+        clip: &crate::model::clip::MidiClip,
+    ) -> crate::model::clip::MidiClip {
+        let mut c = clip.clone();
+        c.notes = self.resolve_midi_clip_notes(clip);
+        c.pattern_id = None; // independent copy; ensure_ids will mint a fresh pattern
+        c
+    }
+
     /// Find clip by ID
     pub fn find_clip(&self, clip_id: u64) -> Option<(&Track, ClipLocation)> {
         let clip_ref = self.clips_by_id.get(&clip_id)?;

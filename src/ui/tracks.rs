@@ -1093,10 +1093,16 @@ impl TracksPanel {
                 app.dialogs.show_rename_track(track_id, current_name);
             }
             "duplicate" => {
+                app.push_undo();
                 let new_id_opt = {
                     let mut state = app.state.lock_sync();
                     if let Some(src) = state.tracks.get(&track_id).cloned() {
-                        let mut new_track = app.track_manager.duplicate_track(&src);
+                        let mut resolved = src;
+                        for mc in &mut resolved.midi_clips {
+                            *mc = state.materialize_midi_clip(mc);
+                        }
+                        // Deep-copy plugins with fresh ids
+                        let mut new_track = app.track_manager.duplicate_track(&resolved);
                         let new_id = state.fresh_id();
                         new_track.id = new_id;
 
@@ -1109,7 +1115,7 @@ impl TracksPanel {
 
                         state.track_order.insert(insert_pos, new_id);
                         state.tracks.insert(new_id, new_track);
-                        state.ensure_ids();
+                        state.ensure_ids(); // moves notes into fresh patterns + rebuilds clips_by_id
                         Some(new_id)
                     } else {
                         None

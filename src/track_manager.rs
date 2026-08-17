@@ -233,6 +233,14 @@ impl TrackManager {
         let mut t = src.clone();
 
         // Reset IDs for fresh ones
+        t.id = 0;
+        t.name = format!("{} (copy)", src.name);
+        t.armed = false;
+        t.solo = false;
+        t.frozen = false;
+        t.frozen_buffer = None;
+        t.plugin_by_id.clear();
+
         for c in &mut t.audio_clips {
             c.id = 0;
         }
