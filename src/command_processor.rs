@@ -3,11 +3,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use flume::Receiver;
-use wasm_safe_mutex::Mutex;
-use wasm_safe_mutex::mpsc::Sender;
+use flume::Sender as FlumeSender;
+use web_workers::sync::Mutex;
+use web_workers::sync::mpsc::Sender;
 
 use crate::audio_export::AudioExporter;
-use crate::audio_state::{AudioGraphSnapshot, AudioState, RealtimeCommand};
+use crate::audio_state::{AudioGraphSnapshot, AudioState, PluginWorkerCommand, RealtimeCommand};
 use crate::edit_actions::EditProcessor;
 use crate::idgen;
 use crate::messages::{AudioCommand, UIUpdate, UiTx};
@@ -15,10 +16,9 @@ use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
 use crate::model::track::TrackType;
 use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor, TrackGroup};
-use crate::plugin::{create_plugin_instance, get_control_port_info};
+use crate::plugin::create_plugin_instance;
 use crate::project::{AppState, ClipLocation, ClipRef};
 use crate::time_utils::quick::samples_to_beats;
-use yadaw_plugin_api::BackendKind;
 
 pub async fn run_command_processor(
     app_state: Arc<Mutex<AppState>>,
@@ -28,6 +28,7 @@ pub async fn run_command_processor(
     ui_tx: UiTx,
     snapshot_tx: Sender<AudioGraphSnapshot>,
     midi_input_handler: Option<Arc<MidiInputHandler>>,
+    plugin_worker_tx: FlumeSender<PluginWorkerCommand>,
 ) {
     let mut midi_recording_state: Option<MidiRecordingState> = None;
     while let Ok(command) = command_rx.recv_async().await {
@@ -40,6 +41,7 @@ pub async fn run_command_processor(
             &ui_tx,
             &snapshot_tx,
             &midi_input_handler,
+            &plugin_worker_tx,
         );
     }
 }
@@ -53,6 +55,7 @@ fn process_command(
     ui_tx: &UiTx,
     snapshot_tx: &Sender<AudioGraphSnapshot>,
     midi_input_handler: &Option<Arc<MidiInputHandler>>,
+    plugin_worker_tx: &FlumeSender<PluginWorkerCommand>,
 ) {
     match command {
         AudioCommand::Play => {
@@ -352,10 +355,6 @@ fn process_command(
             }
             drop(state);
 
-            let _ = realtime_tx.send_sync(RealtimeCommand::RemovePluginInstance {
-                track_id,
-                plugin_id,
-            });
 
             send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);
         }
@@ -373,17 +372,16 @@ fn process_command(
             ));
         }
         AudioCommand::SetPluginParam(track_id, plugin_id, param_name, value) => {
-            let (uri_opt, backend) = {
+            let exists = {
                 let state = app_state.lock_sync();
                 state
                     .tracks
                     .get(&track_id)
                     .and_then(|t| t.plugin_chain.iter().find(|p| p.id == plugin_id))
-                    .map(|p| (Some(p.uri.clone()), p.backend))
-                    .unwrap_or((None, BackendKind::Lv2))
+                    .is_some()
             };
 
-            if let Some(uri) = uri_opt {
+            if exists {
                 let v = value;
 
                 let mut state = app_state.lock_sync();
@@ -577,14 +575,7 @@ fn process_command(
                 }
             };
 
-            if let Some(plugin_id) = plugin_id_opt {
-                let _ = realtime_tx.send_sync(RealtimeCommand::AddUnifiedPlugin {
-                    track_id,
-                    plugin_id,
-                    backend,
-                    uri: uri.clone(),
-                });
-
+            if plugin_id_opt.is_some() {
                 let state = app_state.lock_sync();
                 send_graph_snapshot(&state, snapshot_tx);
             }
@@ -1471,12 +1462,7 @@ fn process_command(
             let track_snapshots = crate::audio_snapshot::build_track_snapshots(&state);
             drop(state);
 
-            for ts in track_snapshots {
-                let _ = realtime_tx.send_sync(RealtimeCommand::RebuildTrackChain {
-                    track_id: ts.track_id,
-                    chain: ts.plugin_chain,
-                });
-            }
+            let _ = realtime_tx.send_sync(RealtimeCommand::UpdateTracks(track_snapshots));
         }
         AudioCommand::AddNotesToClip { clip_id, mut notes } => {
             for n in &mut notes {
@@ -2075,7 +2061,10 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::OpenPluginEditor(track_id, plugin_id) => {
-            let _ = realtime_tx.send_sync(RealtimeCommand::OpenPluginEditor(track_id, plugin_id));
+            let _ = plugin_worker_tx.send(PluginWorkerCommand::OpenEditor {
+                track_id,
+                plugin_id,
+            });
         }
         AudioCommand::PunchOutMidiClip {
             clip_id,

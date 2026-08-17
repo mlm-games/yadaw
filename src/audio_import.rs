@@ -4,6 +4,7 @@ use std::io::Cursor;
 use std::path::Path;
 
 use crate::model::clip::AudioClip;
+use std::sync::Arc;
 
 fn new_audio_clip(
     name: String,
@@ -17,7 +18,7 @@ fn new_audio_clip(
         name,
         start_beat,
         length_beats,
-        samples,
+        samples: Arc::new(samples),
         sample_rate,
         source_hash,
         ..Default::default()

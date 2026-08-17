@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::model::{AudioClip, MidiNote};
 
 #[derive(Debug, Clone)]
@@ -133,13 +135,13 @@ impl EditProcessor {
         }
         let mut first = clip.clone();
         first.length_beats = split_offset;
-        first.samples = clip.samples[..split_sample].to_vec();
+        first.samples = Arc::new(clip.samples[..split_sample].to_vec());
 
         let mut second = clip.clone();
         second.name = format!("{} (2)", clip.name);
         second.start_beat = position_beats;
         second.length_beats = clip.length_beats - split_offset;
-        second.samples = clip.samples[split_sample..].to_vec();
+        second.samples = Arc::new(clip.samples[split_sample..].to_vec());
         Some((first, second))
     }
 
@@ -147,9 +149,10 @@ impl EditProcessor {
         let fade_samples = ((duration_beats * 60.0 / bpm as f64) * clip.sample_rate as f64)
             .round()
             .clamp(0.0, clip.samples.len() as f64) as usize;
+        let samples = Arc::make_mut(&mut clip.samples);
         for i in 0..fade_samples {
             let f = i as f32 / fade_samples.max(1) as f32;
-            clip.samples[i] *= f;
+            samples[i] *= f;
         }
     }
 
@@ -158,9 +161,10 @@ impl EditProcessor {
             .round()
             .clamp(0.0, clip.samples.len() as f64) as usize;
         let start = clip.samples.len().saturating_sub(fade_samples);
+        let samples = Arc::make_mut(&mut clip.samples);
         for i in 0..fade_samples {
             let f = 1.0 - (i as f32 / fade_samples.max(1) as f32);
-            clip.samples[start + i] *= f;
+            samples[start + i] *= f;
         }
     }
 

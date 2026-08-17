@@ -887,7 +887,7 @@ mod clap_impl {
                 }
             }
 
-            // Pump callbacks — must call on_main_thread regularly per CLAP spec,
+            // Pump callbacks - must call on_main_thread regularly per CLAP spec,
             // even when the plugin has not explicitly requested it.
             instance.call_on_main_thread_callback();
 

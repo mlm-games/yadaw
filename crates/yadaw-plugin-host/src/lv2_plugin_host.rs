@@ -369,7 +369,7 @@ impl LV2PluginInstance {
     }
 
     /// Open the first discoverable UI. Returns the [`yeli::UiInstance`] that
-    /// keeps the editor alive — the caller must keep it alive.
+    /// keeps the editor alive - the caller must keep it alive.
     pub fn open_editor(&self) -> Result<yeli::UiInstance> {
         self.instance
             .open_editor()

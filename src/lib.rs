@@ -29,6 +29,7 @@ pub mod paths;
 pub mod wasm_persist;
 pub mod performance;
 pub mod plugin;
+pub mod plugin_worker;
 pub mod presets;
 pub mod project;
 pub mod project_manager;

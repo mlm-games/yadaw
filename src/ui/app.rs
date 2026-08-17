@@ -29,7 +29,7 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use wasm_safe_mutex::Mutex;
+use web_workers::sync::Mutex;
 use web_time::{Duration, Instant};
 
 pub enum ActiveEditTarget {
@@ -746,7 +746,7 @@ impl YadawApp {
                         let peak = clip.samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                         if peak > 0.0 {
                             let gain = crate::constants::NORMALIZE_TARGET_LINEAR / peak;
-                            for s in &mut clip.samples {
+                            for s in Arc::make_mut(&mut clip.samples) {
                                 *s *= gain;
                             }
                         }
@@ -769,7 +769,7 @@ impl YadawApp {
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let crate::project::ClipLocation::Audio(idx) = loc {
                     if let Some(clip) = track.audio_clips.get_mut(idx) {
-                        clip.samples.reverse();
+                        Arc::make_mut(&mut clip.samples).reverse();
                     }
                 }
             }
@@ -1209,6 +1209,56 @@ impl YadawApp {
                 let mut state = self.state.lock_sync();
                 clip.id = state.fresh_id();
                 let clip_id = clip.id;
+
+                let added = if let Some(track) = state.tracks.get_mut(&track_id) {
+                    if !matches!(track.track_type, crate::model::track::TrackType::Midi) {
+                        track.audio_clips.push(clip);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if added {
+                    state.clips_by_id.insert(
+                        clip_id,
+                        crate::project::ClipRef {
+                            track_id,
+                            is_midi: false,
+                        },
+                    );
+                }
+
+                drop(state);
+                let _ = self
+                    .command_tx
+                    .send(crate::messages::AudioCommand::UpdateTracks);
+                self.project_manager.mark_dirty();
+            }
+            UIUpdate::RecordingFinishedRaw {
+                track_id,
+                samples,
+                sample_rate,
+                start_beat,
+                length_beats,
+            } => {
+                self.push_undo();
+                let mut state = self.state.lock_sync();
+                let clip_id = state.fresh_id();
+                let clip = crate::model::clip::AudioClip {
+                    id: clip_id,
+                    name: format!(
+                        "Rec {}",
+                        chrono::Local::now().format("%H:%M:%S")
+                    ),
+                    start_beat,
+                    length_beats,
+                    samples,
+                    sample_rate,
+                    ..Default::default()
+                };
 
                 let added = if let Some(track) = state.tracks.get_mut(&track_id) {
                     if !matches!(track.track_type, crate::model::track::TrackType::Midi) {
@@ -2173,7 +2223,7 @@ impl YadawApp {
                         if let Some(track) = state_arc.lock_sync().tracks.get_mut(&track_id) {
                             if let Some(clip) = track.audio_clips.get_mut(idx) {
                                 if clip.source_hash == Some(hash) {
-                                    clip.samples = cached;
+                                    clip.samples = Arc::new(cached);
                                 }
                             }
                         }
@@ -2248,6 +2298,7 @@ impl eframe::App for YadawApp {
             let dropped_files: Vec<egui::DroppedFileHandle> =
                 ctx.input(|i| i.raw.dropped_files.clone());
             for dropped in &dropped_files {
+                #[cfg(target_arch = "wasm32")]
                 let name = dropped
                     .path()
                     .file_name()

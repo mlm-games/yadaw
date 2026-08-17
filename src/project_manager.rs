@@ -6,6 +6,7 @@ use web_time::{Duration, Instant, SystemTime};
 use crate::constants::PROJECT_EXTENSION;
 use crate::paths::cache_dir;
 use crate::project::{AppState, Project};
+#[cfg(target_arch = "wasm32")]
 use crate::wasm_persist::{read_config_string, save_config_string};
 use std::fs;
 

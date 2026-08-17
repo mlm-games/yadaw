@@ -321,6 +321,15 @@ pub enum UIUpdate {
     Position(f64),
     TrackLevels(HashMap<u64, (f32, f32)>), // indexed for meters
     RecordingFinished(u64, AudioClip),     // Track ID
+    /// Recording clip data assembled off the audio thread (raw samples moved
+    /// out of the engine without copying.
+    RecordingFinishedRaw {
+        track_id: u64,
+        samples: std::sync::Arc<Vec<f32>>,
+        sample_rate: f32,
+        start_beat: f64,
+        length_beats: f64,
+    },
     RecordingLevel(f32),
     MasterLevel(f32, f32),
     PushUndo(AppStateSnapshot),
@@ -386,6 +395,6 @@ pub enum ExportState {
 }
 
 /// (spins instead of Atomics.wait).
-pub type UiTx = wasm_safe_mutex::mpsc::Sender<UIUpdate>;
+pub type UiTx = web_workers::sync::mpsc::Sender<UIUpdate>;
 
-pub type UiRx = wasm_safe_mutex::mpsc::Receiver<UIUpdate>;
+pub type UiRx = web_workers::sync::mpsc::Receiver<UIUpdate>;

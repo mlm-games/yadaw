@@ -2721,6 +2721,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "minicov"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3aa3aa12b448ac225b3102217d1ac5cc717908f02722926524b0599c933c7a0"
+dependencies = [
+ "cc",
+ "walkdir",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5102,31 +5112,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm_safe_mutex"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e97cacdc547284492c7a04e10ac2c628e6236554373f2ba1d1d73cd819f5f1d6"
-dependencies = [
- "continue",
- "wasm-bindgen",
- "wasm_safe_thread",
- "web-time",
-]
-
-[[package]]
-name = "wasm_safe_thread"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cbd0fac61fdac75f6413e236f521802c4d5deea057b0c85c4cea98a856bfb04"
-dependencies = [
- "continue",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-time",
-]
-
-[[package]]
 name = "wasm_sync"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5316,6 +5301,23 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "web-workers"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecdb069e55b3b196c54c0808de61204909c21612893657cd0792020a6873256e"
+dependencies = [
+ "atomic-waker",
+ "continue",
+ "js-sys",
+ "minicov",
+ "pin-project",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]
@@ -6089,10 +6091,10 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-rayon",
- "wasm_safe_mutex",
  "waw",
  "web-sys",
  "web-time",
+ "web-workers",
  "winit",
  "yadaw-plugin-api",
  "yadaw-plugin-host",

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
 
@@ -116,7 +117,7 @@ pub struct AudioClip {
     pub length_beats: f64,
     #[serde(default = "default_zero_f64")]
     pub offset_beats: f64,
-    pub samples: Vec<f32>,
+    pub samples: Arc<Vec<f32>>,
     pub sample_rate: f32,
     #[serde(default = "default_opt_u64_none")]
     pub source_hash: Option<u64>,
@@ -144,7 +145,7 @@ impl Default for AudioClip {
             start_beat: 0.0,
             length_beats: DEFAULT_MIN_PROJECT_BEATS,
             offset_beats: 0.0,
-            samples: Vec::new(),
+            samples: Arc::new(Vec::new()),
             sample_rate: 44100.0,
             source_hash: None,
             fade_in: None,

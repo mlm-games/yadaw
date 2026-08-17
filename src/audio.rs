@@ -1,30 +1,29 @@
 use crate::audio_state::{
-    AudioGraphSnapshot, AudioState, MidiClipSnapshot, PluginDescriptorSnapshot, RealtimeCommand,
-    RtAutomationLaneSnapshot, RtAutomationTarget, RtCurveType, TrackSnapshot,
+    AudioGraphSnapshot, AudioState, EngineEvent, MidiClipSnapshot, PluginWorkerCommand,
+    RealtimeCommand, RtAutomationLaneSnapshot, RtAutomationTarget, RtCurveType, TrackSnapshot,
 };
 use crate::audio_utils::{calculate_stereo_gains, soft_clip};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::constants::RECORDING_BUFFER_SIZE;
 use crate::constants::{DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION};
-use crate::messages::{PluginParamInfo, UIUpdate};
+use crate::messages::{UIUpdate, UiTx};
 use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::ChannelStrip;
-use crate::model::clip::AudioClip;
 use crate::model::track::TrackType;
 use crate::time_utils::TimeConverter;
-use wasm_safe_mutex::mpsc::{Receiver, channel};
-use yadaw_plugin_api::{BackendKind, HostConfig, ParamKey, ProcessCtx, RtMidiEvent};
-use yadaw_plugin_host::HostFacade;
-
-use crate::messages::UiTx;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use dashmap::DashMap;
+use flume::{Receiver as FlumeReceiver, Sender as FlumeSender};
 use rtrb::{Consumer, RingBuffer};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
 use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
+use web_workers::sync::mpsc::{Receiver, channel};
+use yadaw_plugin_api::{BackendKind, ParamKey, ProcessCtx, RtMidiEvent};
 
 /// (`globalThis.performance` is unavailable in AudioWorkletGlobalScope).
 fn now_secs() -> f64 {
@@ -53,8 +52,6 @@ impl PluginCell {
     }
 }
 
-unsafe impl Send for PluginCell {}
-
 static PLUGIN_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 static PLUGIN_ID_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
@@ -68,6 +65,20 @@ pub struct AudioEngine {
     graph_snapshot: AudioGraphSnapshot,
     track_processors: HashMap<u64, TrackProcessor>,
     plugin_instances: HashMap<PluginInstanceHandle, PluginCell>,
+    /// Instances whose Install event arrived before the matching snapshot
+    /// entry - anchored once the chain diff sees the plugin.
+    pending_installs: HashMap<(u64, u64), PluginCell>,
+    /// Handles whose instance must be dropped off the real-time path.
+    plugin_switch_queue: VecDeque<PluginInstanceHandle>,
+    /// Commands for the plugin worker (bounded; dropped, never blocking).
+    plugin_worker_tx: FlumeSender<PluginWorkerCommand>,
+    /// Events from the plugin worker (Install / Uninstall).
+    engine_events_rx: FlumeReceiver<EngineEvent>,
+    /// Lightweight UI-command channel, drained on the audio thread.
+    realtime_commands: Receiver<RealtimeCommand>,
+    /// Full graph snapshots, applied on the audio thread.
+    snapshot_rx: Receiver<AudioGraphSnapshot>,
+    scratch: EngineScratch,
     audio_state: Arc<AudioState>,
     recording_state: RecordingState,
     preview_note: Option<PreviewNote>,
@@ -76,10 +87,27 @@ pub struct AudioEngine {
     channel_strips: HashMap<u64, ChannelStrip>,
     xrun_count: u64,
     paused_last: bool,
-    host_facade: HostFacade,
     last_ui_meter_update: f64,
 
     free_running_samples: f64,
+}
+
+struct EngineScratch {
+    plugin_order: Vec<u64>,
+    all_midi_events: Vec<RtMidiEvent>,
+    bus_ids: Vec<u64>,
+    track_order_ids: Vec<u64>,
+}
+
+impl EngineScratch {
+    fn new() -> Self {
+        Self {
+            plugin_order: Vec::new(),
+            all_midi_events: Vec::new(),
+            bus_ids: Vec::new(),
+            track_order_ids: Vec::new(),
+        }
+    }
 }
 
 struct TrackProcessor {
@@ -230,8 +258,6 @@ pub fn resolve_output_sample_rate(preferred_sample_rate: f32) -> f32 {
 fn build_audio_callback(
     mut engine: AudioEngine,
     channels: usize,
-    realtime_commands: Receiver<RealtimeCommand>,
-    snapshot_rx: Receiver<AudioGraphSnapshot>,
     updates: UiTx,
 ) -> impl FnMut(&mut [f32], &cpal::OutputCallbackInfo) {
     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
@@ -245,13 +271,7 @@ fn build_audio_callback(
             let should_be_recording = engine.audio_state.recording.load(Ordering::Relaxed);
             let is_actually_recording = engine.recording_state.is_recording;
 
-            while let Ok(cmd) = realtime_commands.try_recv() {
-                engine.process_realtime_command(cmd);
-            }
-
-            while let Ok(new_snapshot) = snapshot_rx.try_recv() {
-                engine.apply_new_snapshot(new_snapshot);
-            }
+            engine.realtime_prepare();
 
             if engine.recording_state.monitor_queue.len() > 2 * MAX_BUFFER_SIZE {
                 let drop_n = engine.recording_state.monitor_queue.len() - 2 * MAX_BUFFER_SIZE;
@@ -283,24 +303,19 @@ fn build_audio_callback(
                         );
                         let start_beat = converter
                             .samples_to_beats(engine.recording_state.recording_start_position);
-
                         let num_samples = engine.recording_state.accumulated_samples.len();
                         let length_beats = converter.samples_to_beats(num_samples as f64);
 
-                        let clip = AudioClip {
-                            id: 0,
-                            name: format!("Rec {}", chrono::Local::now().format("%H:%M:%S")),
+                        let samples =
+                            Arc::new(std::mem::take(&mut engine.recording_state.accumulated_samples));
+
+                        let _ = engine.updates.send_sync(UIUpdate::RecordingFinishedRaw {
+                            track_id,
+                            samples,
+                            sample_rate: engine.sample_rate as f32,
                             start_beat,
                             length_beats,
-                            samples: engine.recording_state.accumulated_samples.clone(),
-                            sample_rate: engine.sample_rate as f32,
-                            ..Default::default()
-                        };
-
-                        let _ = engine
-                            .updates
-                            .send_sync(UIUpdate::RecordingFinished(track_id, clip));
-                        engine.recording_state.accumulated_samples.clear();
+                        });
                     }
                 }
             }
@@ -327,6 +342,8 @@ fn build_audio_callback(
                         processor.plugin_active_notes.clear();
                     }
                 }
+
+                engine.drain_plugin_switch_queue();
 
                 let elapsed = now_secs() - cb_start;
                 let budget = (num_frames as f64 / engine.sample_rate).max(1e-6);
@@ -403,6 +420,8 @@ pub fn run_audio_thread(
     realtime_commands: Receiver<RealtimeCommand>,
     updates: UiTx,
     snapshot_rx: Receiver<AudioGraphSnapshot>,
+    engine_events_rx: FlumeReceiver<EngineEvent>,
+    plugin_worker_tx: FlumeSender<PluginWorkerCommand>,
     preferred_sample_rate: f32,
 ) {
     let host = cpal::default_host();
@@ -434,23 +453,23 @@ pub fn run_audio_thread(
 
     audio_state.sample_rate.store(sample_rate as f32);
 
-    let host_cfg = HostConfig {
-        sample_rate,
-        max_block: MAX_BUFFER_SIZE,
-        plugin_scan_paths: Vec::new(),
-    };
-    let host_facade = HostFacade::new(host_cfg).expect("HostFacade init failed");
-
     // Create recording buffer
     let (recording_producer, recording_consumer) = RingBuffer::<f32>::new(RECORDING_BUFFER_SIZE);
 
     // Initialize engine
 
-    let mut engine = AudioEngine {
+    let engine = AudioEngine {
         graph_snapshot: AudioGraphSnapshot::default(),
         audio_state: audio_state.clone(),
         track_processors: HashMap::new(),
         plugin_instances: HashMap::new(),
+        pending_installs: HashMap::new(),
+        plugin_switch_queue: VecDeque::new(),
+        plugin_worker_tx,
+        engine_events_rx,
+        realtime_commands,
+        snapshot_rx,
+        scratch: EngineScratch::new(),
         recording_state: RecordingState {
             is_recording: false,
             recording_track: None,
@@ -465,12 +484,11 @@ pub fn run_audio_thread(
         channel_strips: HashMap::new(),
         xrun_count: 0,
         paused_last: false,
-        host_facade,
         last_ui_meter_update: now_secs(),
         free_running_samples: 0.0,
     };
 
-    // Start recording input thread (native only — wasm CPAL doesn't support input)
+    // Start recording input thread (native only - wasm CPAL doesn't support input)
     let recording_producer = Arc::new(parking_lot::Mutex::new(recording_producer));
     let updates_clone = updates.clone();
 
@@ -517,13 +535,7 @@ pub fn run_audio_thread(
     });
 
     // Audio callback
-    let audio_callback = build_audio_callback(
-        engine,
-        channels,
-        realtime_commands,
-        snapshot_rx,
-        updates.clone(),
-    );
+    let audio_callback = build_audio_callback(engine, channels, updates.clone());
 
     let stream = device
         .build_output_stream(
@@ -571,6 +583,8 @@ pub fn run_audio_wasm(
     realtime_commands: Receiver<RealtimeCommand>,
     updates: UiTx,
     snapshot_rx: Receiver<AudioGraphSnapshot>,
+    engine_events_rx: FlumeReceiver<EngineEvent>,
+    plugin_worker_tx: FlumeSender<PluginWorkerCommand>,
     preferred_sample_rate: f32,
 ) {
     let host = cpal::available_hosts()
@@ -606,21 +620,21 @@ pub fn run_audio_wasm(
 
     audio_state.sample_rate.store(sample_rate as f32);
 
-    let host_cfg = HostConfig {
-        sample_rate,
-        max_block: MAX_BUFFER_SIZE,
-        plugin_scan_paths: Vec::new(),
-    };
-    let host_facade = HostFacade::new(host_cfg).expect("HostFacade init failed");
-
     // Create a dummy recording consumer (CPAL wasm backend doesn't support input)
     let (_, recording_consumer) = RingBuffer::<f32>::new(1);
 
-    let mut engine = AudioEngine {
+    let engine = AudioEngine {
         graph_snapshot: AudioGraphSnapshot::default(),
         audio_state: audio_state.clone(),
         track_processors: HashMap::new(),
         plugin_instances: HashMap::new(),
+        pending_installs: HashMap::new(),
+        plugin_switch_queue: VecDeque::new(),
+        plugin_worker_tx,
+        engine_events_rx,
+        realtime_commands,
+        snapshot_rx,
+        scratch: EngineScratch::new(),
         recording_state: RecordingState {
             is_recording: false,
             recording_track: None,
@@ -635,13 +649,11 @@ pub fn run_audio_wasm(
         channel_strips: HashMap::new(),
         xrun_count: 0,
         paused_last: false,
-        host_facade,
         last_ui_meter_update: now_secs(),
         free_running_samples: 0.0,
     };
 
-    let audio_callback =
-        build_audio_callback(engine, channels, realtime_commands, snapshot_rx, updates);
+    let audio_callback = build_audio_callback(engine, channels, updates);
 
     let stream = device
         .build_output_stream(
@@ -661,7 +673,7 @@ pub fn run_audio_wasm(
 
     // Register a click handler to resume the AudioContext during a genuine
     // user-gesture event (rAF callbacks may not carry transient activation).
-    // Must use FnMut, not FnOnce — the listener fires on every click.
+    // Must use FnMut, not FnOnce - the listener fires on every click.
     let canvas = web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.get_element_by_id("yadaw_canvas"));
@@ -689,15 +701,25 @@ impl AudioEngine {
         audio_state: &AudioState,
         export_sample_rate: f32,
     ) -> Result<Self, anyhow::Error> {
+        use crate::plugin_worker;
+        use yadaw_plugin_api::HostConfig;
+        use yadaw_plugin_host::HostFacade;
+
         // Create a dummy channel since we don't send UI updates
         let (dummy_tx, _) = channel::<UIUpdate>();
+        let (_, dummy_realtime) = channel::<RealtimeCommand>();
+        let (_, dummy_snapshot) = channel::<AudioGraphSnapshot>();
 
         let host_cfg = HostConfig {
             sample_rate: export_sample_rate as f64,
             max_block: MAX_BUFFER_SIZE,
             plugin_scan_paths: Vec::new(), // Not used anyway
         };
-        let host_facade = HostFacade::new(host_cfg)?;
+        let facade = Arc::new(HostFacade::new(host_cfg)?);
+
+        let (worker_tx, worker_rx) = flume::bounded::<PluginWorkerCommand>(256);
+        let (events_tx, events_rx) = flume::unbounded::<EngineEvent>();
+        plugin_worker::spawn_plugin_worker(facade, worker_rx, events_tx, dummy_tx.clone());
 
         let offline_audio_state = AudioState::new();
 
@@ -708,11 +730,18 @@ impl AudioEngine {
         // Copy BPM from the main project state
         offline_audio_state.bpm.store(audio_state.bpm.load());
 
-        let mut engine = AudioEngine {
+let mut engine = AudioEngine {
             graph_snapshot: AudioGraphSnapshot::default(), // Will be populated by setup method
             audio_state: Arc::new(offline_audio_state),
             track_processors: HashMap::new(),
             plugin_instances: HashMap::new(),
+            pending_installs: HashMap::new(),
+            plugin_switch_queue: VecDeque::new(),
+            plugin_worker_tx: worker_tx,
+            engine_events_rx: events_rx,
+            realtime_commands: dummy_realtime,
+            snapshot_rx: dummy_snapshot,
+            scratch: EngineScratch::new(),
             recording_state: RecordingState {
                 is_recording: false,
                 recording_track: None,
@@ -728,14 +757,54 @@ impl AudioEngine {
             channel_strips: HashMap::new(),
             xrun_count: 0,
             paused_last: false,
-            host_facade,
             last_ui_meter_update: now_secs(),
             free_running_samples: 0.0,
         };
 
+        for track_snapshot in initial_tracks {
+            let _ = engine.plugin_worker_tx.try_send(PluginWorkerCommand::RebuildChain {
+                track_id: track_snapshot.track_id,
+                chain: track_snapshot.plugin_chain.clone(),
+            });
+        }
+        engine.wait_offline_installs(initial_tracks);
+
         engine.full_sync_for_offline_setup(initial_tracks);
 
         Ok(engine)
+    }
+
+    fn wait_offline_installs(&mut self, tracks: &[TrackSnapshot]) {
+        let mut expected: HashSet<(u64, u64)> = tracks
+            .iter()
+            .flat_map(|t| t.plugin_chain.iter().map(move |p| (t.track_id, p.plugin_id)))
+            .collect();
+        let deadline = web_time::Instant::now() + web_time::Duration::from_millis(1500);
+
+        while !expected.is_empty() && web_time::Instant::now() < deadline {
+            match self
+                .engine_events_rx
+                .recv_timeout(web_time::Duration::from_millis(10))
+            {
+                Ok(EngineEvent::Install {
+                    track_id,
+                    plugin_id,
+                    instance,
+                }) => {
+                    self.pending_installs
+                        .insert((track_id, plugin_id), PluginCell(instance));
+                    expected.remove(&(track_id, plugin_id));
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        if !expected.is_empty() {
+            log::warn!(
+                "Offline render: {} plugin(s) were not installed in time",
+                expected.len()
+            );
+        }
     }
 
     fn full_sync_for_offline_setup(&mut self, tracks: &[TrackSnapshot]) {
@@ -743,82 +812,51 @@ impl AudioEngine {
         self.track_processors.clear();
         self.channel_strips.clear();
 
-        // 2. Build new processors and instantiate all plugins
+        // 2. Build new processors and anchor all installed instances
         for track_snapshot in tracks {
             let track_id = track_snapshot.track_id;
 
             // Create a processor for the track
             let mut proc = TrackProcessor::new();
 
-            // Instantiate this track's entire plugin chain
+            // Anchor this track's entire plugin chain from pending installs
             for plugin_snapshot in &track_snapshot.plugin_chain {
                 let plugin_id = plugin_snapshot.plugin_id;
 
-                match self
-                    .host_facade
-                    .instantiate(plugin_snapshot.backend, &plugin_snapshot.uri)
-                {
-                    Ok(mut inst) => {
-                        // Apply all saved parameters to the new instance
-                        for param_entry in plugin_snapshot.params.iter() {
-                            let param_name = param_entry.key();
-                            let param_value = *param_entry.value();
-                            let maybe_key = inst
-                                .params()
-                                .iter()
-                                .find(|p| p.name == *param_name)
-                                .map(|p| p.key.clone());
-                            if let Some(key) = maybe_key {
-                                inst.set_param(&key, param_value);
-                            }
-                        }
-
+                let anchored = self
+                    .pending_installs
+                    .remove(&(track_id, plugin_id))
+                    .map(|cell| {
                         let handle = generate_plugin_handle();
-                        self.plugin_instances.insert(
-                            handle,
-                            PluginCell(Arc::new(parking_lot::Mutex::new(Box::from(inst)))),
-                        );
-
-                        let param_name_to_key: HashMap<String, ParamKey> =
-                            if let Some(cell) = self.plugin_instances.get(&handle) {
-                                let g = cell.lock();
-                                g.params()
-                                    .iter()
-                                    .map(|p| (p.name.clone(), p.key.clone()))
-                                    .collect()
-                            } else {
-                                HashMap::new()
-                            };
-
-                        let plugin_processor = PluginProcessorUnified {
-                            rt_instance_id: Some(handle),
-                            backend: plugin_snapshot.backend,
-                            uri: plugin_snapshot.uri.clone(),
-                            bypass: plugin_snapshot.bypass,
-                            param_name_to_key,
+                        let param_name_to_key = {
+                            let g = cell.lock();
+                            g.params()
+                                .iter()
+                                .map(|p| (p.name.clone(), p.key.clone()))
+                                .collect::<HashMap<String, ParamKey>>()
                         };
+                        self.plugin_instances.insert(handle, cell);
+                        (handle, param_name_to_key)
+                    });
 
-                        proc.plugins.insert(plugin_id, plugin_processor);
-                        proc.plugin_order.push(plugin_id);
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Offline Render: Failed to instantiate plugin {}: {}",
-                            plugin_snapshot.uri,
-                            e
-                        );
-                        // Create a disabled placeholder to avoid breaking the chain
-                        let placeholder = PluginProcessorUnified {
-                            rt_instance_id: None,
-                            backend: plugin_snapshot.backend,
-                            uri: plugin_snapshot.uri.clone(),
-                            bypass: true,
-                            param_name_to_key: HashMap::new(),
-                        };
-                        proc.plugins.insert(plugin_id, placeholder);
-                        proc.plugin_order.push(plugin_id);
-                    }
-                }
+                let plugin_processor = match anchored {
+                    Some((handle, param_name_to_key)) => PluginProcessorUnified {
+                        rt_instance_id: Some(handle),
+                        backend: plugin_snapshot.backend,
+                        uri: plugin_snapshot.uri.clone(),
+                        bypass: plugin_snapshot.bypass,
+                        param_name_to_key,
+                    },
+                    None => PluginProcessorUnified {
+                        rt_instance_id: None,
+                        backend: plugin_snapshot.backend,
+                        uri: plugin_snapshot.uri.clone(),
+                        bypass: true,
+                        param_name_to_key: HashMap::new(),
+                    },
+                };
+                proc.plugins.insert(plugin_id, plugin_processor);
+                proc.plugin_order.push(plugin_id);
             }
             self.track_processors.insert(track_id, proc);
 
@@ -893,98 +931,6 @@ impl AudioEngine {
                 self.audio_state.loop_start.store(start);
                 self.audio_state.loop_end.store(end);
             }
-            RealtimeCommand::AddUnifiedPlugin {
-                track_id,
-                plugin_id,
-                backend,
-                uri,
-            } => {
-                let proc = self
-                    .track_processors
-                    .entry(track_id)
-                    .or_insert_with(|| TrackProcessor::new());
-
-                match self.host_facade.instantiate(backend, &uri) {
-                    Ok(inst) => {
-                        let mut name_to_key = HashMap::new();
-                        for p in inst.params() {
-                            name_to_key.insert(p.name.clone(), p.key.clone());
-                        }
-
-                        let params_for_ui: Vec<PluginParamInfo> = inst
-                            .params()
-                            .iter()
-                            .map(|p| {
-                                let current = inst.get_param(&p.key).unwrap_or(p.default);
-                                PluginParamInfo {
-                                    name: p.name.clone(),
-                                    min: p.min,
-                                    max: p.max,
-                                    default: p.default,
-                                    current,
-                                    kind: p.kind,
-                                    enum_labels: p.enum_labels.clone(),
-                                    group: p.group.clone(),
-                                    is_hidden: p.is_hidden,
-                                    is_readonly: p.is_readonly,
-                                    is_automatable: p.is_automatable,
-                                    unit: p.unit.clone(),
-                                    display_text: p.value_to_text.clone(),
-                                }
-                            })
-                            .collect();
-
-                        let has_editor = inst.has_editor();
-                        let handle = generate_plugin_handle();
-                        self.plugin_instances
-                            .insert(handle, PluginCell(Arc::new(parking_lot::Mutex::new(inst))));
-
-                        let plugin = PluginProcessorUnified {
-                            rt_instance_id: Some(handle),
-                            backend,
-                            uri: uri.clone(),
-                            bypass: false,
-                            param_name_to_key: name_to_key,
-                        };
-
-                        proc.plugins.insert(plugin_id, plugin);
-                        proc.plugin_order.push(plugin_id);
-
-                        let plugin_idx = proc
-                            .plugin_order
-                            .iter()
-                            .position(|&id| id == plugin_id)
-                            .unwrap_or(proc.plugin_order.len().saturating_sub(1));
-
-                        let _ = self.updates.send_sync(UIUpdate::PluginParamsDiscovered {
-                            track_id,
-                            plugin_idx,
-                            has_editor,
-                            params: params_for_ui,
-                        });
-                    }
-                    Err(e) => {
-                        let msg = format!("Failed to instantiate plugin {}: {}", uri, e);
-                        log::error!("{}", msg);
-                        let _ = self.updates.send_sync(UIUpdate::Error(msg));
-                    }
-                }
-            }
-
-            RealtimeCommand::RemovePluginInstance {
-                track_id,
-                plugin_id,
-            } => {
-                if let Some(proc) = self.track_processors.get_mut(&track_id) {
-                    if let Some(plugin) = proc.plugins.remove(&plugin_id) {
-                        if let Some(handle) = plugin.rt_instance_id {
-                            self.plugin_instances.remove(&handle);
-                        }
-                    }
-                    proc.plugin_order.retain(|&id| id != plugin_id);
-                }
-            }
-
             RealtimeCommand::UpdatePluginParam(track_id, plugin_id, param_name, value) => {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     if let Some(plugin) = proc.plugins.get(&plugin_id) {
@@ -1054,28 +1000,206 @@ impl AudioEngine {
                 }
             }
             RealtimeCommand::UpdateTracks(new_tracks) => {
-                self.full_sync_for_offline_setup(&new_tracks);
-            }
-            RealtimeCommand::RebuildTrackChain { track_id, chain } => {
-                self.rebuild_track_chain_rt(track_id, &chain);
-            }
-            RealtimeCommand::OpenPluginEditor(track_id, plugin_id) => {
-                if let Some(proc) = self.track_processors.get(&track_id) {
-                    if let Some(plugin) = proc.plugins.get(&plugin_id) {
-                        if let Some(handle) = plugin.rt_instance_id {
-                            if let Some(cell) = self.plugin_instances.get(&handle) {
-                                let mut guard = cell.lock();
-                                if let Err(e) = guard.open_editor() {
-                                    let msg = format!("Failed to open editor: {e}");
-                                    log::error!("{}", msg);
-                                    let _ = self.updates.send_sync(UIUpdate::Error(msg));
-                                }
-                            }
-                        }
-                    }
-                }
+                self.full_sync(&new_tracks);
             }
             _ => {}
+        }
+    }
+
+    fn realtime_prepare(&mut self) {
+        // 1) Plugin worker events (never block, try_recv only)
+        while let Ok(ev) = self.engine_events_rx.try_recv() {
+            match ev {
+                EngineEvent::Install {
+                    track_id,
+                    plugin_id,
+                    instance,
+                } => {
+                    let cell = PluginCell(instance);
+                    self.pending_installs
+                        .insert((track_id, plugin_id), cell);
+                }
+                EngineEvent::Uninstall {
+                    track_id,
+                    plugin_id,
+                } => {
+                    self.pending_installs.remove(&(track_id, plugin_id));
+                }
+            }
+        }
+
+        // 2) Anchor any installs whose chain entry already exists
+        self.anchor_pending_installs();
+
+        // 3) Realtime commands
+        while let Ok(cmd) = self.realtime_commands.try_recv() {
+            self.process_realtime_command(cmd);
+        }
+
+        // 4) Graph snapshots (last one wins)
+        while let Ok(new_snapshot) = self.snapshot_rx.try_recv() {
+            self.apply_new_snapshot(new_snapshot);
+        }
+    }
+
+    /// Wire freshly installed instances into their chain slots. Carries
+    /// pointer-move work only (no allocation that matters at this scale).
+    fn anchor_pending_installs(&mut self) {
+        if self.pending_installs.is_empty() {
+            return;
+        }
+        let keys: Vec<(u64, u64)> = self.pending_installs.keys().cloned().collect();
+        for (track_id, plugin_id) in keys {
+            let Some(proc) = self.track_processors.get_mut(&track_id) else {
+                continue;
+            };
+            let Some(plugin) = proc.plugins.get_mut(&plugin_id) else {
+                continue;
+            };
+            if plugin.rt_instance_id.is_some() {
+                continue;
+            }
+            if let Some(cell) = self.pending_installs.remove(&(track_id, plugin_id)) {
+                let handle = generate_plugin_handle();
+                let param_name_to_key = {
+                    let g = cell.lock();
+                    g.params()
+                        .iter()
+                        .map(|p| (p.name.clone(), p.key.clone()))
+                        .collect::<HashMap<String, ParamKey>>()
+                };
+                self.plugin_instances.insert(handle, cell);
+                plugin.rt_instance_id = Some(handle);
+                plugin.param_name_to_key = param_name_to_key;
+            }
+        }
+    }
+
+    /// Safe only when no real-time processing is happening (transport idle).
+    fn drain_plugin_switch_queue(&mut self) {
+        while let Some(handle) = self.plugin_switch_queue.pop_front() {
+            self.plugin_instances.remove(&handle);
+        }
+    }
+
+    fn full_sync(&mut self, tracks: &[TrackSnapshot]) {
+        let track_ids: HashSet<u64> = tracks.iter().map(|t| t.track_id).collect();
+
+        // Remove processors/channels for tracks that no longer exist.
+        self.track_processors
+            .retain(|track_id, _| track_ids.contains(track_id));
+        self.channel_strips
+            .retain(|track_id, _| track_ids.contains(track_id));
+
+        // Strips + plugin chains.
+        for track_snapshot in tracks {
+            let strip = self
+                .channel_strips
+                .entry(track_snapshot.track_id)
+                .or_default();
+            strip.gain = track_snapshot.volume;
+            strip.pan = track_snapshot.pan;
+            strip.mute = track_snapshot.muted;
+            strip.solo = track_snapshot.solo;
+        }
+        self.sync_track_chains(tracks);
+
+        self.graph_snapshot = AudioGraphSnapshot {
+            tracks: tracks.to_vec(),
+            track_order: tracks.iter().map(|t| t.track_id).collect(),
+        };
+        self.recording_state.recording_track = tracks
+            .iter()
+            .find(|t| t.armed && !matches!(t.track_type, TrackType::Midi))
+            .map(|t| t.track_id);
+    }
+
+    /// Diff the RT plugin chains against the authoritative snapshot:
+    /// - entries that disappeared are removed (instance drop deferred to the
+    ///   switch queue; the worker frees its copy),
+    /// - entries that appeared get anchored from pending installs or start
+    ///   as bypassed placeholders until the worker hands over an instance,
+    /// - the worker is asked to (re)build only the chains that changed.
+    fn sync_track_chains(&mut self, tracks: &[TrackSnapshot]) {
+        for track in tracks {
+            let track_id = track.track_id;
+            let proc = self
+                .track_processors
+                .entry(track_id)
+                .or_insert_with(|| TrackProcessor::new());
+
+            let desired: Vec<u64> = track.plugin_chain.iter().map(|p| p.plugin_id).collect();
+            let desired_set: HashSet<u64> = desired.iter().copied().collect();
+
+            // Removals
+            let removed: Vec<u64> = proc
+                .plugins
+                .keys()
+                .filter(|id| !desired_set.contains(id))
+                .copied()
+                .collect();
+            for plugin_id in removed {
+                if let Some(ppu) = proc.plugins.remove(&plugin_id) {
+                    if let Some(handle) = ppu.rt_instance_id {
+                        self.plugin_switch_queue.push_back(handle);
+                    }
+                    let _ = self
+                        .plugin_worker_tx
+                        .try_send(PluginWorkerCommand::RemovePlugin { track_id, plugin_id });
+                }
+            }
+
+            // Additions / anchoring
+            let mut needs_rebuild = false;
+            for plugin_snapshot in &track.plugin_chain {
+                let plugin_id = plugin_snapshot.plugin_id;
+                if let Some(ppu) = proc.plugins.get_mut(&plugin_id) {
+                    ppu.bypass = plugin_snapshot.bypass;
+                    continue;
+                }
+                if let Some(cell) = self.pending_installs.remove(&(track_id, plugin_id)) {
+                    let handle = generate_plugin_handle();
+                    let param_name_to_key = {
+                        let g = cell.lock();
+                        g.params()
+                            .iter()
+                            .map(|p| (p.name.clone(), p.key.clone()))
+                            .collect::<HashMap<String, ParamKey>>()
+                    };
+                    self.plugin_instances.insert(handle, cell);
+                    proc.plugins.insert(
+                        plugin_id,
+                        PluginProcessorUnified {
+                            rt_instance_id: Some(handle),
+                            backend: plugin_snapshot.backend,
+                            uri: plugin_snapshot.uri.clone(),
+                            bypass: plugin_snapshot.bypass,
+                            param_name_to_key,
+                        },
+                    );
+                } else {
+                    // Placeholder until the worker delivers an Install event.
+                    proc.plugins.insert(
+                        plugin_id,
+                        PluginProcessorUnified {
+                            rt_instance_id: None,
+                            backend: plugin_snapshot.backend,
+                            uri: plugin_snapshot.uri.clone(),
+                            bypass: plugin_snapshot.bypass,
+                            param_name_to_key: HashMap::new(),
+                        },
+                    );
+                    needs_rebuild = true;
+                }
+            }
+            proc.plugin_order = desired;
+
+            if needs_rebuild {
+                let _ = self.plugin_worker_tx.try_send(PluginWorkerCommand::RebuildChain {
+                    track_id,
+                    chain: track.plugin_chain.clone(),
+                });
+            }
         }
     }
 
@@ -1100,8 +1224,10 @@ impl AudioEngine {
 
         let loop_active = loop_enabled && (loop_end_samp - loop_start_samp) >= 1.0;
 
-        // snapshot track order once (avoid borrowing self later)
-        let track_order_ids: Vec<u64> = self.graph_snapshot.track_order.clone();
+        // Snapshot track order once into a reused scratch buffer (avoid borrowing self later)
+        let mut track_order_ids = std::mem::take(&mut self.scratch.track_order_ids);
+        track_order_ids.clear();
+        track_order_ids.extend_from_slice(&self.graph_snapshot.track_order);
 
         // Meters
         let mut track_peaks: HashMap<u64, (f32, f32)> = HashMap::new();
@@ -1149,13 +1275,15 @@ impl AudioEngine {
             let rec_track_id = self.recording_state.recording_track;
 
             // Build Bus accumulators for this sub-block (track_id -> L/R buffers)
-            let bus_ids: Vec<u64> = self
-                .graph_snapshot
-                .tracks
-                .iter()
-                .filter(|t| matches!(t.track_type, TrackType::Bus))
-                .map(|t| t.track_id)
-                .collect();
+            let mut bus_ids = std::mem::take(&mut self.scratch.bus_ids);
+            bus_ids.clear();
+            bus_ids.extend(
+                self.graph_snapshot
+                    .tracks
+                    .iter()
+                    .filter(|t| matches!(t.track_type, TrackType::Bus))
+                    .map(|t| t.track_id),
+            );
 
             let mut bus_accum_l: HashMap<u64, Vec<f32>> = HashMap::new();
             let mut bus_accum_r: HashMap<u64, Vec<f32>> = HashMap::new();
@@ -1500,6 +1628,8 @@ impl AudioEngine {
                     processor.active_notes.clear();
                 }
             }
+
+            self.scratch.bus_ids = bus_ids;
         }
 
         // Send meters at ~60 FPS
@@ -1517,6 +1647,7 @@ impl AudioEngine {
                 ));
         }
 
+        self.scratch.track_order_ids = track_order_ids;
         current_position
     }
 
@@ -1570,162 +1701,7 @@ impl AudioEngine {
     }
 
     fn apply_new_snapshot(&mut self, new_snapshot: AudioGraphSnapshot) {
-        let new_track_ids: std::collections::HashSet<u64> =
-            new_snapshot.track_order.iter().cloned().collect();
-
-        // Remove processors and channel strips for tracks that no longer exist.
-        self.track_processors
-            .retain(|track_id, _| new_track_ids.contains(track_id));
-        self.channel_strips
-            .retain(|track_id, _| new_track_ids.contains(track_id));
-
-        // Add/update processors and channel strips for all tracks.
-        for track_snapshot in &new_snapshot.tracks {
-            let track_id = track_snapshot.track_id;
-
-            self.track_processors
-                .entry(track_id)
-                .or_insert_with(|| TrackProcessor::new());
-
-            // Update the corresponding channel strip.
-            let strip = self.channel_strips.entry(track_id).or_default();
-            strip.gain = track_snapshot.volume;
-            strip.pan = track_snapshot.pan;
-            strip.mute = track_snapshot.muted;
-            strip.solo = track_snapshot.solo;
-        }
-
-        self.graph_snapshot = new_snapshot;
-
-        self.recording_state.recording_track = self
-            .graph_snapshot
-            .tracks
-            .iter()
-            .find(|t| t.armed && !matches!(t.track_type, TrackType::Midi))
-            .map(|t| t.track_id);
-    }
-
-    fn rebuild_track_chain_rt(&mut self, track_id: u64, chain: &[PluginDescriptorSnapshot]) {
-        let proc = self
-            .track_processors
-            .entry(track_id)
-            .or_insert_with(|| TrackProcessor::new());
-
-        proc.plugins.clear();
-        proc.plugin_order.clear();
-
-        for (plugin_idx, pdesc) in chain.iter().enumerate() {
-            match self.host_facade.instantiate(pdesc.backend, &pdesc.uri) {
-                Ok(mut inst) => {
-                    // Build param name -> key map once
-                    let param_map: std::collections::HashMap<String, ParamKey> = inst
-                        .params()
-                        .iter()
-                        .map(|p| (p.name.clone(), p.key.clone()))
-                        .collect();
-
-                    // Apply saved params (no Clap(0) placeholders)
-                    for kv in pdesc.params.iter() {
-                        let name = kv.key().clone();
-                        let val = *kv.value();
-
-                        match pdesc.backend {
-                            BackendKind::Lv2 => {
-                                inst.set_param(&ParamKey::Lv2(name.clone()), val);
-                            }
-                            BackendKind::Clap => {
-                                if let Some(actual_key) = param_map.get(&name) {
-                                    inst.set_param(actual_key, val);
-                                } else {
-                                    log::warn!(
-                                        "CLAP param '{}' not found for plugin {} when rebuilding chain",
-                                        name,
-                                        pdesc.uri
-                                    );
-                                }
-                            }
-                            BackendKind::Vst3 => {
-                                if let Some(actual_key) = param_map.get(&name) {
-                                    inst.set_param(actual_key, val);
-                                } else {
-                                    log::warn!(
-                                        "VST3 param '{}' not found for plugin {} when rebuilding chain",
-                                        name,
-                                        pdesc.uri
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // Send metadata for UI
-                    let params_for_ui: Vec<PluginParamInfo> = inst
-                        .params()
-                        .iter()
-                        .map(|p| {
-                            let current = inst.get_param(&p.key).unwrap_or(p.default);
-                            PluginParamInfo {
-                                name: p.name.clone(),
-                                min: p.min,
-                                max: p.max,
-                                default: p.default,
-                                current,
-                                kind: p.kind,
-                                enum_labels: p.enum_labels.clone(),
-                                group: p.group.clone(),
-                                is_hidden: p.is_hidden,
-                                is_readonly: p.is_readonly,
-                                is_automatable: p.is_automatable,
-                                unit: p.unit.clone(),
-                                display_text: p.value_to_text.clone(),
-                            }
-                        })
-                        .collect();
-
-                    let _ = self.updates.send_sync(UIUpdate::PluginParamsDiscovered {
-                        track_id,
-                        plugin_idx,
-                        has_editor: inst.has_editor(),
-                        params: params_for_ui,
-                    });
-
-                    let handle = generate_plugin_handle();
-                    self.plugin_instances.insert(
-                        handle,
-                        PluginCell(Arc::new(parking_lot::Mutex::new(Box::from(inst)))),
-                    );
-
-                    let pp = PluginProcessorUnified {
-                        rt_instance_id: Some(handle),
-                        backend: pdesc.backend,
-                        uri: pdesc.uri.clone(),
-                        bypass: pdesc.bypass,
-                        param_name_to_key: param_map,
-                    };
-
-                    proc.plugins.insert(pdesc.plugin_id, pp);
-                    proc.plugin_order.push(pdesc.plugin_id);
-                }
-                Err(e) => {
-                    log::error!("RebuildChain: instantiate failed {}: {}", pdesc.uri, e);
-                    let msg = format!(
-                        "Failed to load plugin '{}' on track {}: {}",
-                        pdesc.name, track_id, e
-                    );
-                    let _ = self.updates.send_sync(UIUpdate::Error(msg));
-
-                    let pp = PluginProcessorUnified {
-                        rt_instance_id: None,
-                        backend: pdesc.backend,
-                        uri: pdesc.uri.clone(),
-                        bypass: true,
-                        param_name_to_key: std::collections::HashMap::new(),
-                    };
-                    proc.plugins.insert(pdesc.plugin_id, pp);
-                    proc.plugin_order.push(pdesc.plugin_id);
-                }
-            }
-        }
+        self.full_sync(&new_snapshot.tracks);
     }
 
     fn run_plugin_chain(
@@ -1743,7 +1719,8 @@ impl AudioEngine {
         include_clip_events: bool,
     ) {
         use std::panic::AssertUnwindSafe;
-        let mut all_midi_events: Vec<RtMidiEvent> = Vec::new();
+        let mut all_midi_events = std::mem::take(&mut self.scratch.all_midi_events);
+        all_midi_events.clear();
 
         // Compute transport_jump for note-off handling
         let transport_jump = {
@@ -1821,20 +1798,20 @@ impl AudioEngine {
             all_midi_events.sort_by_key(|e| e.time_frames);
         }
 
-        // 2) Clone plugin order to avoid holding a long borrow while iterating
-        let plugin_order = {
-            if let Some(proc) = self.track_processors.get(&track_id) {
-                proc.plugin_order.clone()
-            } else {
-                Vec::new()
-            }
-        };
+        // 2) Reuse the scratch buffer for the plugin order (avoid holding a long borrow while iterating)
+        let mut plugin_order = std::mem::take(&mut self.scratch.plugin_order);
+        plugin_order.clear();
+        if let Some(proc) = self.track_processors.get(&track_id) {
+            plugin_order.extend_from_slice(&proc.plugin_order);
+        }
 
         if plugin_order.is_empty() {
             // Update last_block_end_samples
             if let Some(proc) = self.track_processors.get_mut(&track_id) {
                 proc.last_block_end_samples = block_start_samples + num_frames as f64;
             }
+            self.scratch.plugin_order = plugin_order;
+            self.scratch.all_midi_events = all_midi_events;
             return;
         }
 
@@ -1842,11 +1819,11 @@ impl AudioEngine {
         //    immutably), then write outputs back with another short &mut borrow.
         let mut first_active_plugin = true;
 
-        for plugin_id in plugin_order {
+        for plugin_id in &plugin_order {
             // Stage-per-plugin data from processor: handle, bypass, param updates, input copies, uri
             let (maybe_handle, _backend, _param_map, uri, updates, in_l, in_r) = {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
-                    let ppu = match proc.plugins.get(&plugin_id) {
+                    let ppu = match proc.plugins.get(plugin_id) {
                         Some(p) => p,
                         None => continue,
                     };
@@ -1862,7 +1839,7 @@ impl AudioEngine {
                         smallvec::SmallVec::new();
                     for kv in proc.automated_plugin_params.iter() {
                         let ((pid, param_name), value) = (kv.key().clone(), *kv.value());
-                        if pid == plugin_id {
+                        if pid == *plugin_id {
                             let key = ppu
                                 .param_name_to_key
                                 .get(&param_name)
@@ -1946,7 +1923,7 @@ impl AudioEngine {
 
             if panicked {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
-                    if let Some(ppu) = proc.plugins.get_mut(&plugin_id) {
+if let Some(ppu) = proc.plugins.get_mut(plugin_id) {
                         let msg = format!(
                             "Plugin '{}' (URI: {}) panicked during processing and has been bypassed.",
                             ppu.uri, uri
@@ -1979,6 +1956,9 @@ impl AudioEngine {
         if let Some(proc) = self.track_processors.get_mut(&track_id) {
             proc.last_block_end_samples = block_start_samples + num_frames as f64;
         }
+
+        self.scratch.plugin_order = plugin_order;
+        self.scratch.all_midi_events = all_midi_events;
     }
 
     fn with_plugin_mut<R>(

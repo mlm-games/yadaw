@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use wasm_safe_mutex::Mutex;
+use web_workers::sync::Mutex;
 
 use egui::scroll_area::ScrollSource;
 use egui::{Sense, UiBuilder};

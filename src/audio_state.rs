@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::track::TrackType;
-use yadaw_plugin_api::BackendKind;
+use yadaw_plugin_api::{BackendKind, PluginInstance as UnifiedInstance};
 
 pub struct AtomicF64 {
     storage: AtomicU64,
@@ -130,6 +130,12 @@ pub struct MidiClipSnapshot {
     pub content_offset_beats: f64,
 }
 
+impl AudioClipSnapshot {
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MidiNoteSnapshot {
     pub pitch: u8,
@@ -165,16 +171,6 @@ pub enum RealtimeCommand {
     StopPreviewNote,
     SetLoopEnabled(bool),
     SetLoopRegion(f64, f64),
-    AddUnifiedPlugin {
-        track_id: u64,
-        plugin_id: u64,
-        backend: BackendKind,
-        uri: String,
-    },
-    RemovePluginInstance {
-        track_id: u64,
-        plugin_id: u64,
-    },
     UpdateMidiClipNotes {
         track_id: u64, // Track ID
         clip_id: u64,
@@ -191,18 +187,76 @@ pub enum RealtimeCommand {
         session_id: u64,
         notes: Vec<MidiNoteSnapshot>,
     },
-    RebuildTrackChain {
-        track_id: u64,
-        chain: Vec<PluginDescriptorSnapshot>,
-    },
     MidiMessage {
         track_id: u64,
         status: u8,
         data1: u8,
         data2: u8,
     },
-    OpenPluginEditor(u64, u64),
 }
+
+/// Commands for the plugin worker thread.
+#[derive(Debug)]
+pub enum PluginWorkerCommand {
+    AddPlugin {
+        track_id: u64,
+        plugin_id: u64,
+        plugin_idx: usize,
+        backend: BackendKind,
+        uri: String,
+        /// Saved parameter values (name -> value) applied blindly on install.
+        params: Vec<(String, f32)>,
+    },
+    /// Apply a full parameter map (used after project load / chain rebuild).
+    SetParams {
+        track_id: u64,
+        plugin_id: u64,
+        params: Vec<(String, f32)>,
+    },
+    /// Apply a single parameter (UI tweak).
+    SetParam {
+        track_id: u64,
+        plugin_id: u64,
+        key: String,
+        value: f32,
+    },
+    RemovePlugin {
+        track_id: u64,
+        plugin_id: u64,
+    },
+    OpenEditor {
+        track_id: u64,
+        plugin_id: u64,
+    },
+    /// Full chain resync (after project load). Creates missing worker entries,
+    /// applies saved params to existing ones, and keeps plugin order intact.
+    RebuildChain {
+        track_id: u64,
+        chain: Vec<PluginDescriptorSnapshot>,
+    },
+}
+
+/// Events flowing from the plugin worker to the audio engine.
+pub enum EngineEvent {
+    /// The worker created an instance for the given plugin. The engine anchors
+    /// it as soon as the matching snapshot entry exists.
+    Install {
+        track_id: u64,
+        plugin_id: u64,
+        instance: SharedInstance,
+    },
+    /// The worker dropped its instance. The engine releases its own reference
+    /// (deferred to a non-audio-thread drop queue).
+    Uninstall {
+        track_id: u64,
+        plugin_id: u64,
+    },
+}
+
+/// A plugin instance shared between the worker (parameter/state/editor access)
+/// and the audio engine (processing). The engine is the sole locker during
+/// audio callbacks, the worker only touches it between callbacks.
+pub type SharedInstance = Arc<parking_lot::Mutex<Box<dyn UnifiedInstance>>>;
 
 #[derive(Debug, Clone)]
 pub struct PluginDescriptorSnapshot {
@@ -252,7 +306,7 @@ pub struct AudioClipSnapshot {
     pub start_beat: f64,
     pub length_beats: f64,
     pub offset_beats: f64,
-    pub samples: Vec<f32>,
+    pub samples: Arc<Vec<f32>>,
     pub sample_rate: f32,
     pub warp_mode: bool,
     pub fade_in: Option<f64>,

@@ -16,7 +16,9 @@ use wasm_bindgen::JsCast;
 use web_sys::HtmlAnchorElement;
 
 use std::fs::File;
-use std::io::{BufWriter, Cursor};
+use std::io::BufWriter;
+#[cfg(target_arch = "wasm32")]
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 

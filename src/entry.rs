@@ -1,5 +1,5 @@
 use crate::audio;
-use crate::audio_state::{AudioGraphSnapshot, AudioState, RealtimeCommand};
+use crate::audio_state::{AudioGraphSnapshot, AudioState, EngineEvent, PluginWorkerCommand, RealtimeCommand};
 use crate::config::Config;
 use crate::messages::{AudioCommand, UiRx, UiTx};
 use crate::midi_input::MidiInputHandler;
@@ -7,17 +7,15 @@ use crate::spawn_detached;
 use crate::{project, ui};
 use flume::{self, Sender};
 use std::sync::Arc;
-use wasm_safe_mutex::mpsc::{Receiver, channel};
-use wasm_safe_mutex::{self, Mutex};
+use web_workers::sync::mpsc::{Receiver, channel};
+use web_workers::sync::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::constants;
-#[cfg(not(target_arch = "wasm32"))]
 use yadaw_plugin_api::HostConfig;
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "lv2-legacy")))]
 use yadaw_plugin_host::HostFacade;
 #[cfg(all(not(target_arch = "wasm32"), feature = "lv2-legacy"))]
-use yadaw_plugin_host::{HostFacade, legacy::init as plugin_host_init};
+use yadaw_plugin_host::legacy::init as plugin_host_init;
 
 #[cfg(target_os = "android")]
 use android_activity::AndroidApp;
@@ -34,14 +32,38 @@ struct AppChannels {
 fn setup_channels_and_start_audio(
     app_state: &Arc<Mutex<project::AppState>>,
     audio_state: &Arc<AudioState>,
-    start_audio: impl FnOnce(Receiver<RealtimeCommand>, Receiver<AudioGraphSnapshot>, UiTx),
+    host_cfg: HostConfig,
+    start_audio: impl FnOnce(
+        Receiver<RealtimeCommand>,
+        Receiver<AudioGraphSnapshot>,
+        flume::Receiver<EngineEvent>,
+        flume::Sender<PluginWorkerCommand>,
+        UiTx,
+    ),
 ) -> AppChannels {
     let (command_tx, command_rx) = flume::unbounded::<AudioCommand>();
     let (realtime_tx, realtime_rx) = channel::<RealtimeCommand>();
     let (snapshot_tx, snapshot_rx) = channel::<AudioGraphSnapshot>();
     let (ui_tx, ui_rx) = channel();
 
-    start_audio(realtime_rx, snapshot_rx, ui_tx.clone());
+    let (plugin_worker_tx, plugin_worker_rx) = flume::bounded::<PluginWorkerCommand>(512);
+    let (engine_events_tx, engine_events_rx) = flume::unbounded::<EngineEvent>();
+    if let Ok(facade) = HostFacade::new(host_cfg) {
+        crate::plugin_worker::spawn_plugin_worker(
+            Arc::new(facade),
+            plugin_worker_rx,
+            engine_events_tx,
+            ui_tx.clone(),
+        );
+    }
+
+    start_audio(
+        realtime_rx,
+        snapshot_rx,
+        engine_events_rx,
+        plugin_worker_tx.clone(),
+        ui_tx.clone(),
+    );
 
     let midi_handler = match MidiInputHandler::new(command_tx.clone()) {
         Ok(handler) => Some(Arc::new(handler)),
@@ -59,6 +81,7 @@ fn setup_channels_and_start_audio(
         ui_tx.clone(),
         snapshot_tx,
         midi_handler.clone(),
+        plugin_worker_tx,
     ));
 
     let _ = command_tx.send(AudioCommand::UpdateTracks);
@@ -123,10 +146,16 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let available_plugins = ui_facade.scan().unwrap_or_default();
 
     let audio_state_audio = audio_state.clone();
+    let worker_host_cfg = HostConfig {
+        sample_rate: host_sample_rate as f64,
+        max_block: constants::MAX_BUFFER_SIZE,
+        plugin_scan_paths: config.paths.plugin_scan_paths.clone(),
+    };
     let channels = setup_channels_and_start_audio(
         &app_state,
         &audio_state,
-        |realtime_rx, snapshot_rx, ui_tx_audio| {
+        worker_host_cfg,
+        |realtime_rx, snapshot_rx, engine_events_rx, plugin_worker_tx, ui_tx_audio| {
             let audio_state_audio = audio_state_audio.clone();
             std::thread::spawn(move || {
                 audio::run_audio_thread(
@@ -134,6 +163,8 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                     realtime_rx,
                     ui_tx_audio,
                     snapshot_rx,
+                    engine_events_rx,
+                    plugin_worker_tx,
                     host_sample_rate,
                 );
             });
@@ -220,10 +251,16 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     let available_plugins = ui_facade.scan().unwrap_or_default();
 
     let audio_state_audio = audio_state.clone();
+    let worker_host_cfg = HostConfig {
+        sample_rate: host_sample_rate as f64,
+        max_block: constants::MAX_BUFFER_SIZE,
+        plugin_scan_paths: config.paths.plugin_scan_paths.clone(),
+    };
     let channels = setup_channels_and_start_audio(
         &app_state,
         &audio_state,
-        |realtime_rx, snapshot_rx, ui_tx_audio| {
+        worker_host_cfg,
+        |realtime_rx, snapshot_rx, engine_events_rx, plugin_worker_tx, ui_tx_audio| {
             let audio_state_audio = audio_state_audio.clone();
             std::thread::spawn(move || {
                 audio::run_audio_thread(
@@ -231,6 +268,8 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
                     realtime_rx,
                     ui_tx_audio,
                     snapshot_rx,
+                    engine_events_rx,
+                    plugin_worker_tx,
                     host_sample_rate,
                 );
             });
@@ -277,12 +316,19 @@ pub fn create_app() -> ui::YadawApp {
     let channels = setup_channels_and_start_audio(
         &app_state,
         &audio_state,
-        |realtime_rx, snapshot_rx, ui_tx_audio| {
+        HostConfig {
+            sample_rate: config.audio.sample_rate as f64,
+            max_block: crate::constants::MAX_BUFFER_SIZE,
+            plugin_scan_paths: Vec::new(),
+        },
+        |realtime_rx, snapshot_rx, engine_events_rx, plugin_worker_tx, ui_tx_audio| {
             audio::run_audio_wasm(
                 audio_state.clone(),
                 realtime_rx,
                 ui_tx_audio,
                 snapshot_rx,
+                engine_events_rx,
+                plugin_worker_tx,
                 config.audio.sample_rate,
             );
         },

@@ -17,7 +17,7 @@ pub fn block_on<F: std::future::Future<Output = T>, T>(f: F) -> T {
 }
 
 /// Spawns a future and returns a [`tokio::task::JoinHandle`].
-/// Not available on wasm — use [`spawn_detached!`] instead.
+/// Not available on wasm - use [`spawn_detached!`] instead.
 #[cfg(not(target_arch = "wasm32"))]
 #[macro_export]
 macro_rules! spawn_task {

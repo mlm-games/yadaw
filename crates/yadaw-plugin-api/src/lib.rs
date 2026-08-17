@@ -80,7 +80,8 @@ pub struct MidiEvent {
     pub time_frames: i64,
 }
 
-pub trait PluginInstance {
+/// A plugin instance bound to the audio thread.
+pub trait PluginInstance: Send {
     fn process(
         &mut self,
         ctx: &ProcessCtx,
