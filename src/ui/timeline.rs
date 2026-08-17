@@ -38,6 +38,10 @@ pub struct TimelineView {
     automation_widgets: Vec<AutomationLaneWidget>,
     pub show_clip_menu: bool,
     clip_menu_pos: egui::Pos2,
+    pub show_track_menu: bool,
+    track_menu_pos: egui::Pos2,
+    track_menu_track_id: Option<u64>,
+    track_menu_beat: f64,
 
     track_height: f32,
     min_track_height: f32,
@@ -113,6 +117,10 @@ impl TimelineView {
             automation_widgets: Vec::new(),
             show_clip_menu: false,
             clip_menu_pos: egui::Pos2::ZERO,
+            show_track_menu: false,
+            track_menu_pos: egui::Pos2::ZERO,
+            track_menu_track_id: None,
+            track_menu_beat: 0.0,
             track_height: 80.0,
             min_track_height: 40.0,
             max_track_height: 200.0,
@@ -484,6 +492,61 @@ impl TimelineView {
             egui::FontId::default(),
             vis.text_color().gamma_multiply(0.5),
         );
+
+        let lane_resp = ui.interact(
+            rect,
+            ui.id().with(("track_lane", track_id)),
+            egui::Sense::click(),
+        );
+
+        if lane_resp.secondary_clicked() {
+            let pos = lane_resp.interact_pointer_pos().unwrap_or_default();
+            let on_clip = match track.track_type {
+                TrackType::Midi => track.midi_clips.iter().any(|c| {
+                    let clip_x = c.start_beat as f32 * self.zoom_x - self.scroll_x;
+                    let clip_rect = egui::Rect::from_min_size(
+                        rect.min + egui::vec2(clip_x, 5.0),
+                        egui::vec2(
+                            c.length_beats as f32 * self.zoom_x,
+                            self.track_height - 10.0,
+                        ),
+                    );
+                    clip_rect.contains(pos)
+                }),
+                _ => track.audio_clips.iter().any(|c| {
+                    let clip_x = c.start_beat as f32 * self.zoom_x - self.scroll_x;
+                    let bpm = app.audio_state.bpm.load();
+                    let audio_duration_seconds = c.samples.len() as f64 / c.sample_rate as f64;
+                    let audio_length_beats = audio_duration_seconds * (bpm as f64 / 60.0);
+                    let effective_length_beats = if c.warp_mode {
+                        c.length_beats as f32
+                    } else {
+                        (audio_length_beats as f32).min(c.length_beats as f32)
+                    };
+                    let clip_rect = egui::Rect::from_min_size(
+                        rect.min + egui::vec2(clip_x, 20.0),
+                        egui::vec2(
+                            effective_length_beats * self.zoom_x,
+                            self.track_height - 25.0,
+                        ),
+                    );
+                    clip_rect.contains(pos)
+                }),
+            };
+            if !on_clip {
+                self.show_track_menu = true;
+                self.show_clip_menu = false;
+                self.track_menu_pos = pos;
+                self.track_menu_track_id = Some(track_id);
+                let (beat, _) =
+                    self.snap_beat(ui, rect, self.x_to_beat(rect, pos.x), app, Some(track_id));
+                self.track_menu_beat = beat;
+            }
+        }
+
+        if lane_resp.clicked() {
+            app.selected_track = track_id;
+        }
 
         if matches!(track.track_type, TrackType::Midi) {
             for clip in &track.midi_clips {
@@ -1920,141 +1983,199 @@ impl TimelineView {
     }
 
     fn draw_context_menus(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        if !self.show_clip_menu {
-            return;
-        }
+        if self.show_clip_menu {
+            let ctx = ui.ctx();
+            let mut close_menu = false;
+            let popup_rect = egui::Area::new(egui::Id::new("clip_context_menu"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(self.clip_menu_pos)
+                .interactable(true)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .show(ui, |ui| {
+                            ui.set_min_width(180.0);
 
-        let ctx = ui.ctx();
-        let mut close_menu = false;
-        let popup_rect = egui::Area::new(egui::Id::new("clip_context_menu"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(self.clip_menu_pos)
-            .interactable(true)
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style())
-                    .show(ui, |ui| {
-                        ui.set_min_width(180.0);
+                            if ui.button("Cut").clicked() {
+                                app.cut_selected();
+                                close_menu = true;
+                            }
+                            if ui.button("Copy").clicked() {
+                                app.copy_selected();
+                                close_menu = true;
+                            }
+                            if ui.button("Paste").clicked() {
+                                if let Some(primary_clip_id) = app.selected_clips.first().copied() {
+                                    if let Some(tid) = app
+                                        .state
+                                        .lock_sync()
+                                        .clips_by_id
+                                        .get(&primary_clip_id)
+                                        .map(|r| r.track_id)
+                                    {
+                                        app.selected_track = tid;
+                                    }
+                                }
+                                app.paste_at_playhead();
+                                close_menu = true;
+                            }
 
-                        if ui.button("Cut").clicked() {
-                            app.cut_selected();
-                            close_menu = true;
-                        }
-                        if ui.button("Copy").clicked() {
-                            app.copy_selected();
-                            close_menu = true;
-                        }
-                        if ui.button("Paste").clicked() {
+                            ui.separator();
+
+                            if ui.button("Split at Playhead").clicked() {
+                                app.split_selected_at_playhead();
+                                close_menu = true;
+                            }
+                            if ui.button("Delete").clicked() {
+                                app.delete_selected();
+                                close_menu = true;
+                            }
+
                             if let Some(primary_clip_id) = app.selected_clips.first().copied() {
-                                if let Some(tid) = app
+                                let is_midi = app
                                     .state
                                     .lock_sync()
                                     .clips_by_id
                                     .get(&primary_clip_id)
-                                    .map(|r| r.track_id)
-                                {
-                                    app.selected_track = tid;
-                                }
-                            }
-                            app.paste_at_playhead();
-                            close_menu = true;
-                        }
+                                    .map_or(false, |r| r.is_midi);
+                                if is_midi {
+                                    ui.separator();
+                                    if ui.button("Duplicate (independent)").clicked() {
+                                        let _ =
+                                            app.command_tx.send(AudioCommand::DuplicateMidiClip {
+                                                clip_id: primary_clip_id,
+                                            });
+                                        close_menu = true;
+                                    }
+                                    if ui.button("Duplicate as Alias").clicked() {
+                                        let _ = app.command_tx.send(
+                                            AudioCommand::DuplicateMidiClipAsAlias {
+                                                clip_id: primary_clip_id,
+                                            },
+                                        );
+                                        close_menu = true;
+                                    }
 
-                        ui.separator();
-
-                        if ui.button("Split at Playhead").clicked() {
-                            app.split_selected_at_playhead();
-                            close_menu = true;
-                        }
-                        if ui.button("Delete").clicked() {
-                            app.delete_selected();
-                            close_menu = true;
-                        }
-
-                        if let Some(primary_clip_id) = app.selected_clips.first().copied() {
-                            let is_midi = app
-                                .state
-                                .lock_sync()
-                                .clips_by_id
-                                .get(&primary_clip_id)
-                                .map_or(false, |r| r.is_midi);
-                            if is_midi {
-                                ui.separator();
-                                if ui.button("Duplicate (independent)").clicked() {
-                                    let _ = app.command_tx.send(AudioCommand::DuplicateMidiClip {
-                                        clip_id: primary_clip_id,
-                                    });
-                                    close_menu = true;
-                                }
-                                if ui.button("Duplicate as Alias").clicked() {
-                                    let _ = app.command_tx.send(
-                                        AudioCommand::DuplicateMidiClipAsAlias {
+                                    let is_alias = {
+                                        let st = app.state.lock_sync();
+                                        st.find_clip(primary_clip_id)
+                                            .and_then(|(track, loc)| {
+                                                if let crate::project::ClipLocation::Midi(idx) = loc
+                                                {
+                                                    track
+                                                        .midi_clips
+                                                        .get(idx)
+                                                        .and_then(|c| c.pattern_id)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .is_some()
+                                    };
+                                    if ui
+                                        .add_enabled(is_alias, egui::Button::new("Make Unique"))
+                                        .clicked()
+                                    {
+                                        let _ = app.command_tx.send(AudioCommand::MakeClipUnique {
                                             clip_id: primary_clip_id,
-                                        },
-                                    );
-                                    close_menu = true;
-                                }
+                                        });
+                                        close_menu = true;
+                                    }
+                                } else {
+                                    let warp_enabled = {
+                                        let st = app.state.lock_sync();
+                                        st.find_clip(primary_clip_id)
+                                            .and_then(|(track, loc)| {
+                                                if let crate::project::ClipLocation::Audio(idx) =
+                                                    loc
+                                                {
+                                                    track.audio_clips.get(idx).map(|c| c.warp_mode)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .unwrap_or(false)
+                                    };
 
-                                let is_alias = {
-                                    let st = app.state.lock_sync();
-                                    st.find_clip(primary_clip_id)
-                                        .and_then(|(track, loc)| {
-                                            if let crate::project::ClipLocation::Midi(idx) = loc {
-                                                track.midi_clips.get(idx).and_then(|c| c.pattern_id)
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .is_some()
-                                };
-                                if ui
-                                    .add_enabled(is_alias, egui::Button::new("Make Unique"))
-                                    .clicked()
-                                {
-                                    let _ = app.command_tx.send(AudioCommand::MakeClipUnique {
-                                        clip_id: primary_clip_id,
-                                    });
-                                    close_menu = true;
-                                }
-                            } else {
-                                let warp_enabled = {
-                                    let st = app.state.lock_sync();
-                                    st.find_clip(primary_clip_id)
-                                        .and_then(|(track, loc)| {
-                                            if let crate::project::ClipLocation::Audio(idx) = loc {
-                                                track.audio_clips.get(idx).map(|c| c.warp_mode)
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .unwrap_or(false)
-                                };
-
-                                ui.separator();
-                                let mut warp_mode = warp_enabled;
-                                if ui.checkbox(&mut warp_mode, "Warp Mode").changed() {
-                                    let _ = app
-                                        .set_warp_mode_for_audio_clip(primary_clip_id, warp_mode);
-                                    close_menu = true;
+                                    ui.separator();
+                                    let mut warp_mode = warp_enabled;
+                                    if ui.checkbox(&mut warp_mode, "Warp Mode").changed() {
+                                        let _ = app.set_warp_mode_for_audio_clip(
+                                            primary_clip_id,
+                                            warp_mode,
+                                        );
+                                        close_menu = true;
+                                    }
                                 }
                             }
-                        }
-                    })
-                    .response
-                    .rect
-            })
-            .inner;
+                        })
+                        .response
+                        .rect
+                })
+                .inner;
 
-        // close on any outside click
-        let outside_clicked = ui.ctx().input(|i| {
-            i.pointer.any_pressed()
-                && i.pointer
-                    .interact_pos()
-                    .map(|p| !popup_rect.contains(p))
-                    .unwrap_or(true)
-        });
+            // close on any outside click
+            let outside_clicked = ui.ctx().input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .map(|p| !popup_rect.contains(p))
+                        .unwrap_or(true)
+            });
 
-        if close_menu || outside_clicked {
-            self.show_clip_menu = false;
+            if close_menu || outside_clicked {
+                self.show_clip_menu = false;
+            }
+        }
+
+        // empty-track lane context menu (right-click anywhere on a track row)
+        if self.show_track_menu {
+            let ctx = ui.ctx();
+            let mut close = false;
+            let popup_rect = egui::Area::new(egui::Id::new("track_lane_context_menu"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(self.track_menu_pos)
+                .interactable(true)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .show(ui, |ui| {
+                            ui.set_min_width(160.0);
+                            let can_paste = app.midi_clipboard.is_some() || app.clipboard.is_some();
+                            if ui
+                                .add_enabled(can_paste, egui::Button::new("Paste"))
+                                .clicked()
+                            {
+                                if let Some(tid) = self.track_menu_track_id {
+                                    app.selected_track = tid;
+                                    app.paste_at_beat(tid, self.track_menu_beat);
+                                }
+                                close = true;
+                            }
+                            if ui.button("Add MIDI Clip").clicked() {
+                                if let Some(tid) = self.track_menu_track_id {
+                                    let _ = app.command_tx.send(AudioCommand::CreateMidiClip {
+                                        track_id: tid,
+                                        start_beat: self.track_menu_beat,
+                                        length_beats: DEFAULT_MIDI_CLIP_LEN,
+                                    });
+                                }
+                                close = true;
+                            }
+                        })
+                        .response
+                        .rect
+                })
+                .inner;
+
+            let outside = ui.ctx().input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .map(|p| !popup_rect.contains(p))
+                        .unwrap_or(true)
+            });
+            if close || outside {
+                self.show_track_menu = false;
+            }
         }
     }
 
