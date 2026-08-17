@@ -27,7 +27,10 @@ mod clap_impl {
     };
     use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
     #[cfg(feature = "clap-host")]
-    use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams as ParamsExt};
+    use clack_extensions::params::{
+        HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags,
+        ParamInfoBuffer, ParamInfoFlags, ParamRescanFlags, PluginParams as ParamsExt,
+    };
     use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
 
     use yadaw_plugin_api::{
@@ -84,6 +87,14 @@ mod clap_impl {
         }
     }
 
+    impl HostParamsImplShared for MyHostShared {
+        fn request_flush(&self) {
+            if self.gui_cmd_tx.send(MainThreadCommand::RequestFlush).is_err() {
+                log::debug!("request_flush: CLAP main thread is gone");
+            }
+        }
+    }
+
     struct TimerState {
         timers: Vec<(TimerId, u32, Instant)>,
         next_id: u32,
@@ -94,6 +105,14 @@ mod clap_impl {
     }
 
     impl<'a> MainThreadHandler<'a> for MyHostMainThread {}
+
+    impl HostParamsImplMainThread for MyHostMainThread {
+        fn rescan(&mut self, _flags: ParamRescanFlags) {
+            // We always re-query parameter info on each (re)instantiation
+        }
+
+        fn clear(&mut self, _param_id: ClapId, _flags: ParamClearFlags) {}
+    }
 
     impl HostTimerImpl for MyHostMainThread {
         fn register_timer(&mut self, period_ms: u32) -> Result<TimerId, HostError> {
@@ -121,7 +140,8 @@ mod clap_impl {
             builder
                 .register::<HostGui>()
                 .register::<HostLog>()
-                .register::<HostTimer>();
+                .register::<HostTimer>()
+                .register::<HostParams>();
         }
     }
 
@@ -777,10 +797,60 @@ mod clap_impl {
         CloseEditor,
         RequestResize(GuiSize),
         GuiClosed,
+        RequestFlush,
         Shutdown {
             processor: StartedPluginAudioProcessor<MyHost>,
             result_tx: mpsc::Sender<()>,
         },
+    }
+
+    /// Calls the plugin's `clap_plugin_params.flush` callback (if it supports the params
+    /// extension), giving it a chance to flush any pending parameter changes to real values.
+    fn flush_plugin_params(instance: &mut PluginInstance<MyHost>) {
+        #[allow(non_camel_case_types)]
+        #[repr(C)]
+        struct clap_plugin_params_view {
+            _count: *const core::ffi::c_void,
+            _get_info: *const core::ffi::c_void,
+            _get_value: *const core::ffi::c_void,
+            _value_to_text: *const core::ffi::c_void,
+            _text_to_value: *const core::ffi::c_void,
+            flush: Option<unsafe extern "C" fn(*const core::ffi::c_void, *const core::ffi::c_void, *mut core::ffi::c_void)>,
+        }
+
+        let plugin_ptr = instance.plugin_handle().as_raw_ptr();
+        let plugin = unsafe { &*plugin_ptr };
+        let Some(get_extension) = plugin.get_extension else {
+            return;
+        };
+
+        // SAFETY: the plugin pointer is valid (owned by the PluginInstance) and the returned
+        // extension pointer is valid for the lifetime of the plugin instance, as per CLAP.
+        let ext_ptr = unsafe { get_extension(plugin_ptr, c"clap.params".as_ptr()) };
+        if ext_ptr.is_null() {
+            return;
+        }
+
+        // SAFETY: `ext_ptr` points to a `clap_plugin_params` (verified by the identifier
+        // requested above), whose layout matches our mirror struct.
+        let view = unsafe { &*(ext_ptr as *const clap_plugin_params_view) };
+        let Some(flush) = view.flush else {
+            return;
+        };
+
+        let in_buffer = EventBuffer::new();
+        let in_events = InputEvents::from_buffer(&in_buffer);
+        let mut out_buffer = EventBuffer::new();
+        let mut out_events = OutputEvents::from_buffer(&mut out_buffer);
+
+        // SAFETY: we're on the CLAP main thread.
+        unsafe {
+            flush(
+                plugin_ptr.cast::<core::ffi::c_void>(),
+                in_events.as_raw() as *const _ as *const core::ffi::c_void,
+                out_events.as_raw_mut() as *mut _ as *mut core::ffi::c_void,
+            );
+        }
     }
 
     /// Main loop for the CLAP main thread. Owns PluginInstance and handles
@@ -849,6 +919,9 @@ mod clap_impl {
                     if let Some(state) = editor.take() {
                         close_editor_state(&mut instance, state);
                     }
+                }
+                Ok(MainThreadCommand::RequestFlush) => {
+                    flush_plugin_params(&mut instance);
                 }
                 Ok(MainThreadCommand::Shutdown {
                     processor,
@@ -1010,12 +1083,13 @@ mod clap_impl {
             }
 
             // show
+            // Some plugins (e.g. nih-plug) embed their editor during create/set_parent and
+            // return false from `show` for embedded windows (it's only implemented for
+            // free-standing windows).
             let show_result = gui_ext.show(&mut instance.plugin_handle());
             log::info!("show result: {:?}", show_result);
             if let Err(e) = show_result {
-                let _ = gui_ext.destroy(&mut instance.plugin_handle());
-                crate::editor_host::x11::cleanup_x11_window(&xlib, display, parent_win);
-                return Err(anyhow!("show failed: {e:?}"));
+                log::warn!("show (embedded) reported an error, ignoring: {e:?}");
             }
 
             // set_size after show, as JUCE could defer resized() on invisible components (surge)
