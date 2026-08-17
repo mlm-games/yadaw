@@ -39,7 +39,7 @@ env_logger = "0.11"
 once_cell = "1.19"
 web-time = "1.1.0"
 hound = "3.5"
-dissonia = { git = "https://github.com/MLM-Stuff/dissonia", features = [
+dissonia = { version = "0.1", features = [
     "flac",
     "flac-container",
     "ogg",
@@ -58,10 +58,10 @@ num_cpus = "1.17.0"
 smallvec = "1.15.1"
 log = "0.4"
 flume = "0.12"
-web-workers = "0.3.1"
+web-workers = "0.3"
+rlobkit-dialogs = "0.5"
 
 [target.'cfg(target_os = "android")'.dependencies]
-rlobkit-dialogs = { git = "https://github.com/mlm-games/rlobkit" }
 android_logger = "0.15.1"
 android-activity = { version = "0.6.0", features = ["native-activity"] }
 winit = { version = "0.30.12", default-features = false, features = [
@@ -80,7 +80,6 @@ tokio = { version = "1", features = [
 cpal = "0.18"
 yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = false }
 winit = "0.30.12"
-rlobkit-dialogs = { git = "https://github.com/mlm-games/rlobkit" }
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "macros",
@@ -106,9 +105,8 @@ web-sys = { version = "0.3", features = [
     "Event",
     "EventTarget",
 ] }
-waw = { git = "https://github.com/Marcel-G/waw-rs", optional = true }
+waw = { git = "https://github.com/mlm-games/waw-rs", optional = true }
 opfs = { git = "https://github.com/mlm-games/opfs" }
-rlobkit-dialogs = { git = "https://github.com/mlm-games/rlobkit" }
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 
 
