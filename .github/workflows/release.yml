@@ -3,10 +3,16 @@ name: Release binaries
 on:
   workflow_dispatch:
     inputs:
-      version_name:
-        description: "Version to build (informational; crate-publish.yml owns the bump + tag)"
-        required: false
-        type: string
+      bump_type:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
       mark_prerelease:
         description: "Mark as prerelease"
         required: true
@@ -28,14 +34,14 @@ jobs:
       working-directory: .
       app-name: "YADAW"
       app-slug: "yadaw"
-      # Version is bumped + tagged by crate-publish.yml before dispatching this
-      # workflow; build the binaries at that version.
-      bump-type: none
+      # This workflow owns the bump + tag; it dispatches the other release
+      # workflows with the bumped version_name afterwards.
+      bump-type: ${{ inputs.bump_type }}
       include-android: true
       prerelease: ${{ inputs.mark_prerelease }}
       generate-release-notes: true
       changelog-path: "CHANGELOG.md"
       version-file-path: "./fastlane/metadata/android/en-US/changelogs/{{version_code}}.txt"
       metainfo-path: "./others/flathub/io.github.mlm_games.yadaw.metainfo.xml"
-      dispatch-on-release: '["aur-upload.yml"]'
+      dispatch-on-release: '["crate-publish.yml","aur-upload.yml","snap-upload.yml"]'
     secrets: inherit
