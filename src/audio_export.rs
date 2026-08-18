@@ -1,9 +1,10 @@
 use crate::audio::AudioEngine;
 use crate::audio_state::AudioState;
-use crate::constants::MAX_BUFFER_SIZE;
 use crate::messages::{ExportConfig, ExportFormat, ExportState, UIUpdate, UiTx};
 use crate::project::AppState;
 use crate::time_utils::TimeConverter;
+
+const EXPORT_BLOCK: usize = 512;
 
 use anyhow::{Result, anyhow, bail};
 use dissonia::prelude::*;
@@ -149,7 +150,7 @@ fn run_export(
     let mut frames_done = 0u64;
 
     while frames_done < total_frames {
-        let batch = ((total_frames - frames_done) as usize).min(MAX_BUFFER_SIZE);
+        let batch = ((total_frames - frames_done) as usize).min(EXPORT_BLOCK);
         let mut buf = vec![0.0f32; batch * channels];
         let mut plugin_time_ms = 0.0f32;
 
@@ -389,7 +390,7 @@ async fn run_export_wasm(
     let mut frames_done = 0u64;
 
     while frames_done < total_frames {
-        let batch = ((total_frames - frames_done) as usize).min(MAX_BUFFER_SIZE);
+        let batch = ((total_frames - frames_done) as usize).min(EXPORT_BLOCK);
         let mut buf = vec![0.0f32; batch * channels];
         let mut plugin_time_ms = 0.0f32;
 
