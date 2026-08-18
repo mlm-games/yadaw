@@ -15,8 +15,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use dashmap::DashMap;
 use flume::{Receiver as FlumeReceiver, Sender as FlumeSender};
 use rtrb::{Consumer, RingBuffer};
-use std::collections::{HashMap, HashSet};
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
@@ -306,8 +306,9 @@ fn build_audio_callback(
                         let num_samples = engine.recording_state.accumulated_samples.len();
                         let length_beats = converter.samples_to_beats(num_samples as f64);
 
-                        let samples =
-                            Arc::new(std::mem::take(&mut engine.recording_state.accumulated_samples));
+                        let samples = Arc::new(std::mem::take(
+                            &mut engine.recording_state.accumulated_samples,
+                        ));
 
                         let _ = engine.updates.send_sync(UIUpdate::RecordingFinishedRaw {
                             track_id,
@@ -730,7 +731,7 @@ impl AudioEngine {
         // Copy BPM from the main project state
         offline_audio_state.bpm.store(audio_state.bpm.load());
 
-let mut engine = AudioEngine {
+        let mut engine = AudioEngine {
             graph_snapshot: AudioGraphSnapshot::default(), // Will be populated by setup method
             audio_state: Arc::new(offline_audio_state),
             track_processors: HashMap::new(),
@@ -762,10 +763,12 @@ let mut engine = AudioEngine {
         };
 
         for track_snapshot in initial_tracks {
-            let _ = engine.plugin_worker_tx.try_send(PluginWorkerCommand::RebuildChain {
-                track_id: track_snapshot.track_id,
-                chain: track_snapshot.plugin_chain.clone(),
-            });
+            let _ = engine
+                .plugin_worker_tx
+                .try_send(PluginWorkerCommand::RebuildChain {
+                    track_id: track_snapshot.track_id,
+                    chain: track_snapshot.plugin_chain.clone(),
+                });
         }
         engine.wait_offline_installs(initial_tracks);
 
@@ -777,7 +780,11 @@ let mut engine = AudioEngine {
     fn wait_offline_installs(&mut self, tracks: &[TrackSnapshot]) {
         let mut expected: HashSet<(u64, u64)> = tracks
             .iter()
-            .flat_map(|t| t.plugin_chain.iter().map(move |p| (t.track_id, p.plugin_id)))
+            .flat_map(|t| {
+                t.plugin_chain
+                    .iter()
+                    .map(move |p| (t.track_id, p.plugin_id))
+            })
             .collect();
         let deadline = web_time::Instant::now() + web_time::Duration::from_millis(1500);
 
@@ -1016,8 +1023,7 @@ let mut engine = AudioEngine {
                     instance,
                 } => {
                     let cell = PluginCell(instance);
-                    self.pending_installs
-                        .insert((track_id, plugin_id), cell);
+                    self.pending_installs.insert((track_id, plugin_id), cell);
                 }
                 EngineEvent::Uninstall {
                     track_id,
@@ -1145,7 +1151,10 @@ let mut engine = AudioEngine {
                     }
                     let _ = self
                         .plugin_worker_tx
-                        .try_send(PluginWorkerCommand::RemovePlugin { track_id, plugin_id });
+                        .try_send(PluginWorkerCommand::RemovePlugin {
+                            track_id,
+                            plugin_id,
+                        });
                 }
             }
 
@@ -1195,10 +1204,12 @@ let mut engine = AudioEngine {
             proc.plugin_order = desired;
 
             if needs_rebuild {
-                let _ = self.plugin_worker_tx.try_send(PluginWorkerCommand::RebuildChain {
-                    track_id,
-                    chain: track.plugin_chain.clone(),
-                });
+                let _ = self
+                    .plugin_worker_tx
+                    .try_send(PluginWorkerCommand::RebuildChain {
+                        track_id,
+                        chain: track.plugin_chain.clone(),
+                    });
             }
         }
     }
@@ -1923,7 +1934,7 @@ let mut engine = AudioEngine {
 
             if panicked {
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
-if let Some(ppu) = proc.plugins.get_mut(plugin_id) {
+                    if let Some(ppu) = proc.plugins.get_mut(plugin_id) {
                         let msg = format!(
                             "Plugin '{}' (URI: {}) panicked during processing and has been bypassed.",
                             ppu.uri, uri
@@ -2002,70 +2013,143 @@ fn process_midi_track(
     use std::collections::HashSet;
 
     let converter = TimeConverter::new(sample_rate as f32, bpm);
-    let current_beat = converter.samples_to_beats(current_position);
+    let block_start = current_position;
+    let block_end = current_position + num_frames as f64;
 
-    // Handle looping
-    let effective_beat = if loop_enabled && loop_end > loop_start {
-        let loop_len = loop_end - loop_start;
-        if current_beat >= loop_end {
-            loop_start + ((current_beat - loop_start) % loop_len)
+    let beat_at = |samples: f64| -> f64 {
+        let b = converter.samples_to_beats(samples);
+        if loop_enabled && loop_end > loop_start {
+            let loop_len = loop_end - loop_start;
+            if b >= loop_end {
+                loop_start + (b - loop_start).rem_euclid(loop_len)
+            } else {
+                b
+            }
         } else {
-            current_beat
+            b
         }
-    } else {
-        current_beat
     };
 
-    // Compute which notes should be ON at effective_beat
-    let mut desired: HashSet<u8> = HashSet::new();
-    // Keep velocity and start_beat for proper synth phase alignment
-    let mut desired_detail: Vec<(u8, u8, f64)> = Vec::new();
+    // (pitch, velocity, abs_start_samples, abs_end_samples)
+    let mut segs: Vec<(u8, u8, f64, f64)> = Vec::new();
+
+    // Cover the block in beat space (project loop is already disabled offline).
+    let start_beat = converter.samples_to_beats(block_start);
+    let end_beat = converter.samples_to_beats(block_end);
 
     for clip in &track.midi_clips {
-        let clip_end = clip.start_beat + clip.length_beats;
-        if effective_beat < clip.start_beat || effective_beat >= clip_end {
+        let clip_start = clip.start_beat;
+        let clip_end = clip.start_beat + clip.length_beats.max(0.0);
+        if end_beat <= clip_start || start_beat >= clip_end {
             continue;
         }
-        for n in &clip.notes {
-            let s = clip.start_beat + n.start;
-            let e = s + n.duration;
-            if s <= effective_beat && effective_beat < e && desired.insert(n.pitch) {
-                desired_detail.push((n.pitch, n.velocity, s));
+
+        let content_len = clip.content_len_beats.max(0.000001);
+        let repeats = if clip.loop_enabled {
+            (clip.length_beats / content_len).ceil().max(1.0) as i32
+        } else {
+            1
+        };
+        let offset = clip.content_offset_beats.rem_euclid(content_len);
+
+        for k in 0..repeats {
+            let rep_off = clip_start + k as f64 * content_len;
+            let rep_end = (rep_off + content_len).min(clip_end);
+            if rep_end <= start_beat || rep_off >= end_beat {
+                continue;
+            }
+
+            for n in &clip.notes {
+                let s_loc = if clip.loop_enabled {
+                    (n.start + offset).rem_euclid(content_len)
+                } else {
+                    n.start
+                };
+                let e_loc = s_loc + n.duration;
+
+                // Same wrap split as build_block_midi_events
+                let mut parts: smallvec::SmallVec<[(f64, f64); 2]> = smallvec::smallvec![];
+                if !clip.loop_enabled || e_loc <= content_len {
+                    parts.push((s_loc, e_loc));
+                } else {
+                    parts.push((s_loc, content_len));
+                    parts.push((0.0, e_loc - content_len));
+                }
+
+                for (s_local, e_local) in parts {
+                    let s_abs = rep_off + s_local;
+                    let e_abs = (rep_off + e_local).min(rep_end);
+                    if e_abs <= start_beat || s_abs >= end_beat {
+                        continue;
+                    }
+                    let pitch = (n.pitch as i16 + clip.transpose as i16).clamp(0, 127) as u8;
+                    let vel = (n.velocity as i16 + clip.velocity_offset as i16).clamp(1, 127) as u8;
+                    let s_samp = converter.beats_to_samples(s_abs);
+                    let e_samp = converter.beats_to_samples(e_abs);
+                    if e_samp > s_samp {
+                        segs.push((pitch, vel, s_samp, e_samp));
+                    }
+                }
             }
         }
     }
 
-    // Remove any stale active notes that shouldn't be on now
+    // Keep active_notes coherent at block start (preview / state); not used for scheduling.
+    let eff0 = beat_at(block_start);
+    let mut desired: HashSet<u8> = HashSet::new();
+    for &(pitch, _, s_samp, e_samp) in &segs {
+        let sb = converter.samples_to_beats(s_samp);
+        let eb = converter.samples_to_beats(e_samp);
+        if sb <= eff0 && eff0 < eb {
+            desired.insert(pitch);
+        }
+    }
     processor
         .active_notes
         .retain(|n| desired.contains(&n.pitch));
-
-    // Add newly required active notes
-    for (pitch, vel, start_abs_beat) in desired_detail {
-        if !processor.active_notes.iter().any(|n| n.pitch == pitch) {
-            // Start sample so the oscillator phase corresponds to the real note start
-            let elapsed_beats = effective_beat - start_abs_beat;
-            let elapsed_samples = converter.beats_to_samples(elapsed_beats).max(0.0);
+    for &(pitch, vel, s_samp, e_samp) in &segs {
+        let sb = converter.samples_to_beats(s_samp);
+        let eb = converter.samples_to_beats(e_samp);
+        if sb <= eff0 && eff0 < eb && !processor.active_notes.iter().any(|n| n.pitch == pitch) {
             processor.active_notes.push(ActiveMidiNote {
                 pitch,
                 velocity: vel,
-                start_sample: current_position - elapsed_samples,
+                start_sample: s_samp,
             });
         }
     }
 
-    // Clear input buffers
     processor.input_buffers[0][..num_frames].fill(0.0);
     processor.input_buffers[1][..num_frames].fill(0.0);
 
-    // Generate audio if no plugins
-    if processor.plugins.is_empty() && !processor.active_notes.is_empty() {
+    // If below cond?: MIDI events drive audio in run_plugin_chain, don't dual-sine.
+    let has_live_plugin = processor.plugin_order.iter().any(|pid| {
+        processor
+            .plugins
+            .get(pid)
+            .map(|p| !p.bypass && p.rt_instance_id.is_some())
+            .unwrap_or(false)
+    });
+
+    if !has_live_plugin && (!segs.is_empty() || !processor.active_notes.is_empty()) {
         for i in 0..num_frames {
-            let mut sample = 0.0;
+            let t = block_start + i as f64;
+            let mut sample = 0.0f32;
+            for &(pitch, vel, s_samp, e_samp) in &segs {
+                if s_samp > block_start && t >= s_samp && t < e_samp {
+                    sample += generate_sine_for_note(pitch, vel, t - s_samp, sample_rate);
+                }
+            }
             for note in &processor.active_notes {
-                let sample_offset = current_position + i as f64 - note.start_sample;
-                sample +=
-                    generate_sine_for_note(note.pitch, note.velocity, sample_offset, sample_rate);
+                let sample_offset = t - note.start_sample;
+                if sample_offset >= 0.0 {
+                    sample += generate_sine_for_note(
+                        note.pitch,
+                        note.velocity,
+                        sample_offset,
+                        sample_rate,
+                    );
+                }
             }
             processor.input_buffers[0][i] = sample;
             processor.input_buffers[1][i] = sample;
