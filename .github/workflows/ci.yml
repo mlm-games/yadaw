@@ -24,7 +24,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
+          - os: ubuntu-26.04-arm
           - os: macos-latest
           - os: windows-latest
     steps:
