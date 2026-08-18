@@ -281,6 +281,7 @@ fn write_ogg(
     layout: ChannelLayout,
 ) -> Result<()> {
     let sample_rate = config.sample_rate as u32;
+    let channels = layout.count() as usize;
     let output_rate: u32 = match sample_rate {
         8000 | 12000 | 16000 | 24000 | 48000 => sample_rate,
         44100 => 48000,
@@ -290,17 +291,7 @@ fn write_ogg(
     };
 
     let pcm_data = if output_rate != sample_rate {
-        let ratio = output_rate as f64 / sample_rate as f64;
-        let new_len = (pcm.len() as f64 * ratio) as usize;
-        let mut resampled = Vec::with_capacity(new_len);
-        for i in 0..new_len {
-            let src_idx = i as f64 / ratio;
-            let lo = src_idx.floor() as usize;
-            let hi = (lo + 1).min(pcm.len() - 1);
-            let t = src_idx.fract() as f32;
-            resampled.push(pcm[lo] * (1.0 - t) + pcm[hi] * t);
-        }
-        resampled
+        resample_interleaved_linear(pcm, channels, sample_rate as f64, output_rate as f64)
     } else {
         pcm.to_vec()
     };
@@ -323,6 +314,35 @@ fn write_ogg(
 
     muxer.finalize()?;
     Ok(())
+}
+
+fn resample_interleaved_linear(
+    pcm: &[f32],
+    channels: usize,
+    src_rate: f64,
+    dst_rate: f64,
+) -> Vec<f32> {
+    let channels = channels.max(1);
+    let src_frames = pcm.len() / channels;
+    if src_frames == 0 {
+        return Vec::new();
+    }
+    let ratio = dst_rate / src_rate;
+    let dst_frames = ((src_frames as f64) * ratio).round().max(1.0) as usize;
+    let mut out = vec![0.0f32; dst_frames * channels];
+
+    for df in 0..dst_frames {
+        let src_pos = df as f64 / ratio;
+        let lo = (src_pos.floor() as usize).min(src_frames - 1);
+        let hi = (lo + 1).min(src_frames - 1);
+        let t = (src_pos - lo as f64) as f32;
+        for ch in 0..channels {
+            let s0 = pcm[lo * channels + ch];
+            let s1 = pcm[hi * channels + ch];
+            out[df * channels + ch] = s0 * (1.0 - t) + s1 * t;
+        }
+    }
+    out
 }
 
 fn encode_pcm_from_f32(

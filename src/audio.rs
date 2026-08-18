@@ -730,6 +730,10 @@ impl AudioEngine {
 
         // Copy BPM from the main project state
         offline_audio_state.bpm.store(audio_state.bpm.load());
+        // Keep export loudness in sync with the live master volume
+        offline_audio_state
+            .master_volume
+            .store(audio_state.master_volume.load());
 
         let mut engine = AudioEngine {
             graph_snapshot: AudioGraphSnapshot::default(), // Will be populated by setup method
