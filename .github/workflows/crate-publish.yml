@@ -1,0 +1,41 @@
+name: Publish crates
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version bump type (none keeps current version)"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: crate-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  publish:
+    uses: mlm-games/ci/.github/workflows/crate-publish.yml@v1
+    with:
+      working-directory: .
+      # The bump lives here (renamite-style): versions all workspace crates,
+      # writes version_code, commits + tags vX.Y.Z, then dispatches release.yml
+      # which consumes the bumped version (bump-type: none).
+      bump-type: ${{ inputs.bump_type }}
+      write-android-version-code: true
+      publish-crates-io: true
+      workspace-publish: true
+      workspace-exclude: "yadaw yadaw-plugin-host"
+      generate-release-notes: false
+      create-release: false
+      system-deps: libasound2-dev libudev-dev pkg-config libx11-dev libxcb1-dev libxi-dev libxinerama-dev libxrandr-dev libxcursor-dev
+      dispatch-on-release: '["release.yml"]'
