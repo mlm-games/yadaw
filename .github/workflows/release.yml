@@ -18,6 +18,11 @@ on:
         required: true
         default: false
         type: boolean
+      upload_play:
+        description: "Upload AAB to Play Store"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -38,6 +43,7 @@ jobs:
       # workflows with the bumped version_name afterwards.
       bump-type: ${{ inputs.bump_type }}
       include-android: true
+      include-universal: true
       prerelease: ${{ inputs.mark_prerelease }}
       generate-release-notes: true
       changelog-path: "CHANGELOG.md"
@@ -49,3 +55,24 @@ jobs:
       android-ndk-version: "28.2.13676358"
       cargo-rapk-version: "0.18.3"
     secrets: inherit
+
+  play-upload:
+    needs: release
+    if: ${{ !inputs.mark_prerelease && inputs.upload_play }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-universal*
+          merge-multiple: true
+          path: dist
+      - name: Upload to Play Store (production)
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.mlm.yadaw
+          releaseFiles: dist/*.aab
+          track: production
+          whatsNewDirectory: fastlane/metadata/android
