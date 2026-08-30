@@ -145,8 +145,7 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: ${{ github.event.repository.pushed_at || 0 }}
         run: |
-          # Android builds with default features (clap-host+lv2-legacy+vst3-host) — all compile on android
-          cargo rapk build --release --deterministic --target ${{ matrix.target }} --lib
+          cargo rapk build --release --deterministic --unsigned --target ${{ matrix.target }} --lib
           OUT_DIR="target/release/apk"
           if [ -d "target/${{ matrix.target }}/release/apk" ]; then
             OUT_DIR="target/${{ matrix.target }}/release/apk"
