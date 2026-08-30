@@ -37,7 +37,7 @@ jobs:
     uses: mlm-games/ci/.github/workflows/rust-app-release.yml@v1
     with:
       working-directory: .
-      app-name: "YADAW"
+      app-name: ""
       app-slug: "yadaw"
       # This workflow owns the bump + tag; it dispatches the other release
       # workflows with the bumped version_name afterwards.
@@ -53,7 +53,7 @@ jobs:
       android-api: "37.0"
       android-build-tools: "37.0.0"
       android-ndk-version: "29.0.14206865"
-      cargo-rapk-version: "0.19.3"
+      cargo-rapk-version: "0.19.4"
       android-d8-version: ""
     secrets: inherit
 
