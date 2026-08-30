@@ -6077,7 +6077,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "yadaw"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "ahash",
  "android-activity",

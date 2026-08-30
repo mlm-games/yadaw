@@ -1,3 +1,8 @@
+## v0.10.4
+
+- bump to android api 37
+
+
 ## v0.10.3
 
 - fix export being shrinked
