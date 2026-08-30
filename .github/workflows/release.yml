@@ -52,7 +52,7 @@ jobs:
       dispatch-on-release: '["crate-publish.yml","aur-upload.yml","snap-upload.yml"]'
       android-api: "37.0"
       android-build-tools: "37.0.0"
-      android-ndk-version: "28.2.13676358"
+      android-ndk-version: "29.0.14206865"
       cargo-rapk-version: "0.18.3"
     secrets: inherit
 
