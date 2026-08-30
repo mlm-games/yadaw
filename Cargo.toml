@@ -152,7 +152,7 @@ icon = "@mipmap/ic_launcher"
 # exported = false
 
 [package.metadata.android.sdk]
-version_code = 16779781
+version_code = 16779779
 min_sdk_version = 29
 target_sdk_version = 37
 
