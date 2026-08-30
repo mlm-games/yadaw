@@ -1,3 +1,8 @@
+## v0.10.5
+
+- No user-facing changes were mentioned since previous release
+
+
 ## v0.10.4
 
 - bump to android api 37
