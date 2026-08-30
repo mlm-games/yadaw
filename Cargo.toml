@@ -1,6 +1,6 @@
 [package]
 name = "yadaw"
-version = "0.10.7"
+version = "0.10.8"
 edition = "2024"
 default-run = "yadaw"
 
@@ -152,7 +152,7 @@ icon = "@mipmap/ic_launcher"
 # exported = false
 
 [package.metadata.android.sdk]
-version_code = 16779783
+version_code = 16779784
 min_sdk_version = 29
 target_sdk_version = 37
 
