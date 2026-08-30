@@ -154,7 +154,7 @@ icon = "@mipmap/ic_launcher"
 [package.metadata.android.sdk]
 version_code = 16779779
 min_sdk_version = 29
-target_sdk_version = 36
+target_sdk_version = 37
 
 [patch.crates-io]
 midir = { git = "https://github.com/mlm-games/midir" }

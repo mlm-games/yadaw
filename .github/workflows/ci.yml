@@ -107,6 +107,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Load pins from release.yml
+        run: |
+          API=$(sed -E -n 's/.*ANDROID_API.*"(.*)".*/\1/p' .github/workflows/release.yml)
+          BT=$(sed -E -n 's/.*ANDROID_BUILD_TOOLS.*"(.*)".*/\1/p' .github/workflows/release.yml | head -1)
+          NDK=$(sed -E -n 's/.*ANDROID_NDK_VERSION.*"(.*)".*/\1/p' .github/workflows/release.yml)
+          RAPK=$(sed -E -n 's/.*CARGO_RAPK_VERSION.*"([^"]+)".*/\1/p' .github/workflows/release.yml)
+          echo "ANDROID_API=$API" >> "$GITHUB_ENV"
+          echo "ANDROID_BUILD_TOOLS=$BT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_VERSION=$NDK" >> "$GITHUB_ENV"
+          echo "CARGO_RAPK_VERSION=$RAPK" >> "$GITHUB_ENV"
+          echo "Loaded from release.yml: API=$API BT=$BT NDK=$NDK RAPK=$RAPK"
+
       - uses: actions/setup-java@v5
         with:
           java-version: ${{ env.JAVA_VERSION }}
@@ -119,22 +131,23 @@ jobs:
         run: |
           sdkmanager --install \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "ndk;28.2.13676358"
+            "platforms;android-${{ env.ANDROID_API }}" \
+            "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" \
+            "ndk;${{ env.ANDROID_NDK_VERSION }}"
 
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
 
       - name: Install cargo-rapk
-        run: cargo install cargo-rapk --locked
+        run: cargo install cargo-rapk@${{ env.CARGO_RAPK_VERSION }} --locked
 
       - name: Build Android APK
         env:
           SOURCE_DATE_EPOCH: ${{ github.event.repository.pushed_at || 0 }}
         run: |
-          cargo rapk build --target ${{ matrix.target }} --lib
-          OUT_DIR="target/debug/apk"
+          # Android builds with default features (clap-host+lv2-legacy+vst3-host) — all compile on android
+          cargo rapk build --release --deterministic --target ${{ matrix.target }} --lib
+          OUT_DIR="target/release/apk"
           if [ -d "target/${{ matrix.target }}/release/apk" ]; then
             OUT_DIR="target/${{ matrix.target }}/release/apk"
           fi

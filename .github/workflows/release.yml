@@ -27,6 +27,12 @@ concurrency:
   group: release-bin-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  ANDROID_API: "37.0"
+  ANDROID_BUILD_TOOLS: "37.0.0"
+  ANDROID_NDK_VERSION: "28.2.13676358"
+  CARGO_RAPK_VERSION: "0.18.3"
+
 jobs:
   release:
     uses: mlm-games/ci/.github/workflows/rust-app-release.yml@v1
@@ -44,4 +50,8 @@ jobs:
       version-file-path: "./fastlane/metadata/android/en-US/changelogs/{{version_code}}.txt"
       metainfo-path: "./others/flathub/io.github.mlm_games.yadaw.metainfo.xml"
       dispatch-on-release: '["crate-publish.yml","aur-upload.yml","snap-upload.yml"]'
+      android-api: ${{ env.ANDROID_API }}
+      android-build-tools: ${{ env.ANDROID_BUILD_TOOLS }}
+      android-ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+      cargo-rapk-version: ${{ env.CARGO_RAPK_VERSION }}
     secrets: inherit
