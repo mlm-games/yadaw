@@ -109,10 +109,10 @@ jobs:
 
       - name: Load pins from release.yml
         run: |
-          API=$(sed -E -n 's/.*android-api.*"(.*)".*/\1/p' .github/workflows/release.yml)
-          BT=$(sed -E -n 's/.*android-build-tools.*"(.*)".*/\1/p' .github/workflows/release.yml | head -1)
-          NDK=$(sed -E -n 's/.*android-ndk-version.*"(.*)".*/\1/p' .github/workflows/release.yml)
-          RAPK=$(sed -E -n 's/.*cargo-rapk-version.*"(.*)".*/\1/p' .github/workflows/release.yml)
+          API=$(sed -E -n "s/.*android-api.*['\"](.*)['\"].*/\1/p" .github/workflows/release.yml | head -1)
+          BT=$(sed -E -n "s/.*android-build-tools.*['\"](.*)['\"].*/\1/p" .github/workflows/release.yml | head -1)
+          NDK=$(sed -E -n "s/.*android-ndk-version.*['\"](.*)['\"].*/\1/p" .github/workflows/release.yml | head -1)
+          RAPK=$(sed -E -n "s/.*cargo-rapk-version.*['\"](.*)['\"].*/\1/p" .github/workflows/release.yml | head -1)
           echo "ANDROID_API=$API" >> "$GITHUB_ENV"
           echo "ANDROID_BUILD_TOOLS=$BT" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_VERSION=$NDK" >> "$GITHUB_ENV"
