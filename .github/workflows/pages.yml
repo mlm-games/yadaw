@@ -11,4 +11,4 @@ permissions:
 
 jobs:
   deploy:
-    uses: mlm-games/ci/.github/workflows/pages.yml@main
+    uses: mlm-games/ci/.github/workflows/pages.yml@v1
