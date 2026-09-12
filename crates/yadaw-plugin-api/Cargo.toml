@@ -1,10 +1,11 @@
 [package]
 name = "yadaw-plugin-api"
-version = "0.1.0"
-edition = "2024"
-license = "AGPL-3.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Plugin API definitions for YADAW audio plugins"
 
 [dependencies]
-anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
+anyhow.workspace = true
+serde.workspace = true

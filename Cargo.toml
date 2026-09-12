@@ -1,7 +1,75 @@
+[workspace]
+resolver = "3"
+members = ["crates/yadaw-plugin-api", "crates/yadaw-plugin-host"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+repository = "https://github.com/mlm-games/yadaw"
+description = "YADAW - Yet Another DAW"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "2"
+
+symphonia = { version = "0.6", features = ["all"] }
+symphonia-adapter-oporus = "0.1.3"
+dissonia = { version = "0.1", features = ["flac", "flac-container", "ogg", "opus"] }
+hound = "3.5"
+rtrb = "0.3"
+cpal = "0.18"
+midir = "0.11.1"
+midly = "0.5"
+
+dashmap = "6.1"
+parking_lot = "0.12"
+lru = "0.18"
+smallvec = "1.15.1"
+rayon = "1.12"
+flume = "0.12"
+web-workers = "0.3"
+once_cell = "1.19"
+log = "0.4"
+ahash = "0.8"
+rand = "0.10"
+num_cpus = "1.17.0"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6.0.0"
+glob = "0.3"
+shellexpand = "3.1"
+env_logger = "0.11"
+web-time = "1.1.0"
+
+egui = "0.36"
+eframe = { version = "0.36", features = ["wgpu"] }
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Blob", "Url", "HtmlAnchorElement", "Event", "EventTarget"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
+console_error_panic_hook = "0.1"
+console_log = "1.0"
+
+waw = { git = "https://github.com/mlm-games/waw-rs" }
+ropfs = "0.4"
+wasm-bindgen-rayon = { git = "https://github.com/mlm-games/wasm-bindgen-rayon.git" }
+
+yadaw-plugin-api = { path = "crates/yadaw-plugin-api", version = "0.1.0" }
+yadaw-plugin-host = { path = "crates/yadaw-plugin-host", version = "0.1.0" }
+
 [package]
 name = "yadaw"
 version = "0.10.8"
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "YADAW - Yet Another DAW"
+rust-version.workspace = true
 default-run = "yadaw"
 
 [[bin]]
@@ -13,103 +81,41 @@ required-features = ["clap-host"]
 name = "yadaw"
 crate-type = ["rlib", "cdylib"]
 
-
-[workspace]
-members = ["crates/yadaw-plugin-api", "crates/yadaw-plugin-host"]
-resolver = "3"
-
-
 [dependencies]
-yadaw-plugin-api = { path = "crates/yadaw-plugin-api" }
+yadaw-plugin-api.workspace = true
 
-chrono = { version = "0.4", features = ["serde"] }
-egui = "0.36"
-eframe = { version = "0.36", features = ["wgpu"] }
-ahash = "0.8"
+chrono.workspace = true
+egui.workspace = true
+eframe.workspace = true
+ahash.workspace = true
 
-symphonia-adapter-oporus = "0.1.3"
-rtrb = "0.3"
-serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = "1.0"
-directories = "6.0.0"
-anyhow = "1.0"
-glob = "0.3"
-shellexpand = "3.1"
-env_logger = "0.11"
-once_cell = "1.19"
-web-time = "1.1.0"
-hound = "3.5"
-dissonia = { version = "0.1", features = [
-    "flac",
-    "flac-container",
-    "ogg",
-    "opus",
-] }
-symphonia = { version = "0.6", features = ["all"] }
-dashmap = "6.1"
-parking_lot = "0.12"
-rand = "0.10"
-midir = "0.11.1"
-midly = "0.5"
-lru = "0.18"
-rayon = "1.12"
-num_cpus = "1.17.0"
-
-smallvec = "1.15.1"
-log = "0.4"
-flume = "0.12"
-web-workers = "0.3"
+symphonia-adapter-oporus.workspace = true
+rtrb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+directories.workspace = true
+anyhow.workspace = true
+glob.workspace = true
+shellexpand.workspace = true
+env_logger.workspace = true
+once_cell.workspace = true
+web-time.workspace = true
+hound.workspace = true
+dissonia.workspace = true
+symphonia.workspace = true
+dashmap.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+midir.workspace = true
+midly.workspace = true
+lru.workspace = true
+rayon.workspace = true
+num_cpus.workspace = true
+smallvec.workspace = true
+log.workspace = true
+flume.workspace = true
+web-workers.workspace = true
 rlobkit-dialogs = "0.5"
-
-[target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.15.1"
-android-activity = { version = "0.6.0", features = ["native-activity"] }
-winit = { version = "0.30.12", default-features = false, features = [
-    "android-native-activity",
-] }
-ndk-context = "0.1"
-jni = "0.22"
-tokio = { version = "1", features = [
-    "rt-multi-thread",
-    "macros",
-    "time",
-    "fs",
-] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-cpal = "0.18"
-yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = false }
-winit = "0.30.12"
-tokio = { version = "1", features = [
-    "rt-multi-thread",
-    "macros",
-    "time",
-    "fs",
-] }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-cpal = { version = "0.18", features = ["wasm-bindgen", "audioworklet"] }
-getrandom = { version = "0.4", features = ["wasm_js"] }
-getrandom_0_3 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
-yadaw-plugin-host = { path = "crates/yadaw-plugin-host", default-features = false }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-wasm-bindgen-rayon = { git = "https://github.com/mlm-games/wasm-bindgen-rayon.git" }
-js-sys = "0.3"
-console_error_panic_hook = "0.1"
-console_log = "1.0"
-web-sys = { version = "0.3", features = [
-    "HtmlCanvasElement",
-    "Blob",
-    "Url",
-    "HtmlAnchorElement",
-    "Event",
-    "EventTarget",
-] }
-waw = { git = "https://github.com/mlm-games/waw-rs", optional = true }
-opfs = { git = "https://github.com/mlm-games/opfs" }
-tokio = { version = "1", features = ["rt", "macros", "time"] }
-
 
 [features]
 default = ["clap-host", "lv2-legacy", "vst3-host"]
@@ -118,15 +124,40 @@ clap-host = ["yadaw-plugin-host/clap-host"]
 lv2-legacy = ["yadaw-plugin-host/lv2-legacy"]
 vst3-host = ["yadaw-plugin-host/vst3-host"]
 
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15.1"
+android-activity = { version = "0.6.0", features = ["native-activity"] }
+winit = { version = "0.30.12", default-features = false, features = ["android-native-activity"] }
+ndk-context = "0.1"
+jni = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cpal.workspace = true
+yadaw-plugin-host.workspace = true
+winit = "0.30.12"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+cpal = { version = "0.18", features = ["wasm-bindgen", "audioworklet"] }
+getrandom.workspace = true
+getrandom_0_3 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+yadaw-plugin-host.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+wasm-bindgen-rayon.workspace = true
+js-sys.workspace = true
+console_error_panic_hook.workspace = true
+console_log.workspace = true
+web-sys.workspace = true
+waw.workspace = true
+opfs.workspace = true
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+
 [package.metadata.android]
 package = "org.mlm.yadaw"
 label = "Yadaw"
-build_targets = [
-    "aarch64-linux-android",
-    "armv7-linux-androideabi",
-    "x86_64-linux-android",
-    "i686-linux-android",
-]
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android"]
 resources = "others/packaging/res"
 
 [[package.metadata.android.uses_permission]]
@@ -134,22 +165,6 @@ name = "android.permission.RECORD_AUDIO"
 
 [package.metadata.android.application]
 icon = "@mipmap/ic_launcher"
-
-# [[package.metadata.android.application.activity]]
-# name = "android.app.NativeActivity"
-# config_changes = "orientation|keyboardHidden|screenSize"
-
-# [[package.metadata.android.application.activity.intent_filter]]
-# actions = ["android.intent.action.VIEW", "android.intent.action.MAIN"]
-# categories = ["android.intent.category.LAUNCHER"]
-
-# [[package.metadata.android.application.activity.meta_data]]
-# name = "android.app.lib_name"
-# value = "yadaw"
-
-# [[package.metadata.android.application.activity]]
-# name = "rust.rlobkit.RlobKitPickerActivity"
-# exported = false
 
 [package.metadata.android.sdk]
 version_code = 16779784
@@ -159,16 +174,11 @@ target_sdk_version = 37
 [patch.crates-io]
 midir = { git = "https://github.com/mlm-games/midir" }
 midly = { git = "https://github.com/mlm-games/midly" }
-# vst3-host = { git = "https://github.com/mlm-games/rust-vst3-host" }
-# lv2-sys = { path = "../rust-lv2/sys" }
-
-# dissonia = { path = "../dissonia/dissonia" }
 
 # [patch."https://github.com/mlm-games/rlobkit"]
 # rlobkit-dialogs = { path = "../rlobkit/rlobkit-dialogs" }
-# rlobkit-core = { path = "../rlobkit/rlobkit-core" }
 
-[profile.release] # try fix fdroid release
+[profile.release] # for fdroid release
 opt-level = 3
 lto = "fat"
 codegen-units = 1

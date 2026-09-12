@@ -1,8 +1,11 @@
 [package]
 name = "yadaw-plugin-host"
-version = "0.1.0"
-edition = "2024"
-license = "AGPL-3.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Plugin host for YADAW (CLAP/LV2/VST3)."
+publish = false
 
 [target.'cfg(unix)'.dependencies]
 x11-dl = "2.21"
@@ -17,7 +20,7 @@ smallvec = "1.15.1"
 
 yeli = { version = "0.4", optional = true }
 
-yadaw-plugin-api = { path = "../yadaw-plugin-api" }
+yadaw-plugin-api.workspace = true
 
 vst3-host = { version = "0.9", optional = true, default-features = false, features = [
     "egui-widgets",
