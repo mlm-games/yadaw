@@ -13,10 +13,20 @@ pub struct PluginPreset {
 }
 
 fn sanitize(input: &str) -> String {
-    input
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else {
+            out.push_str(&format!("_{:x}_", c as u32));
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        "unnamed".to_string()
+    } else {
+        trimmed.chars().take(64).collect()
+    }
 }
 
 fn preset_dir_for_uri(uri: &str) -> std::path::PathBuf {
@@ -31,8 +41,17 @@ pub fn save_preset(preset: &PluginPreset) -> Result<()> {
     let dir = preset_dir_for_uri(&preset.uri);
     std::fs::create_dir_all(&dir)?;
     let path = preset_path(&preset.uri, &preset.name);
+    if path.exists() {
+        return Err(anyhow!(
+            "Preset '{}' already exists ({}); refusing silent overwrite",
+            preset.name,
+            path.display()
+        ));
+    }
     let json = serde_json::to_string_pretty(preset)?;
-    std::fs::write(path, json)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 

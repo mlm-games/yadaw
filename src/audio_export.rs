@@ -389,7 +389,6 @@ async fn run_export_wasm(
     let sample_format = config.sample_format()?;
     let layout = config.channel_layout();
     let channels = layout.count() as usize;
-    let _ = sample_format;
 
     let converter = TimeConverter::new(config.sample_rate, app_state.bpm);
     let start_sample = converter.beats_to_samples(config.start_beat).round() as u64;
@@ -438,11 +437,25 @@ async fn run_export_wasm(
         .unwrap_or("export.wav")
         .to_string();
 
-    let spec = hound::WavSpec {
-        channels: channels as u16,
-        sample_rate: config.sample_rate as u32,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
+    let spec = match sample_format {
+        SampleFormat::I16 => hound::WavSpec {
+            channels: channels as u16,
+            sample_rate: config.sample_rate as u32,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+        SampleFormat::I24 => hound::WavSpec {
+            channels: channels as u16,
+            sample_rate: config.sample_rate as u32,
+            bits_per_sample: 24,
+            sample_format: hound::SampleFormat::Int,
+        },
+        _ => hound::WavSpec {
+            channels: channels as u16,
+            sample_rate: config.sample_rate as u32,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        },
     };
 
     let wav_bytes = {
@@ -450,10 +463,29 @@ async fn run_export_wasm(
         {
             let mut writer = hound::WavWriter::new(&mut cursor, spec)
                 .map_err(|e| anyhow!("Failed to create WAV writer: {e}"))?;
-            for &sample in &pcm {
-                writer
-                    .write_sample(sample)
-                    .map_err(|e| anyhow!("Failed to write sample: {e}"))?;
+            match sample_format {
+                SampleFormat::I16 => {
+                    for &sample in &pcm {
+                        writer
+                            .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                            .map_err(|e| anyhow!("Failed to write sample: {e}"))?;
+                    }
+                }
+                SampleFormat::I24 => {
+                    const MAX24: f32 = 8_388_607.0;
+                    for &sample in &pcm {
+                        writer
+                            .write_sample((sample.clamp(-1.0, 1.0) * MAX24) as i32)
+                            .map_err(|e| anyhow!("Failed to write sample: {e}"))?;
+                    }
+                }
+                _ => {
+                    for &sample in &pcm {
+                        writer
+                            .write_sample(sample)
+                            .map_err(|e| anyhow!("Failed to write sample: {e}"))?;
+                    }
+                }
             }
             writer
                 .finalize()

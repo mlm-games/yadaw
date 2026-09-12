@@ -151,7 +151,7 @@ console_error_panic_hook.workspace = true
 console_log.workspace = true
 web-sys.workspace = true
 waw.workspace = true
-opfs.workspace = true
+ropfs.workspace = true
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 
 [package.metadata.android]

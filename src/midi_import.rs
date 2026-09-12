@@ -25,7 +25,7 @@ pub fn import_midi_data(data: &[u8], bpm: f32) -> Result<Vec<ImportedTrack>> {
 
     let conv = match smf.header.timing {
         midly::Timing::Metrical(div) => {
-            let ppqn = div.as_int() as f64;
+            let ppqn = (div.as_int() as f64).max(1.0);
             TickToBeats::Ppqn(ppqn)
         }
         midly::Timing::Timecode(fps, subframe) => {
@@ -139,8 +139,11 @@ pub fn import_midi_data(data: &[u8], bpm: f32) -> Result<Vec<ImportedTrack>> {
         }
 
         if !notes.is_empty() {
-            // Sort by start time
-            notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+            notes.sort_by(|a, b| {
+                a.start
+                    .partial_cmp(&b.start)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             let name = track_name.unwrap_or_else(|| {
                 if let Some(p) = program {

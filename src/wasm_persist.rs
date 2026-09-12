@@ -16,14 +16,14 @@ mod opfs_io {
 
     pub async fn init() -> Result<(), String> {
         // TODO: migrate presets.rs, plugin import (ui/dialogs.rs), and
-        // their callers (command_processor.rs) from std::fs to opfs.
-        // Until then these dirs won't be created lazily via opfs::write.
+        // their callers (command_processor.rs) from std::fs to OPFS.
+        // Until then these dirs won't be created lazily via ropfs::write.
         for path in &[
             crate::paths::opfs::DIR_PROJECTS,
             crate::paths::opfs::DIR_PRESETS,
             crate::paths::opfs::DIR_PLUGINS,
         ] {
-            opfs::ensure_dir(path)
+            ropfs::ensure_dir(path)
                 .await
                 .map_err(|e| format!("OPFS init: {e}"))?;
         }
@@ -50,7 +50,7 @@ mod opfs_io {
     }
 
     async fn read_string(name: &str) -> Result<String, String> {
-        let data = opfs::read(name)
+        let data = ropfs::read(name)
             .await
             .map_err(|e| format!("read {name}: {e}"))?;
         String::from_utf8(data).map_err(|e| format!("decode {name}: {e}"))
@@ -91,7 +91,7 @@ pub async fn cache_audio_by_hash(hash: u64, samples: &[f32]) -> anyhow::Result<(
     #[cfg(target_arch = "wasm32")]
     {
         let full_key = format!("{}/{}", crate::paths::opfs::DIR_CACHE, key);
-        opfs::write(&full_key, data)
+        ropfs::write(&full_key, data)
             .await
             .map_err(|e| anyhow::anyhow!("cache audio: {e}"))?;
     }
@@ -109,7 +109,7 @@ pub async fn read_cached_audio_by_hash(hash: u64) -> Option<Vec<f32>> {
     #[cfg(target_arch = "wasm32")]
     {
         let full_key = format!("{}/{}", crate::paths::opfs::DIR_CACHE, key);
-        let data = opfs::read(&full_key).await.ok()?;
+        let data = ropfs::read(&full_key).await.ok()?;
         let (_prefix, samples, _suffix) = unsafe { data.align_to::<f32>() };
         Some(samples.to_vec())
     }
@@ -127,7 +127,7 @@ pub fn save_config_string(wasm_key: &str, fs_path: &Path, data: &str) -> anyhow:
         let key = wasm_key.to_string();
         let data = data.to_string();
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = opfs::write(&key, data.as_bytes()).await;
+            let _ = ropfs::write(&key, data.as_bytes()).await;
         });
         return Ok(());
     }

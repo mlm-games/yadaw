@@ -212,7 +212,32 @@ impl LV2PluginInstance {
         use_midi: bool,
         samples: usize,
     ) -> Result<()> {
-        let len = samples.min(self.max_block_size);
+        if samples == 0 {
+            return Ok(());
+        }
+        let mut offset = 0;
+        while offset < samples {
+            let len = (samples - offset).min(self.max_block_size);
+            self.process_single_chunk(
+                audio_inputs,
+                audio_outputs,
+                use_midi && offset == 0,
+                offset,
+                len,
+            )?;
+            offset += len;
+        }
+        Ok(())
+    }
+
+    fn process_single_chunk(
+        &mut self,
+        audio_inputs: &[&[f32]],
+        audio_outputs: &mut [&mut [f32]],
+        use_midi: bool,
+        offset: usize,
+        len: usize,
+    ) -> Result<()> {
         let need_ai = self.port_counts.audio_inputs;
         let need_ao = self.port_counts.audio_outputs;
         let ai = self.port_counts.atom_sequence_inputs;
@@ -226,11 +251,13 @@ impl LV2PluginInstance {
 
         let mut in_refs: Vec<&[f32]> = Vec::with_capacity(need_ai);
         for i in 0..need_ai {
-            let src = audio_inputs
-                .get(i)
-                .copied()
-                .unwrap_or(&self.silent_audio[..len]);
-            in_refs.push(&src[..len.min(src.len())]);
+            if let Some(src) = audio_inputs.get(i) {
+                let end = (offset + len).min(src.len());
+                let start = offset.min(end);
+                in_refs.push(&src[start..end]);
+            } else {
+                in_refs.push(&self.silent_audio[..len]);
+            }
         }
 
         if scratch_audio.len() < need_ao {
@@ -246,8 +273,9 @@ impl LV2PluginInstance {
         if provided_count > 0 {
             let (provided, _rest) = audio_outputs.split_at_mut(provided_count);
             for out_buf in provided.iter_mut() {
-                let l = out_buf.len().min(len);
-                out_refs.push(&mut out_buf[..l]);
+                let end = (offset + len).min(out_buf.len());
+                let start = offset.min(end);
+                out_refs.push(&mut out_buf[start..end]);
             }
         }
 
@@ -275,7 +303,7 @@ impl LV2PluginInstance {
 
         let result = self
             .instance
-            .run_with_ports(samples, ports)
+            .run_with_ports(len, ports)
             .map_err(|e| anyhow!("[LV2] run() error: {}", e));
 
         if let Some(ref ui) = self.active_ui {

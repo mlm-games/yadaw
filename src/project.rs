@@ -77,7 +77,9 @@ pub struct AppStateSnapshot {
     pub loop_enabled: bool,
     pub sample_rate: f32,
     pub time_signature: (i32, i32),
+    #[serde(default)]
     pub playing: bool,
+    #[serde(default)]
     pub recording: bool,
 }
 
@@ -91,8 +93,8 @@ impl AppState {
             bpm: self.bpm,
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
-            playing: self.playing,
-            recording: self.recording,
+            playing: false,
+            recording: false,
             master_volume: self.master_volume,
             loop_start: self.loop_start,
             loop_end: self.loop_end,
@@ -108,15 +110,13 @@ impl AppState {
         self.bpm = snapshot.bpm;
         self.time_signature = snapshot.time_signature;
         self.sample_rate = snapshot.sample_rate;
-        self.playing = snapshot.playing;
-        self.recording = snapshot.recording;
         self.master_volume = snapshot.master_volume;
         self.loop_start = snapshot.loop_start;
         self.loop_end = snapshot.loop_end;
         self.loop_enabled = snapshot.loop_enabled;
         self.rebuild_clip_index();
+        self.rebuild_plugin_indices();
         crate::idgen::seed_from_max(self.max_id_in_project());
-        self.ensure_ids();
     }
 
     /// Rebuild the clip index from current track state
@@ -148,6 +148,12 @@ impl AppState {
         }
     }
 
+    pub fn rebuild_plugin_indices(&mut self) {
+        for track in self.tracks.values_mut() {
+            track.rebuild_plugin_index();
+        }
+    }
+
     pub fn position_to_beats(&self, position: f64) -> f64 {
         let converter = TimeConverter::new(self.sample_rate, self.bpm);
         converter.samples_to_beats(position)
@@ -160,20 +166,77 @@ impl AppState {
 
     pub fn validate_before_save(&self) -> Result<()> {
         use std::collections::HashSet;
-        let mut seen_ids = HashSet::new();
+        let mut tracks = HashSet::new();
+        let mut clips = HashSet::new();
+        let mut plugins = HashSet::new();
+        let mut notes = HashSet::new();
 
         for (&track_id, track) in &self.tracks {
-            if !seen_ids.insert(track_id) {
+            if track_id == 0 || track.id == 0 {
+                return Err(anyhow!("Track with unassigned (0) ID"));
+            }
+            if track.id != track_id {
+                return Err(anyhow!(
+                    "Track key/id mismatch: {} != {}",
+                    track_id,
+                    track.id
+                ));
+            }
+            if !tracks.insert(track_id) {
                 return Err(anyhow!("Duplicate track ID: {}", track_id));
             }
             for clip in &track.midi_clips {
-                if clip.id != 0 && !seen_ids.insert(clip.id) {
+                if clip.id == 0 {
+                    return Err(anyhow!("MIDI clip with unassigned (0) ID"));
+                }
+                if !clips.insert(clip.id) {
                     return Err(anyhow!("Duplicate clip ID: {}", clip.id));
+                }
+                if let Some(pid) = clip.pattern_id
+                    && self.patterns.get(&pid).is_none()
+                {
+                    return Err(anyhow!(
+                        "MIDI clip {} references missing pattern {}",
+                        clip.id,
+                        pid
+                    ));
                 }
             }
             for clip in &track.audio_clips {
-                if clip.id != 0 && !seen_ids.insert(clip.id) {
+                if clip.id == 0 {
+                    return Err(anyhow!("Audio clip with unassigned (0) ID"));
+                }
+                if !clips.insert(clip.id) {
                     return Err(anyhow!("Duplicate clip ID: {}", clip.id));
+                }
+            }
+            for p in &track.plugin_chain {
+                if p.id == 0 {
+                    return Err(anyhow!("Plugin with unassigned (0) ID"));
+                }
+                if !plugins.insert(p.id) {
+                    return Err(anyhow!("Duplicate plugin ID: {}", p.id));
+                }
+            }
+        }
+        for (&gid, _) in &self.groups {
+            if gid == 0 {
+                return Err(anyhow!("Group with unassigned (0) ID"));
+            }
+        }
+        for (&pid, pat) in &self.patterns {
+            if pid == 0 || pat.id == 0 {
+                return Err(anyhow!("Pattern with unassigned (0) ID"));
+            }
+            if pat.id != pid {
+                return Err(anyhow!("Pattern key/id mismatch: {} != {}", pid, pat.id));
+            }
+            for n in &pat.notes {
+                if n.id == 0 {
+                    return Err(anyhow!("Note with unassigned (0) ID in pattern {}", pid));
+                }
+                if !notes.insert(n.id) {
+                    return Err(anyhow!("Duplicate note ID: {}", n.id));
                 }
             }
         }
@@ -181,39 +244,105 @@ impl AppState {
     }
 
     pub fn load_project(&mut self, project: Project) {
-        // Convert Vec<Track> to HashMap with IDs
+        {
+            let mut file_max = 0u64;
+            for t in &project.tracks {
+                file_max = file_max.max(t.id);
+                for c in &t.audio_clips {
+                    file_max = file_max.max(c.id);
+                }
+                for c in &t.midi_clips {
+                    file_max = file_max.max(c.id);
+                    file_max = file_max.max(c.pattern_id.unwrap_or(0));
+                }
+                for p in &t.plugin_chain {
+                    file_max = file_max.max(p.id);
+                }
+            }
+            for pat in &project.patterns {
+                file_max = file_max.max(pat.id);
+                for n in &pat.notes {
+                    file_max = file_max.max(n.id);
+                }
+            }
+            for g in &project.groups {
+                file_max = file_max.max(g.id);
+            }
+            crate::idgen::seed_from_max(file_max);
+        }
+
         self.tracks.clear();
         self.track_order.clear();
 
         for mut track in project.tracks {
-            let track_id = if track.id == 0 {
+            let mut track_id = if track.id == 0 {
                 self.fresh_id()
             } else {
                 track.id
             };
+            if self.tracks.contains_key(&track_id) {
+                log::warn!(
+                    "Duplicate track id {} in project file; renumbering",
+                    track_id
+                );
+                track_id = self.fresh_id();
+            }
             track.id = track_id;
+            track.rebuild_plugin_index();
             self.track_order.push(track_id);
             self.tracks.insert(track_id, track);
         }
 
         self.patterns.clear();
-        for pat in project.patterns {
-            self.patterns.insert(pat.id, pat);
+        for mut pat in project.patterns {
+            if pat.id == 0 {
+                pat.id = self.fresh_id();
+            }
+            if self.patterns.contains_key(&pat.id) {
+                log::warn!(
+                    "Duplicate pattern id {} in project file; renumbering",
+                    pat.id
+                );
+                pat.id = self.fresh_id();
+            }
+            let pid = pat.id;
+            self.patterns.insert(pid, pat);
         }
 
         self.groups.clear();
-        for group in project.groups {
-            self.groups.insert(group.id, group);
+        for mut group in project.groups {
+            if group.id == 0 {
+                group.id = self.fresh_id();
+            }
+            if self.groups.contains_key(&group.id) {
+                log::warn!(
+                    "Duplicate group id {} in project file; renumbering",
+                    group.id
+                );
+                group.id = self.fresh_id();
+            }
+            let gid = group.id;
+            self.groups.insert(gid, group);
         }
 
-        self.bpm = project.bpm;
+        self.bpm = if project.bpm.is_finite() && project.bpm > 0.0 {
+            project.bpm
+        } else {
+            log::warn!("Invalid bpm {} in project file; using 120", project.bpm);
+            120.0
+        };
         self.time_signature = project.time_signature;
-        self.sample_rate = project.sample_rate;
+        self.sample_rate = if project.sample_rate.is_finite() && project.sample_rate > 0.0 {
+            project.sample_rate
+        } else {
+            44100.0
+        };
         self.master_volume = project.master_volume;
         self.loop_start = project.loop_start;
         self.loop_end = project.loop_end;
         self.loop_enabled = project.loop_enabled;
         self.rebuild_clip_index();
+        self.rebuild_plugin_indices();
         crate::idgen::seed_from_max(self.max_id_in_project());
         self.ensure_ids();
     }
@@ -427,17 +556,21 @@ impl AppState {
             }
             for c in &t.midi_clips {
                 max_id = max_id.max(c.id);
-                if let Some(pid) = c.pattern_id {
-                    if let Some(p) = self.patterns.get(&pid) {
-                        for n in &p.notes {
-                            max_id = max_id.max(n.id);
-                        }
-                    }
-                }
+                max_id = max_id.max(c.pattern_id.unwrap_or(0));
             }
             for p in &t.plugin_chain {
                 max_id = max_id.max(p.id);
             }
+        }
+        for (pid, pat) in &self.patterns {
+            max_id = max_id.max(*pid);
+            max_id = max_id.max(pat.id);
+            for n in &pat.notes {
+                max_id = max_id.max(n.id);
+            }
+        }
+        for (gid, _) in &self.groups {
+            max_id = max_id.max(*gid);
         }
         max_id
     }

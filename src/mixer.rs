@@ -127,21 +127,25 @@ impl MixerEngine {
         for (bus_idx, bus) in self.buses.iter().enumerate() {
             let mut bus_sum = (0.0f32, 0.0f32);
 
-            // Sum input tracks
             for &track_id in &bus.input_tracks {
-                if track_id < track_outputs.len() {
-                    let (left, right) = track_outputs[track_id];
-                    let strip = &track_strips[track_id];
-
-                    if !strip.mute {
-                        let (gain_l, gain_r) = calculate_stereo_gains(strip.gain, strip.pan);
-                        bus_sum.0 += left * gain_l * strip.output_gain;
-                        bus_sum.1 += right * gain_r * strip.output_gain;
-                    }
+                let (Some(&(left, right)), Some(strip)) =
+                    (track_outputs.get(track_id), track_strips.get(track_id))
+                else {
+                    continue;
+                };
+                let any_solo = track_strips.iter().any(|s| s.solo);
+                if strip.mute || (any_solo && !strip.solo) {
+                    continue;
                 }
+                let (gain_l, gain_r) = calculate_stereo_gains(strip.gain, strip.pan);
+                let (left, right) = (
+                    if strip.phase_invert { -left } else { left },
+                    if strip.phase_invert { -right } else { right },
+                );
+                bus_sum.0 += left * gain_l * strip.input_gain * strip.output_gain;
+                bus_sum.1 += right * gain_r * strip.input_gain * strip.output_gain;
             }
 
-            // Apply bus strip processing
             if !bus.strip.mute {
                 let (gain_l, gain_r) = calculate_stereo_gains(bus.strip.gain, bus.strip.pan);
                 bus_buffers[bus_idx] = (
@@ -154,20 +158,28 @@ impl MixerEngine {
         // Sum everything to master
         let mut master_sum = (0.0f32, 0.0f32);
 
-        // Add tracks routed directly to master
         for (track_id, &(left, right)) in track_outputs.iter().enumerate() {
-            let strip = &track_strips[track_id];
+            let Some(strip) = track_strips.get(track_id) else {
+                continue;
+            };
 
-            // Check if track is routed to a bus
             let routed_to_bus = self
                 .buses
                 .iter()
                 .any(|bus| bus.input_tracks.contains(&track_id));
 
             if !routed_to_bus && !strip.mute {
+                let any_solo = track_strips.iter().any(|s| s.solo);
+                if any_solo && !strip.solo {
+                    continue;
+                }
                 let (gain_l, gain_r) = calculate_stereo_gains(strip.gain, strip.pan);
-                master_sum.0 += left * gain_l * strip.output_gain;
-                master_sum.1 += right * gain_r * strip.output_gain;
+                let (left, right) = (
+                    if strip.phase_invert { -left } else { left },
+                    if strip.phase_invert { -right } else { right },
+                );
+                master_sum.0 += left * gain_l * strip.input_gain * strip.output_gain;
+                master_sum.1 += right * gain_r * strip.input_gain * strip.output_gain;
             }
         }
 

@@ -77,6 +77,7 @@ impl PluginWorker {
                         let _ = self.ui_tx.send_sync(UIUpdate::PluginParamsDiscovered {
                             track_id,
                             plugin_idx,
+                            plugin_id,
                             has_editor,
                             params: params_for_ui,
                         });
@@ -135,8 +136,8 @@ impl PluginWorker {
                 }
             }
             PluginWorkerCommand::RebuildChain { track_id, chain } => {
-                for desc in chain {
-                    self.ensure_chain_entry(track_id, desc);
+                for (plugin_idx, desc) in chain.into_iter().enumerate() {
+                    self.ensure_chain_entry(track_id, plugin_idx, desc);
                 }
             }
         }
@@ -144,7 +145,12 @@ impl PluginWorker {
 
     /// Get-or-create a worker entry for a chain plugin (used after project
     /// load, where chain plugins may not have gone through `AddPlugin`).
-    fn ensure_chain_entry(&mut self, track_id: u64, desc: PluginDescriptorSnapshot) {
+    fn ensure_chain_entry(
+        &mut self,
+        track_id: u64,
+        plugin_idx: usize,
+        desc: PluginDescriptorSnapshot,
+    ) {
         let key = (track_id, desc.plugin_id);
         let params: Vec<(String, f32)> = desc
             .params
@@ -175,7 +181,8 @@ impl PluginWorker {
                 self.instances.insert(key, instance);
                 let _ = self.ui_tx.send_sync(UIUpdate::PluginParamsDiscovered {
                     track_id,
-                    plugin_idx: 0,
+                    plugin_idx,
+                    plugin_id: desc.plugin_id,
                     has_editor,
                     params: params_for_ui,
                 });

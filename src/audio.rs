@@ -97,6 +97,7 @@ struct EngineScratch {
     all_midi_events: Vec<RtMidiEvent>,
     bus_ids: Vec<u64>,
     track_order_ids: Vec<u64>,
+    monitor_block: Vec<f32>,
 }
 
 impl EngineScratch {
@@ -106,6 +107,7 @@ impl EngineScratch {
             all_midi_events: Vec::new(),
             bus_ids: Vec::new(),
             track_order_ids: Vec::new(),
+            monitor_block: Vec::new(),
         }
     }
 }
@@ -174,6 +176,7 @@ struct PluginProcessorUnified {
 
 #[derive(Clone)]
 struct ActiveMidiNote {
+    channel: u8,
     pitch: u8,
     velocity: u8,
     start_sample: f64,
@@ -193,6 +196,7 @@ struct RecordingState {
     recording_start_position: f64,
     accumulated_samples: Vec<f32>,
     monitor_queue: Vec<f32>,
+    input_sample_rate: f32,
 }
 
 fn choose_output_stream_config(
@@ -297,6 +301,9 @@ fn build_audio_callback(
 
                 if let Some(track_id) = engine.recording_state.recording_track {
                     if !engine.recording_state.accumulated_samples.is_empty() {
+                        let input_rate = engine.recording_state.input_sample_rate;
+                        let input_converter =
+                            TimeConverter::new(input_rate, engine.audio_state.bpm.load());
                         let converter = TimeConverter::new(
                             engine.sample_rate as f32,
                             engine.audio_state.bpm.load(),
@@ -304,7 +311,7 @@ fn build_audio_callback(
                         let start_beat = converter
                             .samples_to_beats(engine.recording_state.recording_start_position);
                         let num_samples = engine.recording_state.accumulated_samples.len();
-                        let length_beats = converter.samples_to_beats(num_samples as f64);
+                        let length_beats = input_converter.samples_to_beats(num_samples as f64);
 
                         let samples = Arc::new(std::mem::take(
                             &mut engine.recording_state.accumulated_samples,
@@ -313,7 +320,7 @@ fn build_audio_callback(
                         let _ = engine.updates.send_sync(UIUpdate::RecordingFinishedRaw {
                             track_id,
                             samples,
-                            sample_rate: engine.sample_rate as f32,
+                            sample_rate: input_rate,
                             start_beat,
                             length_beats,
                         });
@@ -457,7 +464,11 @@ pub fn run_audio_thread(
     // Create recording buffer
     let (recording_producer, recording_consumer) = RingBuffer::<f32>::new(RECORDING_BUFFER_SIZE);
 
-    // Initialize engine
+    let input_sample_rate: f32 = cpal::default_host()
+        .default_input_device()
+        .and_then(|d| d.default_input_config().ok())
+        .map(|c| c.sample_rate() as f32)
+        .unwrap_or(sample_rate as f32);
 
     let engine = AudioEngine {
         graph_snapshot: AudioGraphSnapshot::default(),
@@ -478,6 +489,7 @@ pub fn run_audio_thread(
             recording_start_position: 0.0,
             accumulated_samples: Vec::new(),
             monitor_queue: Vec::new(),
+            input_sample_rate,
         },
         preview_note: None,
         sample_rate,
@@ -643,6 +655,7 @@ pub fn run_audio_wasm(
             recording_start_position: 0.0,
             accumulated_samples: Vec::new(),
             monitor_queue: Vec::new(),
+            input_sample_rate: sample_rate as f32,
         },
         preview_note: None,
         sample_rate,
@@ -755,6 +768,7 @@ impl AudioEngine {
                 recording_start_position: 0.0,
                 accumulated_samples: Vec::new(),
                 monitor_queue: Vec::new(),
+                input_sample_rate: export_sample_rate,
             },
             preview_note: None,
             sample_rate: export_sample_rate as f64,
@@ -943,19 +957,22 @@ impl AudioEngine {
                 self.audio_state.loop_end.store(end);
             }
             RealtimeCommand::UpdatePluginParam(track_id, plugin_id, param_name, value) => {
+                if !value.is_finite() {
+                    return;
+                }
                 if let Some(proc) = self.track_processors.get_mut(&track_id) {
                     if let Some(plugin) = proc.plugins.get(&plugin_id) {
                         if let Some(handle) = plugin.rt_instance_id {
-                            // handle is (id, gen)
-                            let key = plugin
-                                .param_name_to_key
-                                .get(&param_name)
-                                .cloned()
-                                .unwrap_or_else(|| match plugin.backend {
-                                    BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
-                                    BackendKind::Clap => ParamKey::Clap(0),
-                                    BackendKind::Vst3 => ParamKey::Vst3(0),
-                                });
+                            let key =
+                                plugin
+                                    .param_name_to_key
+                                    .get(&param_name)
+                                    .cloned()
+                                    .or_else(|| match plugin.backend {
+                                        BackendKind::Lv2 => Some(ParamKey::Lv2(param_name.clone())),
+                                        _ => None,
+                                    });
+                            let Some(key) = key else { return };
 
                             if let Some(cell) = self.plugin_instances.get(&handle) {
                                 cell.lock().set_param(&key, value);
@@ -989,9 +1006,13 @@ impl AudioEngine {
 
                 match msg {
                     0x90 if data2 > 0 => {
-                        // Note on
-                        if !proc.active_notes.iter().any(|n| n.pitch == data1) {
+                        if !proc
+                            .active_notes
+                            .iter()
+                            .any(|n| n.channel == ch && n.pitch == data1)
+                        {
                             proc.active_notes.push(ActiveMidiNote {
+                                channel: ch,
                                 pitch: data1,
                                 velocity: data2,
                                 start_sample: self.free_running_samples,
@@ -1002,8 +1023,8 @@ impl AudioEngine {
                         }
                     }
                     0x80 | 0x90 => {
-                        // Note off (or note on with vel=0)
-                        proc.active_notes.retain(|n| n.pitch != data1);
+                        proc.active_notes
+                            .retain(|n| !(n.channel == ch && n.pitch == data1));
                         proc.plugin_active_notes
                             .retain(|&(c, k)| c != ch || k != data1);
                     }
@@ -1018,7 +1039,7 @@ impl AudioEngine {
     }
 
     fn realtime_prepare(&mut self) {
-        // 1) Plugin worker events (never block, try_recv only)
+        self.drain_plugin_switch_queue_bounded(4);
         while let Ok(ev) = self.engine_events_rx.try_recv() {
             match ev {
                 EngineEvent::Install {
@@ -1086,8 +1107,17 @@ impl AudioEngine {
     }
 
     /// Safe only when no real-time processing is happening (transport idle).
+    /// Bounded variant is safe to call while playing: it drops at most `budget`
+    /// handles per call, so removed plugins don't accumulate for a whole session.
     fn drain_plugin_switch_queue(&mut self) {
-        while let Some(handle) = self.plugin_switch_queue.pop_front() {
+        self.drain_plugin_switch_queue_bounded(usize::MAX);
+    }
+
+    fn drain_plugin_switch_queue_bounded(&mut self, budget: usize) {
+        for _ in 0..budget {
+            let Some(handle) = self.plugin_switch_queue.pop_front() else {
+                break;
+            };
             self.plugin_instances.remove(&handle);
         }
     }
@@ -1153,12 +1183,15 @@ impl AudioEngine {
                     if let Some(handle) = ppu.rt_instance_id {
                         self.plugin_switch_queue.push_back(handle);
                     }
-                    let _ = self
-                        .plugin_worker_tx
-                        .try_send(PluginWorkerCommand::RemovePlugin {
-                            track_id,
-                            plugin_id,
-                        });
+                    if let Err(e) =
+                        self.plugin_worker_tx
+                            .try_send(PluginWorkerCommand::RemovePlugin {
+                                track_id,
+                                plugin_id,
+                            })
+                    {
+                        log::warn!("Plugin worker queue full, RemovePlugin dropped: {}", e);
+                    }
                 }
             }
 
@@ -1208,12 +1241,15 @@ impl AudioEngine {
             proc.plugin_order = desired;
 
             if needs_rebuild {
-                let _ = self
+                if let Err(e) = self
                     .plugin_worker_tx
                     .try_send(PluginWorkerCommand::RebuildChain {
                         track_id,
                         chain: track.plugin_chain.clone(),
-                    });
+                    })
+                {
+                    log::warn!("Plugin worker queue full, RebuildChain dropped: {}", e);
+                }
             }
         }
     }
@@ -1252,9 +1288,20 @@ impl AudioEngine {
         let mut frames_processed = 0usize;
 
         while frames_processed < num_frames {
+            if loop_active && current_position >= loop_end_samp {
+                let loop_len = (loop_end_samp - loop_start_samp).max(1.0);
+                current_position =
+                    loop_start_samp + ((current_position - loop_start_samp) % loop_len);
+                for processor in self.track_processors.values_mut() {
+                    processor.active_notes.clear();
+                    processor.plugin_active_notes.clear();
+                    processor
+                        .pending_note_offs
+                        .retain(|&(_, _, abs)| abs < converter.samples_to_beats(loop_end_samp));
+                }
+            }
             let block_start_samples = current_position;
 
-            // How many frames remain before loop end?
             let frames_to_loop_end = if loop_active && block_start_samples < loop_end_samp {
                 let remain = loop_end_samp - block_start_samples;
                 if remain <= 0.0 {
@@ -1273,7 +1320,18 @@ impl AudioEngine {
             if loop_active && frames_to_process == 0 {
                 current_position = loop_start_samp;
                 for processor in self.track_processors.values_mut() {
+                    for &(ch, key) in &processor.plugin_active_notes {
+                        processor.pending_note_offs.push((
+                            ch,
+                            key,
+                            converter.samples_to_beats(current_position),
+                        ));
+                    }
+                    processor.plugin_active_notes.clear();
                     processor.active_notes.clear();
+                    processor
+                        .pending_note_offs
+                        .retain(|&(_, _, abs)| abs < converter.samples_to_beats(loop_end_samp));
                 }
                 continue;
             }
@@ -1307,9 +1365,21 @@ impl AudioEngine {
                 bus_accum_r.insert(*bid, vec![0.0; frames_to_process]);
             }
 
-            // First pass: process Audio/MIDI tracks (skip Bus); route sends into bus_accum
+            let mut monitor_block = std::mem::take(&mut self.scratch.monitor_block);
+            monitor_block.clear();
+            {
+                let take = self
+                    .recording_state
+                    .monitor_queue
+                    .len()
+                    .min(frames_to_process);
+                monitor_block.extend_from_slice(&self.recording_state.monitor_queue[..take]);
+                if take > 0 {
+                    self.recording_state.monitor_queue.drain(..take);
+                }
+            }
+
             for &track_id in &track_order_ids {
-                // Clone snapshot to avoid holding immutable borrow of self
                 let track_opt = self
                     .graph_snapshot
                     .tracks
@@ -1385,22 +1455,12 @@ impl AudioEngine {
                             }
                         }
 
-                        // Input monitoring to recording track
                         if track.monitor_enabled
                             || (is_recording_now && Some(track_id) == rec_track_id)
                         {
-                            let take = self
-                                .recording_state
-                                .monitor_queue
-                                .len()
-                                .min(frames_to_process);
-                            for i in 0..take {
-                                let s = self.recording_state.monitor_queue[i];
-                                processor.input_buffers[0][i] += s;
-                                processor.input_buffers[1][i] += s;
-                            }
-                            if take > 0 {
-                                self.recording_state.monitor_queue.drain(..take);
+                            for (i, s) in monitor_block.iter().enumerate() {
+                                processor.input_buffers[0][i] += *s;
+                                processor.input_buffers[1][i] += *s;
                             }
                         }
                     }
@@ -1561,7 +1621,6 @@ impl AudioEngine {
                     true,
                 );
 
-                // Mix bus to master (re-borrow briefly)
                 let (strip_volume, strip_pan) = {
                     let strip = self.channel_strips.get(&bus_id);
                     (
@@ -1569,13 +1628,35 @@ impl AudioEngine {
                         strip.map_or(bus_track.pan, |s| s.pan),
                     )
                 };
-                let (left_gain, right_gain) = calculate_stereo_gains(strip_volume, strip_pan);
 
                 if let Some(proc) = self.track_processors.get_mut(&bus_id) {
+                    let vol_automation = proc.automation_sample_buffers.get("volume").cloned();
+                    let pan_automation = proc.automation_sample_buffers.get("pan").cloned();
                     let mut tp_l = 0.0f32;
                     let mut tp_r = 0.0f32;
 
                     for i in 0..frames_to_process {
+                        let vol = vol_automation.as_ref().map_or_else(
+                            || {
+                                if proc.automated_volume.is_finite() {
+                                    proc.automated_volume
+                                } else {
+                                    strip_volume
+                                }
+                            },
+                            |buf| buf[i],
+                        );
+                        let pan = pan_automation.as_ref().map_or_else(
+                            || {
+                                if proc.automated_pan.is_finite() {
+                                    proc.automated_pan
+                                } else {
+                                    strip_pan
+                                }
+                            },
+                            |buf| buf[i] * 2.0 - 1.0,
+                        );
+                        let (left_gain, right_gain) = calculate_stereo_gains(vol, pan);
                         let l = proc.input_buffers[0][i] * left_gain;
                         let r = proc.input_buffers[1][i] * right_gain;
                         let out_idx = (frames_processed + i) * channels;
@@ -1587,6 +1668,7 @@ impl AudioEngine {
                         tp_r = tp_r.max(r.abs());
                     }
                     track_peaks.insert(bus_id, (tp_l, tp_r));
+                    proc.automation_sample_buffers.clear();
                 }
             }
 
@@ -1636,18 +1718,28 @@ impl AudioEngine {
             current_position += frames_to_process as f64;
             frames_processed += frames_to_process;
 
-            // Loop wrap
             if loop_active && current_position >= loop_end_samp {
                 current_position = loop_start_samp;
                 for processor in self.track_processors.values_mut() {
+                    for &(ch, key) in &processor.plugin_active_notes {
+                        processor.pending_note_offs.push((
+                            ch,
+                            key,
+                            converter.samples_to_beats(current_position),
+                        ));
+                    }
+                    processor.plugin_active_notes.clear();
                     processor.active_notes.clear();
+                    processor
+                        .pending_note_offs
+                        .retain(|&(_, _, abs)| abs < converter.samples_to_beats(loop_end_samp));
                 }
             }
 
             self.scratch.bus_ids = bus_ids;
+            self.scratch.monitor_block = monitor_block;
         }
 
-        // Send meters at ~60 FPS
         let now = now_secs();
         if now - self.last_ui_meter_update >= 0.016 {
             self.last_ui_meter_update = now;
@@ -1849,25 +1941,25 @@ impl AudioEngine {
                         Some(h) => h,
                         None => continue,
                     };
-                    // Collect updates for this plugin from automated_plugin_params
                     let mut up: smallvec::SmallVec<[(ParamKey, f32); 16]> =
                         smallvec::SmallVec::new();
                     for kv in proc.automated_plugin_params.iter() {
                         let ((pid, param_name), value) = (kv.key().clone(), *kv.value());
                         if pid == *plugin_id {
-                            let key = ppu
-                                .param_name_to_key
-                                .get(&param_name)
-                                .cloned()
-                                .unwrap_or_else(|| match ppu.backend {
-                                    BackendKind::Lv2 => ParamKey::Lv2(param_name.clone()),
-                                    BackendKind::Clap => ParamKey::Clap(0),
-                                    BackendKind::Vst3 => ParamKey::Vst3(0),
-                                });
-                            up.push((key, value));
+                            let key_opt = ppu.param_name_to_key.get(&param_name).cloned().or_else(
+                                || match ppu.backend {
+                                    BackendKind::Lv2 => Some(ParamKey::Lv2(param_name.clone())),
+                                    _ => None,
+                                },
+                            );
+                            if let Some(key) = key_opt {
+                                if value.is_finite() {
+                                    up.push((key, value));
+                                }
+                            }
                         }
                     }
-                    // Copy inputs locally so we can release the borrow before calling into the plugin
+
                     let mut l = vec![0.0f32; num_frames];
                     let mut r = vec![0.0f32; num_frames];
                     l.copy_from_slice(&proc.input_buffers[0][..num_frames]);
@@ -2098,7 +2190,6 @@ fn process_midi_track(
         }
     }
 
-    // Keep active_notes coherent at block start (preview / state); not used for scheduling.
     let eff0 = beat_at(block_start);
     let mut desired: HashSet<u8> = HashSet::new();
     for &(pitch, _, s_samp, e_samp) in &segs {
@@ -2110,12 +2201,19 @@ fn process_midi_track(
     }
     processor
         .active_notes
-        .retain(|n| desired.contains(&n.pitch));
+        .retain(|n| n.channel == 0 && desired.contains(&n.pitch));
     for &(pitch, vel, s_samp, e_samp) in &segs {
         let sb = converter.samples_to_beats(s_samp);
         let eb = converter.samples_to_beats(e_samp);
-        if sb <= eff0 && eff0 < eb && !processor.active_notes.iter().any(|n| n.pitch == pitch) {
+        if sb <= eff0
+            && eff0 < eb
+            && !processor
+                .active_notes
+                .iter()
+                .any(|n| n.channel == 0 && n.pitch == pitch)
+        {
             processor.active_notes.push(ActiveMidiNote {
+                channel: 0,
                 pitch,
                 velocity: vel,
                 start_sample: s_samp,
@@ -2206,10 +2304,10 @@ fn process_audio_track(
                 * (sample_rate / clip.sample_rate as f64)
         };
 
-        let frames = (overlap_end - overlap_start) as usize;
-        let start_in_buffer = (overlap_start - buffer_start) as usize;
+        let frames = ((overlap_end - overlap_start).round() as usize)
+            .min(num_frames.saturating_sub((overlap_start - buffer_start).round() as usize));
+        let start_in_buffer = (overlap_start - buffer_start).round() as usize;
 
-        // For each output frame, sample from clip at its own rate (linear)
         let ratio = if clip.warp_mode {
             let stretched_len_dst = audio_length_samples.max(1.0);
             clip.samples.len() as f64 / stretched_len_dst
@@ -2362,18 +2460,32 @@ fn build_block_midi_events(
                 let start_frame = conv.beats_to_samples(s_q - block_start_beat).round() as i64;
                 if (0..frames as i64).contains(&start_frame) {
                     events.push((0x90, pitch, vel, start_frame));
-                    if e_q > block_end_beat {
+                    if e_q >= block_end_beat
+                        && !pending_note_offs
+                            .iter()
+                            .any(|&(_, k, b)| k == pitch && (b - e_q).abs() < 1e-9)
+                    {
                         pending_note_offs.push((0 /*ch*/, pitch, e_q));
                     }
                 }
                 let end_frame = conv.beats_to_samples(e_q - block_start_beat).round() as i64;
                 if (0..frames as i64).contains(&end_frame) {
                     events.push((0x80, pitch, 0, end_frame));
+                } else if end_frame == frames as i64 {
+                    if !pending_note_offs
+                        .iter()
+                        .any(|&(_, k, b)| k == pitch && (b - e_q).abs() < 1e-9)
+                    {
+                        pending_note_offs.push((0, pitch, e_q));
+                    }
                 }
                 if transport_jump && s_q < block_start_beat && e_q_full > block_start_beat {
                     events.push((0x90, pitch, vel, 0));
-                    // beyond this block
-                    if e_q > block_end_beat {
+                    if e_q >= block_end_beat
+                        && !pending_note_offs
+                            .iter()
+                            .any(|&(_, k, b)| k == pitch && (b - e_q).abs() < 1e-9)
+                    {
                         pending_note_offs.push((0 /*ch*/, pitch, e_q));
                     }
                 }
@@ -2466,6 +2578,9 @@ fn apply_automation_smooth(
     let block_start_beat = converter.samples_to_beats(block_start_samples);
 
     for lane in &track.automation_lanes {
+        if lane.points.is_empty() {
+            continue;
+        }
         let has_point_in_block = lane.points.iter().any(|p| {
             let beat = p.beat;
             beat >= block_start_beat

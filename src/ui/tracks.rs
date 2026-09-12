@@ -1055,11 +1055,7 @@ impl TracksPanel {
             };
 
             if len >= 2 && from < len {
-                let mut new_to = to.min(len);
-                // When dragging downward, removing first shifts indices
-                if new_to > from {
-                    new_to = new_to.saturating_sub(1);
-                }
+                let new_to = to.min(len.saturating_sub(1));
                 if new_to != from && new_to < len {
                     use crate::track_manager::move_track;
                     {

@@ -73,6 +73,9 @@ impl Transport {
     }
 
     pub fn set_bpm(&self, bpm: f32) {
+        if !(bpm.is_finite() && bpm > 0.0) {
+            return;
+        }
         self.audio_state.bpm.store(bpm);
         let _ = self.command_tx.send(AudioCommand::SetBPM(bpm));
     }
@@ -101,6 +104,9 @@ impl Transport {
         let current = self.get_position();
         let sample_rate = self.audio_state.sample_rate.load();
         let bpm = self.get_bpm();
+        if !(bpm.is_finite() && bpm > 0.0) || !sample_rate.is_finite() || sample_rate <= 0.0 {
+            return;
+        }
         let samples_per_beat = (60.0 / bpm) * sample_rate;
         self.set_position(current + beats * samples_per_beat as f64);
     }
@@ -109,6 +115,9 @@ impl Transport {
         let current = self.get_position();
         let sample_rate = self.audio_state.sample_rate.load();
         let bpm = self.get_bpm();
+        if !(bpm.is_finite() && bpm > 0.0) || !sample_rate.is_finite() || sample_rate <= 0.0 {
+            return;
+        }
         let samples_per_beat = (60.0 / bpm) * sample_rate;
         self.set_position((current - beats * samples_per_beat as f64).max(0.0));
     }

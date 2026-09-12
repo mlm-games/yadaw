@@ -74,9 +74,18 @@ fn process_command(
             audio_state.playing.store(false, Ordering::Relaxed);
         }
         AudioCommand::SetPosition(position) => {
-            audio_state.set_position(position);
+            if position.is_finite() {
+                audio_state.set_position(position.max(0.0));
+            }
         }
         AudioCommand::SetBPM(bpm) => {
+            if !(bpm.is_finite() && bpm > 0.0) {
+                let _ = ui_tx.send_sync(UIUpdate::Warning(format!(
+                    "Ignoring invalid BPM: {}",
+                    bpm
+                )));
+                return;
+            }
             let mut state = app_state.lock_sync();
             let old_bpm = state.bpm;
 
@@ -214,11 +223,16 @@ fn process_command(
         }
         AudioCommand::SetSendDestination(track_id, index, dest_track_id) => {
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
+            let mut mutated = false;
             if let Some(t) = state.tracks.get_mut(&track_id) {
                 if index < t.sends.len() {
                     t.sends[index].destination_track = dest_track_id;
-                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                    mutated = true;
                 }
+            }
+            if mutated {
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
@@ -347,11 +361,17 @@ fn process_command(
         }
         AudioCommand::RemovePlugin(track_id, plugin_id) => {
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
+            let mut removed = false;
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 if let Some(idx) = track.plugin_chain.iter().position(|p| p.id == plugin_id) {
                     track.plugin_chain.remove(idx);
-                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                    track.rebuild_plugin_index();
+                    removed = true;
                 }
+            }
+            if removed {
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             drop(state);
 
@@ -372,6 +392,9 @@ fn process_command(
             ));
         }
         AudioCommand::SetPluginParam(track_id, plugin_id, param_name, value) => {
+            if !value.is_finite() {
+                return;
+            }
             let exists = {
                 let state = app_state.lock_sync();
                 state
@@ -407,6 +430,7 @@ fn process_command(
                 if from_idx < track.plugin_chain.len() && to_idx < track.plugin_chain.len() {
                     let plugin = track.plugin_chain.remove(from_idx);
                     track.plugin_chain.insert(to_idx, plugin);
+                    track.rebuild_plugin_index();
                 }
             }
             send_graph_snapshot(&state, snapshot_tx);
@@ -523,6 +547,16 @@ fn process_command(
             let _ = realtime_tx.send_sync(RealtimeCommand::SetLoopEnabled(enabled));
         }
         AudioCommand::SetLoopRegion(start, end) => {
+            if !(start.is_finite() && end.is_finite()) {
+                return;
+            }
+            let (start, end) = (start.max(0.0), end.max(0.0));
+            if start > end {
+                let _ = ui_tx.send_sync(UIUpdate::Warning(
+                    "Ignoring loop region with start > end".to_string(),
+                ));
+                return;
+            }
             audio_state.loop_start.store(start);
             audio_state.loop_end.store(end);
             {
@@ -559,16 +593,18 @@ fn process_command(
                 desc.id = plugin_id;
                 desc.name = display_name.clone();
 
+                let undo = state.snapshot();
                 let inserted = if let Some(track) = state.tracks.get_mut(&track_id) {
                     let insert_at = (plugin_idx).min(track.plugin_chain.len());
                     track.plugin_chain.insert(insert_at, desc);
+                    track.rebuild_plugin_index();
                     true
                 } else {
                     false
                 };
 
                 if inserted {
-                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
                     Some(plugin_id)
                 } else {
                     None
@@ -585,7 +621,14 @@ fn process_command(
             start_beat,
             length_beats,
         } => {
+            if !(start_beat.is_finite() && length_beats.is_finite())
+                || start_beat < 0.0
+                || length_beats < 1e-6
+            {
+                return;
+            }
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
             let new_clip_id = idgen::next();
             let new_pid = idgen::next();
             state.patterns.insert(
@@ -616,22 +659,30 @@ fn process_command(
                     },
                 );
 
-                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::DeleteMidiClip { clip_id } => {
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
+            let mut removed = false;
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     track.midi_clips.remove(idx);
-                    state.clips_by_id.remove(&clip_id);
-                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                    removed = true;
                 }
+            }
+            if removed {
+                state.clips_by_id.remove(&clip_id);
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::MoveMidiClip { clip_id, new_start } => {
+            if !new_start.is_finite() || new_start < 0.0 {
+                return;
+            }
             let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
@@ -647,12 +698,15 @@ fn process_command(
             new_start,
             new_length,
         } => {
+            if !(new_start.is_finite() && new_length.is_finite()) {
+                return;
+            }
             let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
                     if let Some(clip) = track.midi_clips.get_mut(idx) {
-                        clip.start_beat = new_start;
-                        clip.length_beats = (new_length).max(0.0);
+                        clip.start_beat = new_start.max(0.0);
+                        clip.length_beats = new_length.max(1e-6);
                     }
                 }
             }
@@ -735,6 +789,9 @@ fn process_command(
             }
         }
         AudioCommand::MoveAudioClip { clip_id, new_start } => {
+            if !new_start.is_finite() || new_start < 0.0 {
+                return;
+            }
             let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
@@ -750,16 +807,19 @@ fn process_command(
             new_start,
             new_length,
         } => {
+            if !(new_start.is_finite() && new_length.is_finite()) {
+                return;
+            }
             let mut state = app_state.lock_sync();
             if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(clip) = track.audio_clips.get_mut(idx) {
                         let old_start = clip.start_beat;
-                        let delta_beats = new_start - old_start;
+                        let delta_beats = new_start.max(0.0) - old_start;
 
                         clip.offset_beats = (clip.offset_beats + delta_beats).max(0.0);
-                        clip.start_beat = new_start;
-                        clip.length_beats = new_length.max(0.0);
+                        clip.start_beat = new_start.max(0.0);
+                        clip.length_beats = new_length.max(1e-6);
                     }
                 }
             }
@@ -817,7 +877,11 @@ fn process_command(
         }
         AudioCommand::AddAutomationPoint(track_id, target, beat, value) => {
             use crate::model::automation::{AutomationLane, AutomationMode, AutomationPoint};
+            if !(beat.is_finite() && value.is_finite()) {
+                return;
+            }
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 let lane_idx = if let Some(idx) = track
                     .automation_lanes
@@ -840,19 +904,38 @@ fn process_command(
                 if let Some(lane) = track.automation_lanes.get_mut(lane_idx) {
                     lane.points.push(AutomationPoint { beat, value });
                     lane.points
-                        .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
+                        .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
                 }
-                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::RemoveAutomationPoint(track_id, lane_idx, beat) => {
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
+            let mut removed = false;
             if let Some(track) = state.tracks.get_mut(&track_id)
                 && let Some(lane) = track.automation_lanes.get_mut(lane_idx)
             {
-                lane.points.retain(|p| (p.beat - beat).abs() > 0.001);
-                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                if let Some((best_idx, _)) = lane
+                    .points
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| {
+                        (a.beat - beat)
+                            .abs()
+                            .partial_cmp(&(b.beat - beat).abs())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                {
+                    if (lane.points[best_idx].beat - beat).abs() <= 0.001 {
+                        lane.points.remove(best_idx);
+                        removed = true;
+                    }
+                }
+                if removed {
+                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
+                }
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
@@ -863,15 +946,34 @@ fn process_command(
             new_beat,
             new_value,
         } => {
+            if !(new_beat.is_finite() && new_value.is_finite()) {
+                return;
+            }
             let mut state = app_state.lock_sync();
             if let Some(track) = state.tracks.get_mut(&track_id)
                 && let Some(lane) = track.automation_lanes.get_mut(lane_idx)
             {
-                lane.points.retain(|p| (p.beat - old_beat).abs() > 0.001);
+                if let Some((best_idx, _)) = lane
+                    .points
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| {
+                        (a.beat - old_beat)
+                            .abs()
+                            .partial_cmp(&(b.beat - old_beat).abs())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                {
+                    if (lane.points[best_idx].beat - old_beat).abs() <= 0.001 {
+                        lane.points.remove(best_idx);
+                    }
+                }
                 lane.points.push(AutomationPoint {
                     beat: new_beat,
                     value: new_value,
                 });
+                lane.points
+                    .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
@@ -888,14 +990,21 @@ fn process_command(
         }
         AudioCommand::SetTrackMonitor(track_id, enabled) => {
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
+            let mut mutated = false;
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.monitor_enabled = enabled;
-                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                mutated = true;
+            }
+            if mutated {
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::AddSend(track_id, dest_track_id, amount) => {
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
+            let mut mutated = false;
             if let Some(t) = state.tracks.get_mut(&track_id) {
                 t.sends.push(crate::model::track::Send {
                     destination_track: dest_track_id,
@@ -903,17 +1012,25 @@ fn process_command(
                     pre_fader: false,
                     muted: false,
                 });
-                let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                mutated = true;
+            }
+            if mutated {
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::RemoveSend(track_id, index) => {
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
+            let mut removed = false;
             if let Some(t) = state.tracks.get_mut(&track_id) {
                 if index < t.sends.len() {
                     t.sends.remove(index);
-                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
+                    removed = true;
                 }
+            }
+            if removed {
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
@@ -940,7 +1057,11 @@ fn process_command(
             dest_track_id,
             new_start,
         } => {
+            if !new_start.is_finite() || new_start < 0.0 {
+                return;
+            }
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
 
             if let Some((src_track, loc)) = state.find_clip(clip_id) {
                 if let ClipLocation::Midi(idx) = loc {
@@ -991,9 +1112,8 @@ fn process_command(
                                 is_midi: true,
                             },
                         );
+                        let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
                     }
-
-                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             state.ensure_ids();
@@ -1004,7 +1124,11 @@ fn process_command(
             dest_track_id,
             new_start,
         } => {
+            if !new_start.is_finite() || new_start < 0.0 {
+                return;
+            }
             let mut state = app_state.lock_sync();
+            let undo = state.snapshot();
 
             if let Some((src_track, loc)) = state.find_clip(clip_id) {
                 if let ClipLocation::Audio(idx) = loc {
@@ -1023,9 +1147,8 @@ fn process_command(
                                 is_midi: false,
                             },
                         );
+                        let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
                     }
-
-                    let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
                 }
             }
             send_graph_snapshot(&state, snapshot_tx);
@@ -1178,12 +1301,29 @@ fn process_command(
         }
         AudioCommand::MakeClipUnique { clip_id } => {
             let mut state = app_state.lock_sync();
-            if let Some((track, loc)) = state.find_clip_mut(clip_id) {
-                if let ClipLocation::Midi(idx) = loc {
-                    if let Some(clip) = track.midi_clips.get_mut(idx) {
-                        clip.pattern_id = None;
+            let undo = state.snapshot();
+            let mut did_change = false;
+            let resolved = state
+                .find_clip(clip_id)
+                .and_then(|(track, loc)| match loc {
+                    ClipLocation::Midi(idx) => track.midi_clips.get(idx).cloned(),
+                    _ => None,
+                })
+                .map(|clip| state.resolve_midi_clip_notes(&clip));
+            if let Some(notes) = resolved {
+                if let Some((track, loc)) = state.find_clip_mut(clip_id) {
+                    if let ClipLocation::Midi(idx) = loc {
+                        if let Some(clip) = track.midi_clips.get_mut(idx) {
+                            clip.notes = notes;
+                            clip.pattern_id = None;
+                            did_change = true;
+                        }
                     }
                 }
+            }
+            if did_change {
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
+                state.ensure_ids();
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
@@ -1333,9 +1473,7 @@ fn process_command(
             let mut new_ids = Vec::with_capacity(notes.len());
 
             for n in &mut notes {
-                if n.id == 0 {
-                    n.id = idgen::next();
-                }
+                n.id = idgen::next();
                 new_ids.push(n.id);
 
                 if !n.duration.is_finite() || n.duration <= 0.0 {
@@ -1349,7 +1487,7 @@ fn process_command(
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.extend(notes);
                 pat.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
             });
 
             if !new_ids.is_empty() {
@@ -1466,20 +1604,20 @@ fn process_command(
         }
         AudioCommand::AddNotesToClip { clip_id, mut notes } => {
             for n in &mut notes {
-                if n.id == 0 {
-                    n.id = idgen::next();
-                }
+                n.id = idgen::next();
                 if !n.duration.is_finite() || n.duration <= 0.0 {
                     n.duration = 1e-6;
                 }
                 if !n.start.is_finite() || n.start < 0.0 {
                     n.start = 0.0;
                 }
+                n.pitch = n.pitch.clamp(0, 127);
+                n.velocity = n.velocity.clamp(1, 127);
             }
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.extend(notes);
                 pat.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
             });
             let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
@@ -1495,14 +1633,18 @@ fn process_command(
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 for up in notes {
                     if let Some(n) = pat.notes.iter_mut().find(|n| n.id == up.id) {
-                        n.start = up.start.max(0.0);
-                        n.duration = up.duration.max(1e-6);
+                        n.start = if up.start.is_finite() { up.start.max(0.0) } else { n.start };
+                        n.duration = if up.duration.is_finite() {
+                            up.duration.max(1e-6)
+                        } else {
+                            n.duration
+                        };
                         n.pitch = up.pitch.clamp(0, 127);
                         n.velocity = up.velocity.clamp(1, 127);
                     }
                 }
                 pat.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
             });
             let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
@@ -1570,7 +1712,7 @@ fn process_command(
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.extend(clones);
                 pat.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
             });
 
             if !new_ids.is_empty() {
@@ -2025,29 +2167,37 @@ fn process_command(
                 let clip_start = original_clip.start_beat;
                 let clip_end = original_clip.start_beat + original_clip.length_beats;
 
-                // Ensure punch-out is fully within the clip
-                if start_beat > clip_start && end_beat < clip_end {
-                    // 1. Create the right-hand part as a new clip
+                if start_beat > clip_start && end_beat < clip_end && end_beat > start_beat {
+                    let bpm = st.bpm;
+                    let to_samples = |beats: f64| {
+                        ((beats * 60.0 / bpm as f64) * original_clip.sample_rate as f64)
+                            .round()
+                            .clamp(0.0, original_clip.samples.len() as f64)
+                            as usize
+                    };
+                    let left_len_beats = start_beat - clip_start;
+                    let right_start_beats = end_beat - clip_start;
+                    let s0 = to_samples(left_len_beats);
+                    let s1 = to_samples(right_start_beats);
+
+                    let mut left_part = original_clip.clone();
+                    left_part.length_beats = left_len_beats;
+                    left_part.samples =
+                        std::sync::Arc::new(original_clip.samples[..s0.min(original_clip.samples.len())].to_vec());
+
                     let mut right_part = original_clip.clone();
                     right_part.id = idgen::next();
                     right_part.start_beat = end_beat;
-                    let right_len = clip_end - end_beat;
-                    right_part.length_beats = right_len;
-                    // Adjust audio sample offset for the new right-hand clip
-                    let converter = crate::time_utils::TimeConverter::new(st.sample_rate, st.bpm);
-                    let right_offset_beats = converter
-                        .samples_to_beats(converter.beats_to_samples(
-                            original_clip.offset_beats + (end_beat - clip_start),
-                        ));
-                    right_part.offset_beats = right_offset_beats;
+                    right_part.length_beats = clip_end - end_beat;
+                    right_part.offset_beats =
+                        original_clip.offset_beats + right_start_beats;
+                    right_part.samples = std::sync::Arc::new(
+                        original_clip.samples[s1.min(original_clip.samples.len())..].to_vec(),
+                    );
 
-                    // 2. Modify the original clip to become the left-hand part
                     if let Some((track, ClipLocation::Audio(idx))) = st.find_clip_mut(clip_id) {
-                        if let Some(left_part) = track.audio_clips.get_mut(idx) {
-                            left_part.length_beats = start_beat - clip_start;
-                        }
-                        // 3. Insert the new right-hand part
-                        track.audio_clips.push(right_part.clone());
+                        track.audio_clips[idx] = left_part;
+                        track.audio_clips.insert(idx + 1, right_part.clone());
                         st.clips_by_id.insert(
                             right_part.id,
                             ClipRef {
@@ -2061,10 +2211,15 @@ fn process_command(
             send_graph_snapshot(&st, snapshot_tx);
         }
         AudioCommand::OpenPluginEditor(track_id, plugin_id) => {
-            let _ = plugin_worker_tx.send(PluginWorkerCommand::OpenEditor {
+            if let Err(e) = plugin_worker_tx.try_send(PluginWorkerCommand::OpenEditor {
                 track_id,
                 plugin_id,
-            });
+            }) {
+                log::warn!("Plugin worker queue full, OpenEditor dropped: {}", e);
+                let _ = ui_tx.send_sync(UIUpdate::Warning(
+                    "Plugin worker busy; editor open request dropped".to_string(),
+                ));
+            }
         }
         AudioCommand::PunchOutMidiClip {
             clip_id,
@@ -2084,24 +2239,71 @@ fn process_command(
                 let clip_start = original_clip.start_beat;
                 let clip_end = original_clip.start_beat + original_clip.length_beats;
 
-                if start_beat > clip_start && end_beat < clip_end {
-                    // For MIDI, we can simply create two new clips that reference the same pattern.
-                    // The audio engine's MIDI processing logic will correctly play only the notes
-                    // within each clip's time window.
+                if start_beat > clip_start && end_beat < clip_end && end_beat > start_beat {
+                    let base_notes: Vec<MidiNote> = if let Some(pid) = original_clip.pattern_id {
+                        st.patterns
+                            .get(&pid)
+                            .map(|p| p.notes.clone())
+                            .unwrap_or_else(|| original_clip.notes.clone())
+                    } else {
+                        original_clip.notes.clone()
+                    };
+                    let left_rel = start_beat - clip_start;
+                    let right_rel = end_beat - clip_start;
+                    let mut left_notes = Vec::new();
+                    let mut right_notes = Vec::new();
+                    for n in base_notes {
+                        let s = n.start;
+                        let e = n.start + n.duration;
+                        if e <= left_rel {
+                            left_notes.push(n);
+                        } else if s >= right_rel {
+                            let mut nn = n;
+                            nn.id = idgen::next();
+                            nn.start = (s - right_rel).max(0.0);
+                            right_notes.push(nn);
+                        } else if s < left_rel && e > right_rel {
+                            let mut l = n;
+                            l.duration = (left_rel - s).max(1e-6);
+                            left_notes.push(l);
+                            let mut r = n;
+                            r.id = idgen::next();
+                            r.start = 0.0;
+                            r.duration = (e - right_rel).max(1e-6);
+                            right_notes.push(r);
+                        }
+                    }
+                    let left_pid = idgen::next();
+                    let right_pid = idgen::next();
+                    st.patterns.insert(
+                        left_pid,
+                        MidiPattern {
+                            id: left_pid,
+                            notes: left_notes,
+                        },
+                    );
+                    st.patterns.insert(
+                        right_pid,
+                        MidiPattern {
+                            id: right_pid,
+                            notes: right_notes,
+                        },
+                    );
 
-                    // 1. Create the right-hand part
                     let mut right_part = original_clip.clone();
                     right_part.id = idgen::next();
                     right_part.start_beat = end_beat;
                     right_part.length_beats = clip_end - end_beat;
+                    right_part.pattern_id = Some(right_pid);
+                    right_part.notes.clear();
 
-                    // 2. Modify the original to become the left-hand part
                     if let Some((track, ClipLocation::Midi(idx))) = st.find_clip_mut(clip_id) {
                         if let Some(left_part) = track.midi_clips.get_mut(idx) {
                             left_part.length_beats = start_beat - clip_start;
+                            left_part.pattern_id = Some(left_pid);
+                            left_part.notes.clear();
                         }
-                        // 3. Insert the new right-hand part
-                        track.midi_clips.push(right_part.clone());
+                        track.midi_clips.insert(idx + 1, right_part.clone());
                         st.clips_by_id.insert(
                             right_part.id,
                             ClipRef {
@@ -2166,31 +2368,85 @@ fn insert_recording_clip_if_missing(
             ..Default::default()
         });
         t.midi_clips
-            .sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap());
+            .sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
     }
     st.ensure_ids();
 }
 
 // Borrow-safe helper: resolve a clip's pattern and length, then mutate in place.
+// Creates a pattern on demand so edits on pattern-less clips are not silently dropped.
 fn with_pattern_mut<T>(
     app_state: &Arc<Mutex<AppState>>,
     clip_id: u64,
     f: impl FnOnce(&mut MidiPattern, f64) -> T,
 ) -> Option<T> {
-    // Stage 1: resolve pid and clip length immutably
-    let (pid_opt, clip_len) = {
-        let st = app_state.lock_sync();
-        match st.find_clip(clip_id) {
-            Some((track, ClipLocation::Midi(idx))) => {
-                let c = &track.midi_clips[idx];
-                (c.pattern_id, c.length_beats)
+    let (pid, clip_len) = {
+        let mut st = app_state.lock_sync();
+        let (track_id, idx) = match st.find_clip(clip_id) {
+            Some((track, ClipLocation::Midi(idx))) => (track.id, idx),
+            _ => return None,
+        };
+        let clip_len = st.tracks.get(&track_id)?.midi_clips.get(idx)?.length_beats;
+        let existing = st.tracks.get(&track_id)?.midi_clips.get(idx)?.pattern_id;
+        if let Some(pid) = existing {
+            if st.patterns.contains_key(&pid) {
+                (pid, clip_len)
+            } else {
+                let new_pid = idgen::next();
+                let moved_notes = std::mem::take(
+                    &mut st
+                        .tracks
+                        .get_mut(&track_id)?
+                        .midi_clips
+                        .get_mut(idx)?
+                        .notes,
+                );
+                st.patterns.insert(
+                    new_pid,
+                    MidiPattern {
+                        id: new_pid,
+                        notes: moved_notes,
+                    },
+                );
+                if let Some(clip) = st
+                    .tracks
+                    .get_mut(&track_id)?
+                    .midi_clips
+                    .get_mut(idx)
+                {
+                    clip.pattern_id = Some(new_pid);
+                }
+                (new_pid, clip_len)
             }
-            _ => (None, 0.0),
+        } else {
+            let new_pid = idgen::next();
+            let moved_notes = std::mem::take(
+                &mut st
+                    .tracks
+                    .get_mut(&track_id)?
+                    .midi_clips
+                    .get_mut(idx)?
+                    .notes,
+            );
+            st.patterns.insert(
+                new_pid,
+                MidiPattern {
+                    id: new_pid,
+                    notes: moved_notes,
+                },
+            );
+            if let Some(clip) = st
+                .tracks
+                .get_mut(&track_id)?
+                .midi_clips
+                .get_mut(idx)
+            {
+                clip.pattern_id = Some(new_pid);
+            }
+            (new_pid, clip_len)
         }
     };
-    let pid = pid_opt?;
 
-    // Stage 2: short &mut borrow for pattern only
     let mut st = app_state.lock_sync();
     let pat = st.patterns.get_mut(&pid)?;
     Some(f(pat, clip_len))

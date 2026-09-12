@@ -125,8 +125,8 @@ pub(crate) mod x11 {
 
     pub fn cleanup_x11_window(xlib: &xlib::Xlib, display: *mut xlib::Display, win: xlib::Window) {
         unsafe {
+            (xlib.XDestroyWindow)(display, win);
             (xlib.XCloseDisplay)(display);
-            let _ = win;
         }
     }
 

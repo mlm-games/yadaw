@@ -79,7 +79,10 @@ pub fn pick_directory(title: &str) -> Picker<PlatformFile> {
             .await
             .map_err(|e| e.to_string())?;
         Ok(result.map(|dir| {
-            PlatformFile::from_path(dir.name().unwrap_or_default(), dir.path().map(|p| p.to_path_buf()).unwrap_or_default())
+            PlatformFile::from_path(
+                dir.name().unwrap_or_default(),
+                dir.path().map(|p| p.to_path_buf()).unwrap_or_default(),
+            )
         }))
     })
 }
@@ -87,6 +90,9 @@ pub fn pick_directory(title: &str) -> Picker<PlatformFile> {
 pub fn write_file_to_uri(source_path: &std::path::Path, uri: &str) -> Result<(), String> {
     let fd = rlobkit_dialogs::take_writable_fd_for_uri(uri)
         .ok_or_else(|| "Failed to get writable file descriptor".to_string())?;
+    if fd < 0 {
+        return Err("Invalid file descriptor from SAF".to_string());
+    }
 
     use std::os::fd::IntoRawFd;
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
@@ -95,5 +101,7 @@ pub fn write_file_to_uri(source_path: &std::path::Path, uri: &str) -> Result<(),
         &mut file,
     )
     .map_err(|e| e.to_string())?;
+    let _ = file.sync_all();
+    drop(file);
     Ok(())
 }

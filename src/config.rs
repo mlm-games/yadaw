@@ -14,26 +14,39 @@ pub struct TransportConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub audio: AudioConfig,
+    #[serde(default)]
     pub ui: UIConfig,
+    #[serde(default)]
     pub paths: PathConfig,
+    #[serde(default)]
     pub behavior: BehaviorConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
+    #[serde(default = "default_buffer_size")]
     pub buffer_size: usize,
+    #[serde(default = "default_sample_rate")]
     pub sample_rate: f32,
+    #[serde(default = "default_true")]
     pub auto_detect_audio_device: bool,
+    #[serde(default)]
     pub preferred_output_device: Option<String>,
+    #[serde(default)]
     pub preferred_input_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UIConfig {
+    #[serde(default)]
     pub theme: Theme,
+    #[serde(default = "default_true")]
     pub show_tooltips: bool,
+    #[serde(default = "default_true")]
     pub auto_scroll_on_playback: bool,
+    #[serde(default = "default_true")]
     pub smooth_scrolling: bool,
 }
 
@@ -45,19 +58,93 @@ pub enum Theme {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathConfig {
+    #[serde(default)]
     pub last_project_dir: Option<PathBuf>,
+    #[serde(default)]
     pub plugin_scan_paths: Vec<PathBuf>,
+    #[serde(default)]
     pub default_project_dir: Option<PathBuf>,
+    #[serde(default)]
     pub audio_import_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorConfig {
+    #[serde(default)]
     pub auto_save: bool,
+    #[serde(default = "default_autosave_interval")]
     pub auto_save_interval_minutes: u32,
+    #[serde(default = "default_true")]
     pub create_backup_on_save: bool,
+    #[serde(default)]
     pub stop_on_track_selection: bool,
+    #[serde(default = "default_true")]
     pub follow_playhead: bool,
+}
+
+fn default_buffer_size() -> usize {
+    512
+}
+fn default_sample_rate() -> f32 {
+    44100.0
+}
+fn default_true() -> bool {
+    true
+}
+fn default_autosave_interval() -> u32 {
+    5
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme::Dark
+    }
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            buffer_size: default_buffer_size(),
+            sample_rate: default_sample_rate(),
+            auto_detect_audio_device: true,
+            preferred_output_device: None,
+            preferred_input_device: None,
+        }
+    }
+}
+
+impl Default for UIConfig {
+    fn default() -> Self {
+        Self {
+            theme: Theme::Dark,
+            show_tooltips: true,
+            auto_scroll_on_playback: true,
+            smooth_scrolling: true,
+        }
+    }
+}
+
+impl Default for PathConfig {
+    fn default() -> Self {
+        Self {
+            last_project_dir: None,
+            plugin_scan_paths: Config::default_plugin_paths(),
+            default_project_dir: None,
+            audio_import_dir: None,
+        }
+    }
+}
+
+impl Default for BehaviorConfig {
+    fn default() -> Self {
+        Self {
+            auto_save: false,
+            auto_save_interval_minutes: default_autosave_interval(),
+            create_backup_on_save: true,
+            stop_on_track_selection: false,
+            follow_playhead: true,
+        }
+    }
 }
 
 impl Default for Config {
@@ -99,9 +186,29 @@ impl Config {
             crate::paths::opfs::FILE_CONFIG,
             &Self::config_path().unwrap_or_default(),
         ) {
-            return Ok(serde_json::from_str(&data)?);
+            let mut cfg: Self = serde_json::from_str(&data).unwrap_or_default();
+            cfg.validate();
+            return Ok(cfg);
         }
         Ok(Self::default())
+    }
+
+    /// Clamp invalid values from corrupt/hand-edited configs so they can't
+    /// poison TimeConverter, stream setup, or autosave timers.
+    pub fn validate(&mut self) {
+        if !self.audio.buffer_size.is_power_of_two()
+            || !(64..=8192).contains(&self.audio.buffer_size)
+        {
+            self.audio.buffer_size = 512;
+        }
+        if !self.audio.sample_rate.is_finite() || self.audio.sample_rate <= 0.0 {
+            self.audio.sample_rate = 44100.0;
+        }
+        if self.behavior.auto_save_interval_minutes == 0
+            || self.behavior.auto_save_interval_minutes > 120
+        {
+            self.behavior.auto_save_interval_minutes = 5;
+        }
     }
 
     pub fn save(&self) -> Result<()> {

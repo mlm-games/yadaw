@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use chrono::Local;
 use std::path::{Path, PathBuf};
 use web_time::{Duration, Instant, SystemTime};
@@ -58,17 +58,17 @@ impl ProjectManager {
     }
 
     pub fn save_project(&mut self, state: &AppState, path: &Path) -> Result<()> {
-        // Handle Backup if file exists
+        state.validate_before_save()?;
         if path.exists() {
             self.create_backup(path)?;
         }
 
-        // Save actual project
         let project = Project::from(state);
         let json = serde_json::to_string_pretty(&project)?;
-        fs::write(path, json)?;
+        let tmp = path.with_extension(format!("{}.tmp", PROJECT_EXTENSION));
+        fs::write(&tmp, json)?;
+        fs::rename(&tmp, path)?;
 
-        // Update state
         self.current_project = Some(ProjectInfo {
             path: path.to_path_buf(),
             name: path
@@ -96,13 +96,19 @@ impl ProjectManager {
                 fs::create_dir_all(&backup_dir)?;
             }
 
-            let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+            let timestamp = Local::now().format("%Y%m%d_%H%M%S_%f");
             let stem = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("project");
 
-            let backup_filename = format!("{}_{}.{}", stem, timestamp, PROJECT_EXTENSION);
+            let backup_filename = format!(
+                "{}_{}_{}.{}",
+                stem,
+                timestamp,
+                std::process::id(),
+                PROJECT_EXTENSION
+            );
             let backup_path = backup_dir.join(backup_filename);
 
             fs::copy(path, &backup_path)?;
@@ -114,14 +120,14 @@ impl ProjectManager {
 
     fn rotate_backups(&self, backup_dir: &Path, stem: &str) -> Result<()> {
         let mut backups = Vec::new();
+        let ext_suffix = format!(".{}", PROJECT_EXTENSION);
 
-        // Collect existing backups for this project
         if let Ok(entries) = fs::read_dir(backup_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() {
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with(stem) && name.ends_with(PROJECT_EXTENSION) {
+                        if name.starts_with(&format!("{}_", stem)) && name.ends_with(&ext_suffix) {
                             backups.push(path);
                         }
                     }
@@ -231,12 +237,23 @@ impl ProjectManager {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn export_project(&self, state: &AppState, path: &Path, include_audio: bool) -> Result<()> {
+        state.validate_before_save()?;
         if include_audio {
-            // Create a directory for the project bundle
+            if path.parent().is_none() {
+                bail!("Refusing to export bundle to root-level path");
+            }
+            if path.exists() && path.is_file() {
+                bail!(
+                    "Refusing to replace existing file with bundle dir: {}",
+                    path.display()
+                );
+            }
             let bundle_dir = path.with_extension("");
+            if bundle_dir.as_os_str().is_empty() {
+                bail!("Invalid export path");
+            }
             fs::create_dir_all(&bundle_dir)?;
 
-            // Save project file
             let project_file = bundle_dir.join(format!(
                 "{}.{}",
                 path.file_stem()
@@ -264,6 +281,7 @@ impl ProjectManager {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn create_backup_path(&self, original: &Path) -> PathBuf {
         let timestamp = Local::now().format("%Y%m%d_%H%M%S");
         let stem = original

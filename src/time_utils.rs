@@ -6,6 +6,16 @@ pub struct TimeConverter {
 
 impl TimeConverter {
     pub fn new(sample_rate: f32, bpm: f32) -> Self {
+        let sample_rate = if sample_rate.is_finite() && sample_rate > 0.0 {
+            sample_rate
+        } else {
+            44100.0
+        };
+        let bpm = if bpm.is_finite() && bpm > 0.0 {
+            bpm
+        } else {
+            120.0
+        };
         Self { sample_rate, bpm }
     }
 

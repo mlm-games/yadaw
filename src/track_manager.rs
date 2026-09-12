@@ -229,6 +229,10 @@ impl TrackManager {
         builder.build()
     }
 
+    /// Duplicate a track. Callers MUST materialize pattern-backed clips first
+    /// (see `AppState::materialize_midi_clip`) — otherwise pattern notes are
+    /// unrecoverable from `src` alone. This function preserves any notes already
+    /// present in `clip.notes` and resets all IDs so `ensure_ids` mints fresh ones.
     pub fn duplicate_track(&self, src: &crate::model::track::Track) -> crate::model::track::Track {
         let mut t = src.clone();
 
@@ -372,11 +376,7 @@ pub fn delete_track(
 pub fn move_track(track_order: &mut Vec<u64>, from_idx: usize, to_idx: usize) {
     if from_idx < track_order.len() && to_idx < track_order.len() && from_idx != to_idx {
         let track_id = track_order.remove(from_idx);
-        let insert_pos = if from_idx < to_idx {
-            to_idx - 1
-        } else {
-            to_idx
-        };
+        let insert_pos = to_idx.min(track_order.len());
         track_order.insert(insert_pos, track_id);
     }
 }

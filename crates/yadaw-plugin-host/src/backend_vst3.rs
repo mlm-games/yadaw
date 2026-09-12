@@ -241,20 +241,10 @@ mod vst3_impl {
                 .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?;
 
             let frames = ctx.frames;
-            let block_size = plugin.block_size();
-            let actual_frames = frames.min(block_size).max(1);
-
-            let in_ch = audio_in.len();
-            let out_ch = audio_out.len();
-            let mut buffers =
-                vst3_host::AudioBuffers::new(in_ch, out_ch, actual_frames, self.sample_rate);
-
-            for (ch, input) in audio_in.iter().enumerate() {
-                if let Some(buf) = buffers.inputs.get_mut(ch) {
-                    let len = actual_frames.min(input.len());
-                    buf[..len].copy_from_slice(&input[..len]);
-                }
+            if frames == 0 {
+                return Ok(());
             }
+            let block_size = plugin.block_size().max(1);
 
             for e in events {
                 if let Some(midi) = convert_midi_event(e) {
@@ -262,20 +252,47 @@ mod vst3_impl {
                 }
             }
 
-            plugin
-                .process_audio(&mut buffers)
-                .map_err(|e| anyhow!("VST3 process_audio failed: {e}"))?;
+            let mut offset = 0;
+            while offset < frames {
+                let actual_frames = (frames - offset).min(block_size);
 
-            for (ch, output) in audio_out.iter_mut().enumerate() {
-                if let Some(buf) = buffers.outputs.get(ch) {
-                    let len = actual_frames.min(output.len()).min(buf.len());
-                    output[..len].copy_from_slice(&buf[..len]);
-                    if len < actual_frames {
-                        output[len..actual_frames].fill(0.0);
+                let in_ch = audio_in.len();
+                let out_ch = audio_out.len();
+                let mut buffers =
+                    vst3_host::AudioBuffers::new(in_ch, out_ch, actual_frames, self.sample_rate);
+
+                for (ch, input) in audio_in.iter().enumerate() {
+                    if let Some(buf) = buffers.inputs.get_mut(ch) {
+                        let avail = input.len().saturating_sub(offset);
+                        let len = actual_frames.min(avail).min(buf.len());
+                        if len > 0 {
+                            buf[..len].copy_from_slice(&input[offset..offset + len]);
+                        }
                     }
-                } else {
-                    output[..actual_frames].fill(0.0);
                 }
+
+                plugin
+                    .process_audio(&mut buffers)
+                    .map_err(|e| anyhow!("VST3 process_audio failed: {e}"))?;
+
+                for (ch, output) in audio_out.iter_mut().enumerate() {
+                    if offset >= output.len() {
+                        continue;
+                    }
+                    if let Some(buf) = buffers.outputs.get(ch) {
+                        let avail = output.len() - offset;
+                        let len = actual_frames.min(avail).min(buf.len());
+                        output[offset..offset + len].copy_from_slice(&buf[..len]);
+                        if len < actual_frames.min(avail) {
+                            output[offset + len..offset + actual_frames.min(avail)].fill(0.0);
+                        }
+                    } else {
+                        let avail = (output.len() - offset).min(actual_frames);
+                        output[offset..offset + avail].fill(0.0);
+                    }
+                }
+
+                offset += actual_frames;
             }
 
             for (id, value) in plugin.get_parameter_changes() {

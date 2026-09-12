@@ -370,6 +370,7 @@ pub enum UIUpdate {
     PluginParamsDiscovered {
         track_id: u64,
         plugin_idx: usize,
+        plugin_id: u64,
         has_editor: bool,
         params: Vec<PluginParamInfo>,
     },

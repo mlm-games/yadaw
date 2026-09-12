@@ -81,14 +81,15 @@ impl MeterData {
         let sum_squares: f32 = samples.iter().map(|s| s * s).sum();
         self.rms = (sum_squares / samples.len().max(1) as f32).sqrt();
 
-        // Update peak hold
         if self.peak > self.peak_hold {
             self.peak_hold = self.peak;
             self.peak_hold_time = 2.0; // Hold for 2 seconds
         } else {
             self.peak_hold_time -= dt;
             if self.peak_hold_time <= 0.0 {
-                self.peak_hold = self.peak;
+                self.peak_hold *= (-2.0 * dt.max(0.0)).exp();
+                self.peak_hold = self.peak_hold.max(self.peak);
+                self.peak_hold_time = 0.05;
             }
         }
     }

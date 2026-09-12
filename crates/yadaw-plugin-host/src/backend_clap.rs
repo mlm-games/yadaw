@@ -651,17 +651,21 @@ mod clap_impl {
             events: &[MidiEvent],
         ) -> Result<()> {
             let frames = ctx.frames;
+            if frames == 0 {
+                return Ok(());
+            }
 
             self.note_ons.clear();
             self.note_offs.clear();
 
             for e in events {
-                let time = (e.time_frames.clamp(0, frames as i64) as u32).min(frames as u32 - 1);
+                let time = (e.time_frames.clamp(0, frames as i64) as u32)
+                    .min(frames.saturating_sub(1) as u32);
                 let port = 0u16;
                 let channel = (e.status & 0x0F) as u16;
-                let key = e.data1 as u16;
+                let key = e.data1.min(127) as u16;
                 let note_id = key as u32;
-                let velocity = (e.data2 as f32 / 127.0) as f64;
+                let velocity = (e.data2.min(127) as f32 / 127.0) as f64;
                 let pckn = Pckn::new(port, channel, key, note_id);
 
                 match e.status & 0xF0 {
@@ -694,15 +698,21 @@ mod clap_impl {
                     self.input_copies
                         .iter_mut()
                         .take(audio_in.len())
-                        .map(|buf| InputChannel::variable(&mut buf[..frames])),
+                        .map(|buf| {
+                            let n = frames.min(buf.len());
+                            let (head, _) = buf.split_at_mut(n);
+                            InputChannel::variable(head)
+                        }),
                 ),
             }];
 
             let out_buffers = vec![AudioPortBuffer {
                 latency: 0,
-                channels: AudioPortBufferType::f32_output_only(
-                    audio_out.iter_mut().map(|b| &mut b[..frames]),
-                ),
+                channels: AudioPortBufferType::f32_output_only(audio_out.iter_mut().map(|b| {
+                    let n = frames.min(b.len());
+                    let (head, _) = b.split_at_mut(n);
+                    head
+                })),
             }];
 
             let in_audio = in_ports.with_input_buffers(in_buffers);

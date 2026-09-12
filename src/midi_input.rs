@@ -57,10 +57,13 @@ impl MidiInputHandler {
                 &port_to_connect,
                 &port_name_clone,
                 move |stamp, message, _| {
-                    if message.len() == 3 {
+                    if (1..=3).contains(&message.len()) {
+                        let b0 = message.first().copied().unwrap_or(0);
+                        let b1 = message.get(1).copied().unwrap_or(0).min(127);
+                        let b2 = message.get(2).copied().unwrap_or(0).min(127);
                         let raw_message = RawMidiMessage {
                             timestamp_us: initial_time + stamp,
-                            message: [message[0], message[1], message[2]],
+                            message: [b0, b1, b2],
                         };
                         let _ = command_tx_clone
                             .send(crate::messages::AudioCommand::MidiInput(raw_message));

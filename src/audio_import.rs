@@ -103,7 +103,7 @@ fn decode_wav_bytes(
     } else {
         samples
             .chunks(channels)
-            .map(|ch| ch.iter().copied().sum::<f32>() / channels as f32)
+            .map(|ch| ch.iter().copied().sum::<f32>() / ch.len().max(1) as f32)
             .collect()
     };
 
@@ -197,13 +197,13 @@ fn decode_with_symphonia_bytes(
         }
     }
 
-    let mono_samples = if channels == 2 {
+    let mono_samples: Vec<f32> = if channels == 1 {
         all_samples
-            .chunks(2)
-            .map(|chunk| (chunk[0] + chunk.get(1).copied().unwrap_or(0.0)) / 2.0)
-            .collect()
     } else {
         all_samples
+            .chunks(channels)
+            .map(|chunk| chunk.iter().copied().sum::<f32>() / chunk.len().max(1) as f32)
+            .collect()
     };
 
     let trimmed_samples = trim_silence_end(&mono_samples, 0.001);

@@ -1303,24 +1303,37 @@ impl YadawApp {
             UIUpdate::PluginParamsDiscovered {
                 track_id,
                 plugin_idx,
+                plugin_id,
                 has_editor,
                 params,
             } => {
-                // Store meta info (name, min, max, default) for UI sliders
                 let meta: Vec<PluginParamInfo> = params.iter().map(|p| p.clone()).collect();
-                self.clap_param_meta.insert((track_id, plugin_idx), meta);
-
                 {
                     let mut state = self.state.lock_sync();
                     if let Some(track) = state.tracks.get_mut(&track_id) {
-                        if let Some(plugin) = track.plugin_chain.get_mut(plugin_idx) {
-                            plugin.params.clear();
-                            plugin.has_editor = has_editor;
-                            for param_info in &params {
-                                plugin
-                                    .params
-                                    .insert(param_info.name.clone(), param_info.current);
+                        let resolved_idx = track
+                            .plugin_chain
+                            .iter()
+                            .position(|p| p.id == plugin_id)
+                            .or_else(|| {
+                                if plugin_idx < track.plugin_chain.len() {
+                                    Some(plugin_idx)
+                                } else {
+                                    None
+                                }
+                            });
+                        if let Some(idx) = resolved_idx {
+                            self.clap_param_meta.insert((track_id, idx), meta);
+                            if let Some(plugin) = track.plugin_chain.get_mut(idx) {
+                                plugin.params.clear();
+                                plugin.has_editor = has_editor;
+                                for param_info in &params {
+                                    plugin
+                                        .params
+                                        .insert(param_info.name.clone(), param_info.current);
+                                }
                             }
+                            track.rebuild_plugin_index();
                         }
                     }
                 }

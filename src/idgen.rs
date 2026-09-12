@@ -4,16 +4,16 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 
 #[inline]
 pub fn next() -> u64 {
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let mut id = NEXT.fetch_add(1, Ordering::SeqCst);
     if id == 0 {
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    } else {
-        id
+        NEXT.store(1, Ordering::SeqCst);
+        id = NEXT.fetch_add(1, Ordering::SeqCst);
     }
+    if id == 0 { 1 } else { id }
 }
 
 #[inline]
 pub fn seed_from_max(max_seen: u64) {
     let next = max_seen.saturating_add(1).max(1);
-    NEXT.store(next, Ordering::Relaxed);
+    NEXT.fetch_max(next, Ordering::SeqCst);
 }
