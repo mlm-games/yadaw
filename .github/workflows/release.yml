@@ -54,6 +54,7 @@ jobs:
       android-build-tools: "37.0.0"
       android-ndk-version: "29.0.14206865"
       cargo-rapk-version: "0.21.0"
+      kotlin-version: "2.2.10"
       android-d8-version: ""
     secrets: inherit
 
