@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use flume::{Receiver, Sender};
 
-use crate::audio_state::{EngineEvent, PluginDescriptorSnapshot, PluginWorkerCommand, SharedInstance};
+use crate::audio_state::{
+    EngineEvent, PluginDescriptorSnapshot, PluginWorkerCommand, SharedInstance,
+};
 use crate::messages::{PluginParamInfo, UIUpdate, UiTx};
 use yadaw_plugin_api::{ParamKey, PluginInstance as UnifiedInstance, UnifiedParamInfo};
 use yadaw_plugin_host::HostFacade;
@@ -22,11 +24,7 @@ pub struct PluginWorker {
 }
 
 impl PluginWorker {
-    fn new(
-        facade: Arc<HostFacade>,
-        engine_events_tx: Sender<EngineEvent>,
-        ui_tx: UiTx,
-    ) -> Self {
+    fn new(facade: Arc<HostFacade>, engine_events_tx: Sender<EngineEvent>, ui_tx: UiTx) -> Self {
         Self {
             facade,
             instances: HashMap::new(),

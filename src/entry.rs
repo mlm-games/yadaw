@@ -1,5 +1,7 @@
 use crate::audio;
-use crate::audio_state::{AudioGraphSnapshot, AudioState, EngineEvent, PluginWorkerCommand, RealtimeCommand};
+use crate::audio_state::{
+    AudioGraphSnapshot, AudioState, EngineEvent, PluginWorkerCommand, RealtimeCommand,
+};
 use crate::config::Config;
 use crate::messages::{AudioCommand, UiRx, UiTx};
 use crate::midi_input::MidiInputHandler;
@@ -7,8 +9,8 @@ use crate::spawn_detached;
 use crate::{project, ui};
 use flume::{self, Sender};
 use std::sync::Arc;
-use web_workers::sync::mpsc::{Receiver, channel};
 use web_workers::sync::Mutex;
+use web_workers::sync::mpsc::{Receiver, channel};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::constants;

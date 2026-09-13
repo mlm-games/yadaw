@@ -91,7 +91,8 @@ fn save_project_wasm(app: &mut super::app::YadawApp, filename: &str) {
             let _ = web_sys::Url::revoke_object_url(&url);
         }
     }
-    app.dialogs.show_error("Failed to save project: browser download failed");
+    app.dialogs
+        .show_error("Failed to save project: browser download failed");
 }
 
 #[cfg(target_os = "android")]
@@ -629,7 +630,9 @@ impl OpenDialog {
                         {
                             if let Some(data) = file.data() {
                                 let contents = String::from_utf8_lossy(data);
-                                if let Ok(project) = serde_json::from_str::<crate::project::Project>(&contents) {
+                                if let Ok(project) =
+                                    serde_json::from_str::<crate::project::Project>(&contents)
+                                {
                                     let live_bpm = app.audio_state.bpm.load();
                                     let live_loop_start = app.audio_state.loop_start.load();
                                     let live_loop_end = app.audio_state.loop_end.load();
@@ -648,9 +651,10 @@ impl OpenDialog {
                                     app.audio_state.bpm.store(state.bpm);
                                     app.audio_state.loop_start.store(state.loop_start);
                                     app.audio_state.loop_end.store(state.loop_end);
-                                    app.audio_state
-                                        .loop_enabled
-                                        .store(state.loop_enabled, std::sync::atomic::Ordering::Relaxed);
+                                    app.audio_state.loop_enabled.store(
+                                        state.loop_enabled,
+                                        std::sync::atomic::Ordering::Relaxed,
+                                    );
 
                                     state.ensure_ids();
                                     drop(state);
@@ -1320,7 +1324,9 @@ impl ThemeEditorDialog {
                     if ui.button("Save Theme").clicked() {
                         app.theme_manager
                             .add_custom_theme(self.custom_theme.clone());
-                        let _ = app.theme_manager.save_custom_themes(&crate::paths::custom_themes_path());
+                        let _ = app
+                            .theme_manager
+                            .save_custom_themes(&crate::paths::custom_themes_path());
                         self.closed = true;
                     }
 
@@ -1420,7 +1426,8 @@ impl ShortcutsEditorDialog {
                                         if let Err(e) = input_mgr.load_shortcuts(&temp_path) {
                                             eprintln!("Shortcuts import failed: {}", e);
                                         } else {
-                                            let _ = input_mgr.save_shortcuts(&crate::paths::shortcuts_path());
+                                            let _ = input_mgr
+                                                .save_shortcuts(&crate::paths::shortcuts_path());
                                         }
                                         let _ = std::fs::remove_file(&temp_path);
                                     }
@@ -2530,14 +2537,15 @@ impl LayoutManagerDialog {
     fn saved_layout_names() -> Vec<String> {
         #[cfg(target_arch = "wasm32")]
         {
-            let contents = crate::wasm_persist::read_config_string(
-                "config/layouts.json",
-                &PathBuf::new(),
-            );
+            let contents =
+                crate::wasm_persist::read_config_string("config/layouts.json", &PathBuf::new());
             let map: std::collections::BTreeMap<String, SavedLayout> = contents
                 .and_then(|c| serde_json::from_str(&c).ok())
                 .unwrap_or_default();
-            let mut names: Vec<String> = map.into_keys().filter(|n| !Self::is_builtin_name(n)).collect();
+            let mut names: Vec<String> = map
+                .into_keys()
+                .filter(|n| !Self::is_builtin_name(n))
+                .collect();
             names.sort();
             names
         }
@@ -2614,7 +2622,9 @@ impl LayoutManagerDialog {
                 crate::wasm_persist::read_config_string("config/layouts.json", &PathBuf::new())
                     .and_then(|c| serde_json::from_str(&c).ok())
                     .unwrap_or_default();
-            let layout = map.get(name).ok_or_else(|| format!("Layout '{name}' not found"))?;
+            let layout = map
+                .get(name)
+                .ok_or_else(|| format!("Layout '{name}' not found"))?;
             layout.apply(app);
             Ok(())
         }

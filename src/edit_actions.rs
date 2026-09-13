@@ -173,7 +173,11 @@ impl EditProcessor {
             let q = (n.start / grid).round() * grid;
             n.start = n.start + (q - n.start) * strength as f64;
         }
-        notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+        notes.sort_by(|a, b| {
+            a.start
+                .partial_cmp(&b.start)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     pub fn transpose_notes(notes: &mut Vec<MidiNote>, semitones: i32) {

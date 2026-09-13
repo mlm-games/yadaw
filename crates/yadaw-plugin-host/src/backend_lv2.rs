@@ -255,11 +255,18 @@ impl PluginInstance for Lv2Instance {
 
             let wm_delete_window =
                 unsafe { (xlib_instance.XInternAtom)(display, c"WM_DELETE_WINDOW".as_ptr(), 0) };
-            let wm_protocols = unsafe { (xlib_instance.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
+            let wm_protocols =
+                unsafe { (xlib_instance.XInternAtom)(display, c"WM_PROTOCOLS".as_ptr(), 0) };
 
             if child_win != 0 {
                 eprintln!("[lv2 debug] sending expose to child");
-                x11::send_expose_event(&xlib_instance, display, child_win, size.0 as i32, size.1 as i32);
+                x11::send_expose_event(
+                    &xlib_instance,
+                    display,
+                    child_win,
+                    size.0 as i32,
+                    size.1 as i32,
+                );
             } else {
                 eprintln!("[lv2 debug] child_win is 0 – DPF did not create a window");
             }

@@ -80,10 +80,8 @@ fn process_command(
         }
         AudioCommand::SetBPM(bpm) => {
             if !(bpm.is_finite() && bpm > 0.0) {
-                let _ = ui_tx.send_sync(UIUpdate::Warning(format!(
-                    "Ignoring invalid BPM: {}",
-                    bpm
-                )));
+                let _ =
+                    ui_tx.send_sync(UIUpdate::Warning(format!("Ignoring invalid BPM: {}", bpm)));
                 return;
             }
             let mut state = app_state.lock_sync();
@@ -374,7 +372,6 @@ fn process_command(
                 let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
             drop(state);
-
 
             send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);
         }
@@ -903,8 +900,11 @@ fn process_command(
                 };
                 if let Some(lane) = track.automation_lanes.get_mut(lane_idx) {
                     lane.points.push(AutomationPoint { beat, value });
-                    lane.points
-                        .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+                    lane.points.sort_by(|a, b| {
+                        a.beat
+                            .partial_cmp(&b.beat)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
                 }
                 let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
@@ -917,11 +917,8 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(&track_id)
                 && let Some(lane) = track.automation_lanes.get_mut(lane_idx)
             {
-                if let Some((best_idx, _)) = lane
-                    .points
-                    .iter()
-                    .enumerate()
-                    .min_by(|(_, a), (_, b)| {
+                if let Some((best_idx, _)) =
+                    lane.points.iter().enumerate().min_by(|(_, a), (_, b)| {
                         (a.beat - beat)
                             .abs()
                             .partial_cmp(&(b.beat - beat).abs())
@@ -953,11 +950,8 @@ fn process_command(
             if let Some(track) = state.tracks.get_mut(&track_id)
                 && let Some(lane) = track.automation_lanes.get_mut(lane_idx)
             {
-                if let Some((best_idx, _)) = lane
-                    .points
-                    .iter()
-                    .enumerate()
-                    .min_by(|(_, a), (_, b)| {
+                if let Some((best_idx, _)) =
+                    lane.points.iter().enumerate().min_by(|(_, a), (_, b)| {
                         (a.beat - old_beat)
                             .abs()
                             .partial_cmp(&(b.beat - old_beat).abs())
@@ -972,8 +966,11 @@ fn process_command(
                     beat: new_beat,
                     value: new_value,
                 });
-                lane.points
-                    .sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+                lane.points.sort_by(|a, b| {
+                    a.beat
+                        .partial_cmp(&b.beat)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             }
             send_graph_snapshot(&state, snapshot_tx);
         }
@@ -1486,8 +1483,11 @@ fn process_command(
 
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.extend(notes);
-                pat.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+                pat.notes.sort_by(|a, b| {
+                    a.start
+                        .partial_cmp(&b.start)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             });
 
             if !new_ids.is_empty() {
@@ -1616,8 +1616,11 @@ fn process_command(
             }
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.extend(notes);
-                pat.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+                pat.notes.sort_by(|a, b| {
+                    a.start
+                        .partial_cmp(&b.start)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             });
             let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
@@ -1633,7 +1636,11 @@ fn process_command(
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 for up in notes {
                     if let Some(n) = pat.notes.iter_mut().find(|n| n.id == up.id) {
-                        n.start = if up.start.is_finite() { up.start.max(0.0) } else { n.start };
+                        n.start = if up.start.is_finite() {
+                            up.start.max(0.0)
+                        } else {
+                            n.start
+                        };
                         n.duration = if up.duration.is_finite() {
                             up.duration.max(1e-6)
                         } else {
@@ -1643,8 +1650,11 @@ fn process_command(
                         n.velocity = up.velocity.clamp(1, 127);
                     }
                 }
-                pat.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+                pat.notes.sort_by(|a, b| {
+                    a.start
+                        .partial_cmp(&b.start)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             });
             let st = app_state.lock_sync();
             send_graph_snapshot(&st, snapshot_tx);
@@ -1711,8 +1721,11 @@ fn process_command(
 
             with_pattern_mut(app_state, clip_id, |pat, _len| {
                 pat.notes.extend(clones);
-                pat.notes
-                    .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+                pat.notes.sort_by(|a, b| {
+                    a.start
+                        .partial_cmp(&b.start)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             });
 
             if !new_ids.is_empty() {
@@ -2182,15 +2195,15 @@ fn process_command(
 
                     let mut left_part = original_clip.clone();
                     left_part.length_beats = left_len_beats;
-                    left_part.samples =
-                        std::sync::Arc::new(original_clip.samples[..s0.min(original_clip.samples.len())].to_vec());
+                    left_part.samples = std::sync::Arc::new(
+                        original_clip.samples[..s0.min(original_clip.samples.len())].to_vec(),
+                    );
 
                     let mut right_part = original_clip.clone();
                     right_part.id = idgen::next();
                     right_part.start_beat = end_beat;
                     right_part.length_beats = clip_end - end_beat;
-                    right_part.offset_beats =
-                        original_clip.offset_beats + right_start_beats;
+                    right_part.offset_beats = original_clip.offset_beats + right_start_beats;
                     right_part.samples = std::sync::Arc::new(
                         original_clip.samples[s1.min(original_clip.samples.len())..].to_vec(),
                     );
@@ -2367,8 +2380,11 @@ fn insert_recording_clip_if_missing(
             pattern_id: Some(new_pid),
             ..Default::default()
         });
-        t.midi_clips
-            .sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
+        t.midi_clips.sort_by(|a, b| {
+            a.start_beat
+                .partial_cmp(&b.start_beat)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
     st.ensure_ids();
 }
@@ -2394,12 +2410,7 @@ fn with_pattern_mut<T>(
             } else {
                 let new_pid = idgen::next();
                 let moved_notes = std::mem::take(
-                    &mut st
-                        .tracks
-                        .get_mut(&track_id)?
-                        .midi_clips
-                        .get_mut(idx)?
-                        .notes,
+                    &mut st.tracks.get_mut(&track_id)?.midi_clips.get_mut(idx)?.notes,
                 );
                 st.patterns.insert(
                     new_pid,
@@ -2408,26 +2419,15 @@ fn with_pattern_mut<T>(
                         notes: moved_notes,
                     },
                 );
-                if let Some(clip) = st
-                    .tracks
-                    .get_mut(&track_id)?
-                    .midi_clips
-                    .get_mut(idx)
-                {
+                if let Some(clip) = st.tracks.get_mut(&track_id)?.midi_clips.get_mut(idx) {
                     clip.pattern_id = Some(new_pid);
                 }
                 (new_pid, clip_len)
             }
         } else {
             let new_pid = idgen::next();
-            let moved_notes = std::mem::take(
-                &mut st
-                    .tracks
-                    .get_mut(&track_id)?
-                    .midi_clips
-                    .get_mut(idx)?
-                    .notes,
-            );
+            let moved_notes =
+                std::mem::take(&mut st.tracks.get_mut(&track_id)?.midi_clips.get_mut(idx)?.notes);
             st.patterns.insert(
                 new_pid,
                 MidiPattern {
@@ -2435,12 +2435,7 @@ fn with_pattern_mut<T>(
                     notes: moved_notes,
                 },
             );
-            if let Some(clip) = st
-                .tracks
-                .get_mut(&track_id)?
-                .midi_clips
-                .get_mut(idx)
-            {
+            if let Some(clip) = st.tracks.get_mut(&track_id)?.midi_clips.get_mut(idx) {
                 clip.pattern_id = Some(new_pid);
             }
             (new_pid, clip_len)

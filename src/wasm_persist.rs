@@ -8,7 +8,8 @@ static PRELOADED: OnceCell<HashMap<&'static str, String>> = OnceCell::new();
 /// In-memory config cache used on wasm so that writes are immediately
 /// visible to subsequent reads (OPFS writes are async). Updated by
 /// `save_config_string` and checked by `read_config_string`.
-static CONFIG_CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static CONFIG_CACHE: Lazy<Mutex<HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(target_arch = "wasm32")]
 mod opfs_io {
@@ -46,7 +47,9 @@ mod opfs_io {
     }
 
     pub(super) fn get_preloaded(key: &str) -> Option<&str> {
-        super::PRELOADED.get().and_then(|m| m.get(key).map(|s| s.as_str()))
+        super::PRELOADED
+            .get()
+            .and_then(|m| m.get(key).map(|s| s.as_str()))
     }
 
     async fn read_string(name: &str) -> Result<String, String> {
@@ -123,7 +126,10 @@ pub async fn read_cached_audio_by_hash(hash: u64) -> Option<Vec<f32>> {
 pub fn save_config_string(wasm_key: &str, fs_path: &Path, data: &str) -> anyhow::Result<()> {
     #[cfg(target_arch = "wasm32")]
     {
-        CONFIG_CACHE.lock().unwrap().insert(wasm_key.to_string(), data.to_string());
+        CONFIG_CACHE
+            .lock()
+            .unwrap()
+            .insert(wasm_key.to_string(), data.to_string());
         let key = wasm_key.to_string();
         let data = data.to_string();
         wasm_bindgen_futures::spawn_local(async move {

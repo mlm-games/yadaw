@@ -719,8 +719,9 @@ impl ShortcutRegistry {
 
     /// Load from file
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
-        let data = crate::wasm_persist::read_config_string(crate::paths::opfs::FILE_SHORTCUTS, path)
-            .ok_or_else(|| anyhow::anyhow!("Failed to read shortcuts from {:?}", path))?;
+        let data =
+            crate::wasm_persist::read_config_string(crate::paths::opfs::FILE_SHORTCUTS, path)
+                .ok_or_else(|| anyhow::anyhow!("Failed to read shortcuts from {:?}", path))?;
         Self::load_from_json(&data)
     }
 

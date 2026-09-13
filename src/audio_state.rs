@@ -247,10 +247,7 @@ pub enum EngineEvent {
     },
     /// The worker dropped its instance. The engine releases its own reference
     /// (deferred to a non-audio-thread drop queue).
-    Uninstall {
-        track_id: u64,
-        plugin_id: u64,
-    },
+    Uninstall { track_id: u64, plugin_id: u64 },
 }
 
 /// A plugin instance shared between the worker (parameter/state/editor access)

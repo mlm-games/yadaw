@@ -105,12 +105,18 @@ impl ThemeManager {
 
     pub fn save_custom_themes(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(&self.custom_themes)?;
-        crate::wasm_persist::save_config_string(crate::paths::opfs::FILE_CUSTOM_THEMES, path, &json)?;
+        crate::wasm_persist::save_config_string(
+            crate::paths::opfs::FILE_CUSTOM_THEMES,
+            path,
+            &json,
+        )?;
         Ok(())
     }
 
     pub fn load_custom_themes(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        let Some(json) = crate::wasm_persist::read_config_string(crate::paths::opfs::FILE_CUSTOM_THEMES, path) else {
+        let Some(json) =
+            crate::wasm_persist::read_config_string(crate::paths::opfs::FILE_CUSTOM_THEMES, path)
+        else {
             return Ok(());
         };
         let themes: Vec<CustomTheme> = serde_json::from_str(&json)?;
@@ -120,12 +126,18 @@ impl ThemeManager {
 
     pub fn save_current_theme(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(&self.current_theme)?;
-        crate::wasm_persist::save_config_string(crate::paths::opfs::FILE_CURRENT_THEME, path, &json)?;
+        crate::wasm_persist::save_config_string(
+            crate::paths::opfs::FILE_CURRENT_THEME,
+            path,
+            &json,
+        )?;
         Ok(())
     }
 
     pub fn load_current_theme(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        let Some(json) = crate::wasm_persist::read_config_string(crate::paths::opfs::FILE_CURRENT_THEME, path) else {
+        let Some(json) =
+            crate::wasm_persist::read_config_string(crate::paths::opfs::FILE_CURRENT_THEME, path)
+        else {
             return Ok(());
         };
         self.current_theme = serde_json::from_str(&json)?;

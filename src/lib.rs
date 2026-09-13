@@ -26,7 +26,6 @@ pub mod midi_utils;
 pub mod mixer;
 pub mod model;
 pub mod paths;
-pub mod wasm_persist;
 pub mod performance;
 pub mod plugin;
 pub mod plugin_worker;
@@ -38,6 +37,7 @@ pub mod time_utils;
 pub mod track_manager;
 pub mod transport;
 pub mod ui;
+pub mod wasm_persist;
 
 #[cfg(all(target_arch = "wasm32", feature = "clap-host"))]
 compile_error!("feature `clap-host` is not supported on wasm32");
@@ -65,9 +65,9 @@ pub async fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
         .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
         .expect("canvas#yadaw_canvas not found");
 
-    crate::wasm_persist::init().await.map_err(|e| {
-        wasm_bindgen::JsValue::from_str(&format!("OPFS init failed: {e}"))
-    })?;
+    crate::wasm_persist::init()
+        .await
+        .map_err(|e| wasm_bindgen::JsValue::from_str(&format!("OPFS init failed: {e}")))?;
 
     eframe::WebRunner::new()
         .start(
