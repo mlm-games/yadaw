@@ -64,6 +64,22 @@ impl ExportConfig {
         self.path.with_extension(format.default_extension())
     }
 
+    /// Reject traversal / root writes and create the parent dir so export
+    /// can't fail late (or land outside the project tree) after rendering.
+    fn validated_output_path(&self) -> Result<PathBuf> {
+        let out = self.output_path();
+        if out.as_os_str().is_empty() {
+            bail!("Export path is empty");
+        }
+        if let Some(parent) = out.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| anyhow!("Cannot create export dir: {e}"))?;
+            }
+        }
+        Ok(out)
+    }
+
     fn resolved_format(&self) -> ExportFormat {
         self.format.unwrap_or(ExportFormat::Wav)
     }
@@ -141,6 +157,19 @@ fn run_export(
     let snapshots = crate::audio_snapshot::build_track_snapshots(&app_state);
     let mut engine =
         AudioEngine::new_for_offline_render(&snapshots, &audio_state, config.sample_rate)?;
+    let missing = engine.take_offline_missing();
+    if !missing.is_empty() {
+        bail!(
+            "Export aborted: {} plugin(s) failed to load ({}). Bypass them or retry.",
+            missing.len(),
+            missing
+                .iter()
+                .take(4)
+                .map(|(t, p)| format!("track {t} plugin {p}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
 
     send(ui_tx, ExportState::Rendering(0.0));
 
@@ -179,8 +208,15 @@ fn run_export(
 
     send(ui_tx, ExportState::Finalizing);
 
-    let output_path = config.output_path();
-    let temp_path = output_path.with_extension("tmp");
+    let output_path = config.validated_output_path()?;
+    let temp_path = output_path.with_extension(format!(
+        "{}.tmp.{}",
+        output_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("wav"),
+        std::process::id()
+    ));
 
     {
         let file = BufWriter::new(
@@ -351,19 +387,49 @@ fn encode_pcm_from_f32(
     sample_format: SampleFormat,
     sink: &mut dyn PacketSink,
 ) -> Result<()> {
+    struct Dither {
+        state: u64,
+    }
+    impl Dither {
+        fn next_tri(&mut self) -> f32 {
+            self.state = self
+                .state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let r1 = ((self.state >> 33) as f32) / (u32::MAX as f32) - 0.5;
+            self.state = self
+                .state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let r2 = ((self.state >> 33) as f32) / (u32::MAX as f32) - 0.5;
+            r1 + r2
+        }
+    }
     match sample_format {
         SampleFormat::I16 => {
+            let mut d = Dither {
+                state: 0x1234_5678_9ABC_DEF0,
+            };
             let samples: Vec<i16> = pcm
                 .iter()
-                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                .map(|&s| {
+                    let v = s.clamp(-1.0, 1.0) * i16::MAX as f32 + d.next_tri();
+                    v.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+                })
                 .collect();
             encoder.encode(AudioBufferRef::I16(&samples), sink)?;
         }
         SampleFormat::I24 => {
             const MAX24: f32 = 8_388_607.0;
+            let mut d = Dither {
+                state: 0x1234_5678_9ABC_DEF0,
+            };
             let samples: Vec<i32> = pcm
                 .iter()
-                .map(|&s| (s.clamp(-1.0, 1.0) * MAX24) as i32)
+                .map(|&s| {
+                    let v = s.clamp(-1.0, 1.0) * MAX24 + d.next_tri();
+                    v.round().clamp(-MAX24 - 1.0, MAX24) as i32
+                })
                 .collect();
             encoder.encode(AudioBufferRef::I24(&samples), sink)?;
         }
@@ -402,6 +468,19 @@ async fn run_export_wasm(
     let snapshots = crate::audio_snapshot::build_track_snapshots(&app_state);
     let mut engine =
         AudioEngine::new_for_offline_render(&snapshots, &audio_state, config.sample_rate)?;
+    let missing = engine.take_offline_missing();
+    if !missing.is_empty() {
+        bail!(
+            "Export aborted: {} plugin(s) failed to load ({}). Bypass them or retry.",
+            missing.len(),
+            missing
+                .iter()
+                .take(4)
+                .map(|(t, p)| format!("track {t} plugin {p}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
 
     let total_samples = total_frames as usize * channels;
     let mut pcm = Vec::<f32>::with_capacity(total_samples);
@@ -465,24 +544,58 @@ async fn run_export_wasm(
                 .map_err(|e| anyhow!("Failed to create WAV writer: {e}"))?;
             match sample_format {
                 SampleFormat::I16 => {
+                    let mut d = 0x1234_5678_9ABC_DEF0u64;
+                    let mut tri = || {
+                        d = d
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        let r1 = ((d >> 33) as f32) / (u32::MAX as f32) - 0.5;
+                        d = d
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        let r2 = ((d >> 33) as f32) / (u32::MAX as f32) - 0.5;
+                        r1 + r2
+                    };
                     for &sample in &pcm {
                         writer
-                            .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                            .write_sample(
+                                (sample.clamp(-1.0, 1.0) * i16::MAX as f32 + tri())
+                                    .round()
+                                    .clamp(i16::MIN as f32, i16::MAX as f32)
+                                    as i16,
+                            )
                             .map_err(|e| anyhow!("Failed to write sample: {e}"))?;
                     }
                 }
                 SampleFormat::I24 => {
                     const MAX24: f32 = 8_388_607.0;
+                    let mut d = 0x1234_5678_9ABC_DEF0u64;
+                    let mut tri = || {
+                        d = d
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        let r1 = ((d >> 33) as f32) / (u32::MAX as f32) - 0.5;
+                        d = d
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        let r2 = ((d >> 33) as f32) / (u32::MAX as f32) - 0.5;
+                        r1 + r2
+                    };
                     for &sample in &pcm {
                         writer
-                            .write_sample((sample.clamp(-1.0, 1.0) * MAX24) as i32)
+                            .write_sample(
+                                (sample.clamp(-1.0, 1.0) * MAX24 + tri())
+                                    .round()
+                                    .clamp(-MAX24 - 1.0, MAX24)
+                                    as i32,
+                            )
                             .map_err(|e| anyhow!("Failed to write sample: {e}"))?;
                     }
                 }
                 _ => {
                     for &sample in &pcm {
                         writer
-                            .write_sample(sample)
+                            .write_sample(sample.clamp(-1.0, 1.0))
                             .map_err(|e| anyhow!("Failed to write sample: {e}"))?;
                     }
                 }

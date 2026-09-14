@@ -66,11 +66,14 @@ pub use opfs_io::init;
 pub fn read_config_string(wasm_key: &str, fs_path: &Path) -> Option<String> {
     #[cfg(target_arch = "wasm32")]
     {
-        if let Some(data) = opfs_io::get_preloaded(wasm_key) {
-            return Some(data.to_string());
-        }
+        // CONFIG_CACHE holds the latest writes (OPFS writes are async).
+        // It must take precedence over PRELOADED, otherwise saves made
+        // during the session are shadowed by stale startup values.
         if let Some(data) = CONFIG_CACHE.lock().unwrap().get(wasm_key) {
             return Some(data.clone());
+        }
+        if let Some(data) = opfs_io::get_preloaded(wasm_key) {
+            return Some(data.to_string());
         }
         return None;
     }

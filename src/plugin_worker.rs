@@ -47,9 +47,20 @@ impl PluginWorker {
                 plugin_id,
                 plugin_idx,
                 backend,
-                uri,
+                uri: raw_uri,
                 params,
             } => {
+                let validated =
+                    yadaw_plugin_host::plugin_facade::validate_plugin_uri(backend, &raw_uri);
+                let uri = match validated {
+                    Ok(u) => u,
+                    Err(e) => {
+                        let msg = format!("Refusing to load plugin {raw_uri}: {e}");
+                        log::error!("{msg}");
+                        let _ = self.ui_tx.send_sync(UIUpdate::Error(msg));
+                        return;
+                    }
+                };
                 let key = (track_id, plugin_id);
                 if let Some(instance) = self.instances.get_mut(&key) {
                     let mut guard = instance.lock();
@@ -150,6 +161,17 @@ impl PluginWorker {
         desc: PluginDescriptorSnapshot,
     ) {
         let key = (track_id, desc.plugin_id);
+        let validated =
+            yadaw_plugin_host::plugin_facade::validate_plugin_uri(desc.backend, &desc.uri);
+        let uri = match validated {
+            Ok(u) => u,
+            Err(e) => {
+                let msg = format!("Refusing to load plugin {}: {}", desc.uri, e);
+                log::error!("{msg}");
+                let _ = self.ui_tx.send_sync(UIUpdate::Error(msg));
+                return;
+            }
+        };
         let params: Vec<(String, f32)> = desc
             .params
             .iter()
@@ -162,7 +184,7 @@ impl PluginWorker {
             return;
         }
 
-        match self.facade.instantiate(desc.backend, &desc.uri) {
+        match self.facade.instantiate(desc.backend, &uri) {
             Ok(instance) => {
                 let instance = Arc::new(parking_lot::Mutex::new(instance));
                 {

@@ -186,11 +186,41 @@ impl Config {
             crate::paths::opfs::FILE_CONFIG,
             &Self::config_path().unwrap_or_default(),
         ) {
-            let mut cfg: Self = serde_json::from_str(&data).unwrap_or_default();
-            cfg.validate();
-            return Ok(cfg);
+            match serde_json::from_str::<Self>(&data) {
+                Ok(mut cfg) => {
+                    cfg.validate();
+                    return Ok(cfg);
+                }
+                Err(e) => {
+                    log::warn!("Corrupt config.json ({}); backing up and using defaults", e);
+                    let _ = Self::backup_corrupt(&data);
+                }
+            }
         }
         Ok(Self::default())
+    }
+
+    /// Write the unparseable bytes aside before defaults overwrite them.
+    fn backup_corrupt(data: &str) -> Result<()> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = crate::wasm_persist::save_config_string(
+                "config/config.json.corrupt",
+                &std::path::PathBuf::new(),
+                data,
+            );
+            Ok(())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let path = Self::config_path().unwrap_or_default();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let backup = path.with_extension("json.corrupt");
+            std::fs::write(backup, data)?;
+            Ok(())
+        }
     }
 
     /// Clamp invalid values from corrupt/hand-edited configs so they can't

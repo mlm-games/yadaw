@@ -190,6 +190,7 @@ impl ProjectManager {
             return Ok(());
         }
 
+        state.validate_before_save()?;
         let project = state.to_project();
         let json = serde_json::to_string_pretty(&project)?;
 

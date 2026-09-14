@@ -7,6 +7,9 @@ use crate::model::clip::MidiPattern;
 use crate::model::{Track, TrackGroup};
 use crate::time_utils::TimeConverter;
 
+/// Current on-disk project schema version.
+pub const PROJECT_VERSION: &str = "1.1.0";
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppState {
     /// ID-based storage (canonical)
@@ -31,6 +34,22 @@ pub struct AppState {
     pub loop_enabled: bool,
     pub time_signature: (i32, i32),
     pub next_id: u64,
+    /// Project name / creation time carried across save/load so
+    /// `to_project()` no longer resets them every save.
+    #[serde(default = "default_project_name")]
+    pub project_name: String,
+    #[serde(default = "default_now")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[inline]
+fn default_project_name() -> String {
+    "Untitled Project".to_string()
+}
+
+#[inline]
+fn default_now() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
 }
 
 /// Reference to where a clip lives
@@ -60,6 +79,8 @@ impl Default for AppState {
             loop_enabled: false,
             time_signature: (4, 4),
             next_id: 1,
+            project_name: default_project_name(),
+            created_at: chrono::Utc::now(),
         }
     }
 }
@@ -114,6 +135,21 @@ impl AppState {
         self.loop_start = snapshot.loop_start;
         self.loop_end = snapshot.loop_end;
         self.loop_enabled = snapshot.loop_enabled;
+        self.track_order.retain(|id| self.tracks.contains_key(id));
+        let track_ids: Vec<u64> = self.tracks.keys().copied().collect();
+        for track in self.tracks.values_mut() {
+            if track
+                .group_id
+                .is_some_and(|g| !self.groups.contains_key(&g))
+            {
+                track.group_id = None;
+            }
+            for send in &mut track.sends {
+                if send.destination_track != 0 && !track_ids.contains(&send.destination_track) {
+                    send.destination_track = 0;
+                }
+            }
+        }
         self.rebuild_clip_index();
         self.rebuild_plugin_indices();
         crate::idgen::seed_from_max(self.max_id_in_project());
@@ -244,6 +280,9 @@ impl AppState {
     }
 
     pub fn load_project(&mut self, project: Project) {
+        if let Err(e) = check_project_version(&project.version) {
+            log::warn!("Project version issue: {e}");
+        }
         {
             let mut file_max = 0u64;
             for t in &project.tracks {
@@ -274,56 +313,102 @@ impl AppState {
         self.tracks.clear();
         self.track_order.clear();
 
+        let mut track_remap: HashMap<u64, u64> = HashMap::new();
+        let mut pattern_remap: HashMap<u64, u64> = HashMap::new();
+        let mut group_remap: HashMap<u64, u64> = HashMap::new();
+
+        let mut tracks: Vec<Track> = Vec::with_capacity(project.tracks.len());
         for mut track in project.tracks {
+            let old_tid = track.id;
             let mut track_id = if track.id == 0 {
                 self.fresh_id()
             } else {
                 track.id
             };
-            if self.tracks.contains_key(&track_id) {
+            if tracks.iter().any(|t: &Track| t.id == track_id) {
                 log::warn!(
                     "Duplicate track id {} in project file; renumbering",
                     track_id
                 );
                 track_id = self.fresh_id();
             }
+            if old_tid != track_id {
+                track_remap.insert(old_tid, track_id);
+            }
             track.id = track_id;
             track.rebuild_plugin_index();
-            self.track_order.push(track_id);
-            self.tracks.insert(track_id, track);
+            tracks.push(track);
         }
 
-        self.patterns.clear();
+        let mut patterns: HashMap<u64, MidiPattern> = HashMap::new();
         for mut pat in project.patterns {
+            let old_pid = pat.id;
             if pat.id == 0 {
                 pat.id = self.fresh_id();
             }
-            if self.patterns.contains_key(&pat.id) {
+            if patterns.contains_key(&pat.id) {
                 log::warn!(
                     "Duplicate pattern id {} in project file; renumbering",
                     pat.id
                 );
                 pat.id = self.fresh_id();
             }
+            if old_pid != pat.id {
+                pattern_remap.insert(old_pid, pat.id);
+            }
             let pid = pat.id;
-            self.patterns.insert(pid, pat);
+            patterns.insert(pid, pat);
         }
 
-        self.groups.clear();
+        let mut groups: HashMap<u64, TrackGroup> = HashMap::new();
         for mut group in project.groups {
+            let old_gid = group.id;
             if group.id == 0 {
                 group.id = self.fresh_id();
             }
-            if self.groups.contains_key(&group.id) {
+            if groups.contains_key(&group.id) {
                 log::warn!(
                     "Duplicate group id {} in project file; renumbering",
                     group.id
                 );
                 group.id = self.fresh_id();
             }
+            if old_gid != group.id {
+                group_remap.insert(old_gid, group.id);
+            }
             let gid = group.id;
-            self.groups.insert(gid, group);
+            groups.insert(gid, group);
         }
+
+        if !track_remap.is_empty() || !pattern_remap.is_empty() || !group_remap.is_empty() {
+            for track in &mut tracks {
+                for clip in &mut track.midi_clips {
+                    if let Some(pid) = clip.pattern_id {
+                        if let Some(new_pid) = pattern_remap.get(&pid) {
+                            clip.pattern_id = Some(*new_pid);
+                        }
+                    }
+                }
+                if let Some(gid) = track.group_id {
+                    if let Some(new_gid) = group_remap.get(&gid) {
+                        track.group_id = Some(*new_gid);
+                    }
+                }
+                for send in &mut track.sends {
+                    if let Some(new_dest) = track_remap.get(&send.destination_track) {
+                        send.destination_track = *new_dest;
+                    }
+                }
+            }
+        }
+
+        for track in tracks {
+            let track_id = track.id;
+            self.track_order.push(track_id);
+            self.tracks.insert(track_id, track);
+        }
+        self.patterns = patterns;
+        self.groups = groups;
 
         self.bpm = if project.bpm.is_finite() && project.bpm > 0.0 {
             project.bpm
@@ -356,8 +441,8 @@ impl AppState {
             .collect();
 
         Project {
-            version: "1.0.0".to_string(),
-            name: "Untitled Project".to_string(),
+            version: PROJECT_VERSION.to_string(),
+            name: self.project_name.clone(),
             tracks,
             patterns: self.patterns.values().cloned().collect(),
             groups: self.groups.values().cloned().collect(),
@@ -368,7 +453,7 @@ impl AppState {
             loop_start: self.loop_start,
             loop_end: self.loop_end,
             loop_enabled: self.loop_enabled,
-            created_at: chrono::Utc::now(),
+            created_at: self.created_at,
             modified_at: chrono::Utc::now(),
         }
     }
@@ -592,20 +677,80 @@ pub enum ClipLocation {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Project {
+    #[serde(default = "default_project_version")]
     pub version: String,
+    #[serde(default = "default_project_name")]
     pub name: String,
+    #[serde(default)]
     pub tracks: Vec<Track>, // For serialization compatibility
+    #[serde(default)]
     pub patterns: Vec<MidiPattern>,
+    #[serde(default)]
     pub groups: Vec<TrackGroup>,
+    #[serde(default = "default_bpm")]
     pub bpm: f32,
+    #[serde(default = "default_time_sig")]
     pub time_signature: (i32, i32),
+    #[serde(default = "default_sample_rate")]
     pub sample_rate: f32,
+    #[serde(default = "default_master_volume")]
     pub master_volume: f32,
+    #[serde(default)]
     pub loop_start: f64,
+    #[serde(default)]
     pub loop_end: f64,
+    #[serde(default)]
     pub loop_enabled: bool,
+    #[serde(default = "default_now")]
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_now")]
     pub modified_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[inline]
+fn default_project_version() -> String {
+    PROJECT_VERSION.to_string()
+}
+
+#[inline]
+fn default_bpm() -> f32 {
+    120.0
+}
+
+#[inline]
+fn default_time_sig() -> (i32, i32) {
+    (4, 4)
+}
+
+#[inline]
+fn default_sample_rate() -> f32 {
+    44100.0
+}
+
+#[inline]
+fn default_master_volume() -> f32 {
+    0.8
+}
+
+/// Validate the on-disk schema version: reject unknown majors (forward
+/// incompatible), accept same/older and migrate via serde defaults.
+fn check_project_version(version: &str) -> anyhow::Result<()> {
+    let parse = |v: &str| -> Option<(u64, u64, u64)> {
+        let mut it = v.split('.');
+        Some((
+            it.next()?.parse().ok()?,
+            it.next()?.parse().ok()?,
+            it.next()?.parse().ok()?,
+        ))
+    };
+    let (cur_maj, _, _) = parse(PROJECT_VERSION).unwrap_or((1, 1, 0));
+    match parse(version) {
+        Some((maj, _, _)) if maj == cur_maj => Ok(()),
+        Some((maj, _, _)) => Err(anyhow::anyhow!(
+            "Project major version {maj} != supported {cur_maj} (got {version})"
+        )),
+        None => Err(anyhow::anyhow!("Unparseable project version: {version}")),
+    }
 }
 
 impl From<&AppState> for Project {

@@ -27,17 +27,31 @@ impl MidiNoteUtils {
         format!("{}{}", note, octave)
     }
 
-    /// Parse note name to MIDI note number (e.g., "C4" -> 60)
+    /// Parse note name to MIDI note number (e.g., "C4" -> 60).
+    /// Returns `None` for empty, non-ASCII, or otherwise malformed input
+    /// instead of panicking on string slicing.
     pub fn from_name(name: &str) -> Option<u8> {
         let name = name.trim().to_uppercase();
+        if name.is_empty() || !name.is_ascii() {
+            return None;
+        }
 
-        // Extract note and octave
-        let (note_part, octave_part) = if name.contains('#') {
-            let idx = name.find('#')? + 1;
-            (&name[..idx], &name[idx..])
+        let (note_part, octave_part) = if let Some(hash) = name.find('#') {
+            if !name.is_char_boundary(hash + 1) {
+                return None;
+            }
+            (name.get(..hash + 1)?, name.get(hash + 1..)?)
         } else {
-            (&name[..1], &name[1..])
+            let first = name.chars().next()?;
+            if !matches!(first, 'A'..='G') {
+                return None;
+            }
+            let split = first.len_utf8();
+            (name.get(..split)?, name.get(split..)?)
         };
+        if octave_part.is_empty() {
+            return None;
+        }
 
         let note_offset = match note_part {
             "C" => 0,

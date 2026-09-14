@@ -306,6 +306,8 @@ impl LV2PluginInstance {
             .run_with_ports(len, ports)
             .map_err(|e| anyhow!("[LV2] run() error: {}", e));
 
+        // NOTE: update_ui forwards control values to the editor via
+        // port_event (Send+Sync FFI handle in yeli).
         if let Some(ref ui) = self.active_ui {
             self.update_ui(ui);
         }

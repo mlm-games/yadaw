@@ -6,7 +6,7 @@ use actions::{ActionContext, AppAction};
 use gestures::{GestureAction, GestureRecognizer};
 use shortcuts::ShortcutRegistry;
 
-use egui::{Context, Key};
+use egui::{Context, Key, Modifiers};
 
 pub struct InputManager {
     shortcuts: ShortcutRegistry,
@@ -58,28 +58,37 @@ impl InputManager {
         let mut actions = Vec::new();
         let modifiers = ctx.input(|i| i.modifiers);
 
-        // Keyboard shortcuts
-        for (&action, bindings) in &self.shortcuts.bindings {
-            // Check if action is valid in current context
-            if !action.contexts().contains(&self.current_context)
-                && !action.contexts().contains(&ActionContext::Global)
-            {
-                continue;
-            }
-
-            for bind in bindings {
-                let key: Key = bind.key.into();
-
-                // Check if key was pressed this frame
-                let key_pressed = ctx.input(|i| i.key_pressed(key));
-                if !key_pressed {
-                    continue;
+        use std::collections::HashSet;
+        let mut fired_actions: HashSet<AppAction> = HashSet::new();
+        let pressed: Vec<(Key, Modifiers)> = ctx.input(|i| {
+            let mut out = Vec::new();
+            let mut seen_keys: HashSet<Key> = HashSet::new();
+            for binds in self.shortcuts.bindings.values() {
+                for bind in binds {
+                    let key: Key = bind.key.into();
+                    if seen_keys.insert(key) && i.key_pressed(key) {
+                        out.push((key, i.modifiers));
+                    }
                 }
-
-                // Check modifiers match exactly
-                if bind.modifiers_match(&modifiers) {
-                    actions.push(action);
-                    break;
+            }
+            out
+        });
+        let _ = modifiers;
+        for (key, mods) in pressed {
+            if let Ok(code) = crate::input::shortcuts::KeyCode::try_from(key) {
+                let bind = crate::input::shortcuts::Keybind {
+                    modifiers: crate::input::shortcuts::ModifierSet::from(mods),
+                    key: code,
+                };
+                if let Some(action) = self.shortcuts.get_action(&bind) {
+                    if !action.contexts().contains(&self.current_context)
+                        && !action.contexts().contains(&ActionContext::Global)
+                    {
+                        continue;
+                    }
+                    if fired_actions.insert(action) {
+                        actions.push(action);
+                    }
                 }
             }
         }

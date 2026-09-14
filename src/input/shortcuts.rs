@@ -596,9 +596,8 @@ impl ShortcutRegistry {
         reg.bind(Record, Keybind::none(R));
         reg.bind(GoToStart, Keybind::none(Home));
         reg.bind(Rewind, Keybind::none(J));
-        reg.bind(FastForward, Keybind::none(L));
-        reg.bind(Rewind, Keybind::none(Comma));
         reg.bind(FastForward, Keybind::none(K));
+        reg.bind(Rewind, Keybind::none(Comma));
 
         reg.bind(Undo, Keybind::cmd(Z));
         reg.bind(Redo, Keybind::cmd_shift(Z));
@@ -671,9 +670,22 @@ impl ShortcutRegistry {
         reg
     }
 
-    /// Add a binding (allows duplicates)
+    /// Add a binding, evicting any identical keybind from other actions.
+    /// A physical keypress must map to exactly one action; without this,
+    /// `poll_actions` fires every action sharing the key (e.g. plain `L`
+    /// bound to both FastForward and ToggleLoop).
     pub fn bind(&mut self, action: AppAction, keybind: Keybind) {
-        self.bindings.entry(action).or_default().push(keybind);
+        if let Some(prev) = self.keybind_to_action.get(&keybind).copied() {
+            if prev != action {
+                if let Some(binds) = self.bindings.get_mut(&prev) {
+                    binds.retain(|b| *b != keybind);
+                }
+            }
+        }
+        let binds = self.bindings.entry(action).or_default();
+        if !binds.contains(&keybind) {
+            binds.push(keybind);
+        }
         self.keybind_to_action.insert(keybind, action);
     }
 

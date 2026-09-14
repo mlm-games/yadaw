@@ -479,17 +479,11 @@ fn process_command(
         AudioCommand::LoadPluginPreset(track_id, plugin_idx, name) => {
             use crate::presets::load_preset;
 
-            {
-                let snapshot = app_state.lock_sync().snapshot();
-                let _ = ui_tx.send_sync(UIUpdate::PushUndo(snapshot));
-            }
-
-            let (_uri, plugin_id, params_to_update) = {
+            let (plugin_id, params_to_update) = {
                 let mut state = app_state.lock_sync();
-                let (uri, plugin_id) = if let Some(track) = state.tracks.get_mut(&track_id) {
+                let plugin_id = if let Some(track) = state.tracks.get(&track_id) {
                     if plugin_idx < track.plugin_chain.len() {
-                        let desc = &track.plugin_chain[plugin_idx];
-                        (desc.uri.clone(), desc.id)
+                        track.plugin_chain[plugin_idx].id
                     } else {
                         let _ = ui_tx.send_sync(UIUpdate::Warning(format!(
                             "Invalid plugin index {} on track {}",
@@ -503,6 +497,12 @@ fn process_command(
                     return;
                 };
 
+                let uri = state
+                    .tracks
+                    .get(&track_id)
+                    .and_then(|t| t.plugin_chain.get(plugin_idx))
+                    .map(|d| d.uri.clone())
+                    .unwrap_or_default();
                 let preset = match load_preset(&uri, &name) {
                     Ok(p) => p,
                     Err(e) => {
@@ -514,6 +514,7 @@ fn process_command(
                     }
                 };
 
+                let undo = state.snapshot();
                 if let Some(track) = state.tracks.get_mut(&track_id) {
                     if let Some(desc) = track.plugin_chain.get_mut(plugin_idx) {
                         for (k, v) in &preset.params {
@@ -522,9 +523,10 @@ fn process_command(
                         desc.preset_name = Some(name.clone());
                     }
                 }
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
 
                 let params_to_update = preset.params.clone();
-                (uri, plugin_id, params_to_update)
+                (plugin_id, params_to_update)
             };
 
             for (param_name, value) in params_to_update {
@@ -1307,7 +1309,10 @@ fn process_command(
                     _ => None,
                 })
                 .map(|clip| state.resolve_midi_clip_notes(&clip));
-            if let Some(notes) = resolved {
+            if let Some(mut notes) = resolved {
+                for n in &mut notes {
+                    n.id = idgen::next();
+                }
                 if let Some((track, loc)) = state.find_clip_mut(clip_id) {
                     if let ClipLocation::Midi(idx) = loc {
                         if let Some(clip) = track.midi_clips.get_mut(idx) {
@@ -1346,8 +1351,6 @@ fn process_command(
         }
         AudioCommand::DuplicateMidiClipAsAlias { clip_id } => {
             let mut state = app_state.lock_sync();
-
-            let _ = ui_tx.send_sync(UIUpdate::PushUndo(state.snapshot()));
 
             let (src_clip, src_pid, track_id) = {
                 let (track, loc) = match state.find_clip(clip_id) {
@@ -1414,6 +1417,7 @@ fn process_command(
             dup.name = format!("{} (alias)", dup.name);
             dup.notes.clear(); // pattern is the source of truth
 
+            let undo = state.snapshot();
             if let Some(track) = state.tracks.get_mut(&track_id) {
                 track.midi_clips.push(dup.clone());
                 state.clips_by_id.insert(
@@ -1423,6 +1427,7 @@ fn process_command(
                         is_midi: true,
                     },
                 );
+                let _ = ui_tx.send_sync(UIUpdate::PushUndo(undo));
             }
 
             state.ensure_ids();
@@ -1943,7 +1948,7 @@ fn process_command(
             };
 
             let split_rel = position - clip.start_beat;
-            if split_rel <= 0.0 || split_rel >= clip.length_beats {
+            if !position.is_finite() || split_rel <= 0.0 || split_rel >= clip.length_beats {
                 return;
             }
 
@@ -1989,14 +1994,13 @@ fn process_command(
                 }
             }
 
-            // Assign new IDs to right half duplicates
+            for n in &mut left_notes {
+                n.id = idgen::next();
+            }
             for n in &mut right_notes {
-                if n.id == 0 {
-                    n.id = idgen::next();
-                }
+                n.id = idgen::next();
             }
 
-            // Build two new clips; ensure pattern isolation to avoid alias bleed
             let mut left = clip.clone();
             left.length_beats = split_rel;
 
@@ -2284,6 +2288,19 @@ fn process_command(
                             r.start = 0.0;
                             r.duration = (e - right_rel).max(1e-6);
                             right_notes.push(r);
+                        } else {
+                            if s < left_rel {
+                                let mut l = n;
+                                l.duration = (left_rel - s).max(1e-6);
+                                left_notes.push(l);
+                            } else {
+                                let mut r = n;
+                                let cut = (right_rel - s).max(0.0);
+                                r.id = idgen::next();
+                                r.start = 0.0;
+                                r.duration = (e - s - cut).max(1e-6);
+                                right_notes.push(r);
+                            }
                         }
                     }
                     let left_pid = idgen::next();

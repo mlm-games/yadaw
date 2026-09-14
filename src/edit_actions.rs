@@ -169,9 +169,13 @@ impl EditProcessor {
     }
 
     pub fn quantize_notes(notes: &mut Vec<MidiNote>, grid: f64, strength: f32) {
+        if !grid.is_finite() || grid <= 0.0 {
+            return;
+        }
+        let strength = (strength as f64).clamp(0.0, 1.0);
         for n in notes.iter_mut() {
             let q = (n.start / grid).round() * grid;
-            n.start = n.start + (q - n.start) * strength as f64;
+            n.start = n.start + (q - n.start) * strength;
         }
         notes.sort_by(|a, b| {
             a.start

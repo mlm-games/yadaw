@@ -44,11 +44,25 @@ fn now_secs() -> f64 {
 use yadaw_plugin_api::PluginInstance as UnifiedInstance;
 
 type PluginInstanceHandle = (usize, u64);
+
+/// Shared plugin instance handle.
+///
+/// Long-term RT design: the audio thread must NEVER block on a mutex. The
+/// worker installs instances and publishes them; the audio thread only takes
+/// a short `try_lock`. If the worker is mid-install/param/edit, the engine
+/// keeps rendering the previous buffer (or silence for a pending install)
+/// instead of stalling the callback.
 struct PluginCell(Arc<parking_lot::Mutex<Box<dyn UnifiedInstance>>>);
 
 impl PluginCell {
     fn lock(&self) -> parking_lot::MutexGuard<'_, Box<dyn UnifiedInstance>> {
         self.0.lock()
+    }
+
+    /// Non-blocking lock for the real-time path. Returns `None` when the
+    /// worker currently holds the instance (install / param / editor).
+    fn try_lock_rt(&self) -> Option<parking_lot::MutexGuard<'_, Box<dyn UnifiedInstance>>> {
+        self.0.try_lock()
     }
 }
 
@@ -90,6 +104,9 @@ pub struct AudioEngine {
     last_ui_meter_update: f64,
 
     free_running_samples: f64,
+    /// Plugins that failed to install before an offline render. Surfaced
+    /// by the exporter as an error instead of silent tracks.
+    offline_missing_plugins: HashSet<(u64, u64)>,
 }
 
 struct EngineScratch {
@@ -301,6 +318,7 @@ fn build_audio_callback(
 
                 if let Some(track_id) = engine.recording_state.recording_track {
                     if !engine.recording_state.accumulated_samples.is_empty() {
+                        // accumulated_samples are pushed by the input-device
                         let input_rate = engine.recording_state.input_sample_rate;
                         let input_converter =
                             TimeConverter::new(input_rate, engine.audio_state.bpm.load());
@@ -499,6 +517,7 @@ pub fn run_audio_thread(
         paused_last: false,
         last_ui_meter_update: now_secs(),
         free_running_samples: 0.0,
+        offline_missing_plugins: HashSet::new(),
     };
 
     // Start recording input thread (native only - wasm CPAL doesn't support input)
@@ -665,6 +684,7 @@ pub fn run_audio_wasm(
         paused_last: false,
         last_ui_meter_update: now_secs(),
         free_running_samples: 0.0,
+        offline_missing_plugins: HashSet::new(),
     };
 
     let audio_callback = build_audio_callback(engine, channels, updates);
@@ -778,6 +798,7 @@ impl AudioEngine {
             paused_last: false,
             last_ui_meter_update: now_secs(),
             free_running_samples: 0.0,
+            offline_missing_plugins: HashSet::new(),
         };
 
         for track_snapshot in initial_tracks {
@@ -795,6 +816,12 @@ impl AudioEngine {
         Ok(engine)
     }
 
+    /// Drain the offline missing-plugin set (non-empty when installs timed
+    /// out). The exporter turns this into an error instead of silent audio.
+    pub fn take_offline_missing(&mut self) -> HashSet<(u64, u64)> {
+        std::mem::take(&mut self.offline_missing_plugins)
+    }
+
     fn wait_offline_installs(&mut self, tracks: &[TrackSnapshot]) {
         let mut expected: HashSet<(u64, u64)> = tracks
             .iter()
@@ -804,7 +831,7 @@ impl AudioEngine {
                     .map(move |p| (t.track_id, p.plugin_id))
             })
             .collect();
-        let deadline = web_time::Instant::now() + web_time::Duration::from_millis(1500);
+        let deadline = web_time::Instant::now() + web_time::Duration::from_secs(15);
 
         while !expected.is_empty() && web_time::Instant::now() < deadline {
             match self
@@ -830,6 +857,7 @@ impl AudioEngine {
                 expected.len()
             );
         }
+        self.offline_missing_plugins = expected;
     }
 
     fn full_sync_for_offline_setup(&mut self, tracks: &[TrackSnapshot]) {
@@ -872,13 +900,20 @@ impl AudioEngine {
                         bypass: plugin_snapshot.bypass,
                         param_name_to_key,
                     },
-                    None => PluginProcessorUnified {
-                        rt_instance_id: None,
-                        backend: plugin_snapshot.backend,
-                        uri: plugin_snapshot.uri.clone(),
-                        bypass: true,
-                        param_name_to_key: HashMap::new(),
-                    },
+                    None => {
+                        log::warn!(
+                            "Offline render: plugin '{}' on track {} missing; bypassing",
+                            plugin_snapshot.uri,
+                            track_id,
+                        );
+                        PluginProcessorUnified {
+                            rt_instance_id: None,
+                            backend: plugin_snapshot.backend,
+                            uri: plugin_snapshot.uri.clone(),
+                            bypass: true,
+                            param_name_to_key: HashMap::new(),
+                        }
+                    }
                 };
                 proc.plugins.insert(plugin_id, plugin_processor);
                 proc.plugin_order.push(plugin_id);
@@ -975,7 +1010,9 @@ impl AudioEngine {
                             let Some(key) = key else { return };
 
                             if let Some(cell) = self.plugin_instances.get(&handle) {
-                                cell.lock().set_param(&key, value);
+                                if let Some(mut g) = cell.try_lock_rt() {
+                                    g.set_param(&key, value);
+                                }
                             }
                         }
                     }
@@ -992,7 +1029,7 @@ impl AudioEngine {
                     .entry(track_id)
                     .or_insert_with(|| TrackProcessor::new());
 
-                // Feed plugins (first active plugin will receive these)
+                let now_samples = self.audio_state.get_position();
                 proc.rt_midi_events.push(RtMidiEvent {
                     status,
                     data1,
@@ -1015,7 +1052,7 @@ impl AudioEngine {
                                 channel: ch,
                                 pitch: data1,
                                 velocity: data2,
-                                start_sample: self.free_running_samples,
+                                start_sample: now_samples,
                             });
                         }
                         if !proc.plugin_active_notes.contains(&(ch, data1)) {
@@ -1289,16 +1326,12 @@ impl AudioEngine {
 
         while frames_processed < num_frames {
             if loop_active && current_position >= loop_end_samp {
-                let loop_len = (loop_end_samp - loop_start_samp).max(1.0);
-                current_position =
-                    loop_start_samp + ((current_position - loop_start_samp) % loop_len);
-                for processor in self.track_processors.values_mut() {
-                    processor.active_notes.clear();
-                    processor.plugin_active_notes.clear();
-                    processor
-                        .pending_note_offs
-                        .retain(|&(_, _, abs)| abs < converter.samples_to_beats(loop_end_samp));
-                }
+                current_position = self.wrap_loop_position(
+                    current_position,
+                    loop_start_samp,
+                    loop_end_samp,
+                    &converter,
+                );
             }
             let block_start_samples = current_position;
 
@@ -1318,21 +1351,12 @@ impl AudioEngine {
                 .min(frames_to_loop_end);
 
             if loop_active && frames_to_process == 0 {
-                current_position = loop_start_samp;
-                for processor in self.track_processors.values_mut() {
-                    for &(ch, key) in &processor.plugin_active_notes {
-                        processor.pending_note_offs.push((
-                            ch,
-                            key,
-                            converter.samples_to_beats(current_position),
-                        ));
-                    }
-                    processor.plugin_active_notes.clear();
-                    processor.active_notes.clear();
-                    processor
-                        .pending_note_offs
-                        .retain(|&(_, _, abs)| abs < converter.samples_to_beats(loop_end_samp));
-                }
+                current_position = self.wrap_loop_position(
+                    current_position.max(loop_end_samp),
+                    loop_start_samp,
+                    loop_end_samp,
+                    &converter,
+                );
                 continue;
             }
             if frames_to_process == 0 {
@@ -1719,21 +1743,12 @@ impl AudioEngine {
             frames_processed += frames_to_process;
 
             if loop_active && current_position >= loop_end_samp {
-                current_position = loop_start_samp;
-                for processor in self.track_processors.values_mut() {
-                    for &(ch, key) in &processor.plugin_active_notes {
-                        processor.pending_note_offs.push((
-                            ch,
-                            key,
-                            converter.samples_to_beats(current_position),
-                        ));
-                    }
-                    processor.plugin_active_notes.clear();
-                    processor.active_notes.clear();
-                    processor
-                        .pending_note_offs
-                        .retain(|&(_, _, abs)| abs < converter.samples_to_beats(loop_end_samp));
-                }
+                current_position = self.wrap_loop_position(
+                    current_position,
+                    loop_start_samp,
+                    loop_end_samp,
+                    &converter,
+                );
             }
 
             self.scratch.bus_ids = bus_ids;
@@ -1759,8 +1774,24 @@ impl AudioEngine {
     }
 
     fn midi_panic(&mut self) {
-        // Build All Notes Off + All Sound Off for channels 0..15
         for proc in self.track_processors.values_mut() {
+            for n in std::mem::take(&mut proc.active_notes) {
+                proc.rt_midi_events.push(RtMidiEvent {
+                    status: 0x80 | (n.channel & 0x0F),
+                    data1: n.pitch,
+                    data2: 0,
+                    time_frames: 0,
+                });
+            }
+            for (ch, key) in std::mem::take(&mut proc.plugin_active_notes) {
+                proc.rt_midi_events.push(RtMidiEvent {
+                    status: 0x80 | (ch & 0x0F),
+                    data1: key,
+                    data2: 0,
+                    time_frames: 0,
+                });
+            }
+            proc.pending_note_offs.clear();
             for ppu in proc.plugins.values_mut() {
                 if let Some(handle) = ppu.rt_instance_id {
                     let dl = [0.0f32; 64];
@@ -1794,17 +1825,50 @@ impl AudioEngine {
                         .collect();
                     if let Some(cell) = self.plugin_instances.get_mut(&handle) {
                         let _ = cell
-                            .lock()
-                            .process(&ctx, &inputs, &mut outputs, &panic_events);
+                            .try_lock_rt()
+                            .map(|mut g| g.process(&ctx, &inputs, &mut outputs, &panic_events));
                     }
                 }
             }
-            proc.active_notes.clear();
             proc.last_pattern_position = 0.0;
             proc.pattern_loop_count = 0;
             proc.notes_triggered_this_loop.clear();
             proc.last_block_end_samples = 0.0;
         }
+    }
+
+    /// Single loop-wrap path shared by every wrap site in `process_audio`.
+    /// Preserves overshoot (`position - loop_end`), emits note-offs for all
+    /// sounding plugin notes at the wrap point, and keeps the
+    /// `pending_note_offs` window consistent. Returns the wrapped position.
+    fn wrap_loop_position(
+        &mut self,
+        current_position: f64,
+        loop_start_samp: f64,
+        loop_end_samp: f64,
+        converter: &TimeConverter,
+    ) -> f64 {
+        let loop_len = (loop_end_samp - loop_start_samp).max(1.0);
+        let wrapped = loop_start_samp + ((current_position - loop_start_samp) % loop_len);
+        let wrap_beat = converter.samples_to_beats(wrapped);
+        let loop_end_beat = converter.samples_to_beats(loop_end_samp);
+        for processor in self.track_processors.values_mut() {
+            for &(ch, key) in &processor.plugin_active_notes {
+                if !processor
+                    .pending_note_offs
+                    .iter()
+                    .any(|&(c, k, _)| c == ch && k == key)
+                {
+                    processor.pending_note_offs.push((ch, key, wrap_beat));
+                }
+            }
+            processor.plugin_active_notes.clear();
+            processor.active_notes.clear();
+            processor
+                .pending_note_offs
+                .retain(|&(_, _, abs)| abs < loop_end_beat);
+        }
+        wrapped
     }
 
     fn apply_new_snapshot(&mut self, new_snapshot: AudioGraphSnapshot) {
@@ -1989,7 +2053,6 @@ impl AudioEngine {
 
             let Some(handle) = maybe_handle else { continue };
 
-            // Apply param updates + process the plugin under a short lock, using local buffers
             let mut out_l = vec![0.0f32; num_frames];
             let mut out_r = vec![0.0f32; num_frames];
 
@@ -2018,14 +2081,26 @@ impl AudioEngine {
             };
 
             let t0 = web_time::Instant::now();
-            let panicked = self
-                .with_plugin_mut(handle, |inst| {
-                    std::panic::catch_unwind(AssertUnwindSafe(|| {
-                        let _ = inst.process(&ctx, &inputs, &mut outputs, events_slice);
-                    }))
-                })
-                .map(|res| res.is_err())
-                .unwrap_or(false);
+            let outcome = self.with_plugin_mut(handle, |inst| {
+                std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    inst.process(&ctx, &inputs, &mut outputs, events_slice)
+                }))
+            });
+            let panicked = match outcome {
+                None => {
+                    let n = num_frames.min(out_l.len()).min(in_l.len());
+                    out_l[..n].copy_from_slice(&in_l[..n]);
+                    let n = num_frames.min(out_r.len()).min(in_r.len());
+                    out_r[..n].copy_from_slice(&in_r[..n]);
+                    false
+                }
+                Some(Err(_)) => true,
+                Some(Ok(Err(e))) => {
+                    log::warn!("Plugin '{}' process error: {}", uri, e);
+                    false
+                }
+                Some(Ok(Ok(()))) => false,
+            };
             *plugin_time_ms_accum += t0.elapsed().as_secs_f32() * 1000.0;
 
             if panicked {
@@ -2074,7 +2149,7 @@ impl AudioEngine {
         f: impl FnOnce(&mut dyn UnifiedInstance) -> R,
     ) -> Option<R> {
         let cell = self.plugin_instances.get(&handle)?;
-        let mut guard = cell.lock(); // Box<dyn UnifiedInstance>
+        let mut guard = cell.try_lock_rt()?;
         Some(f(guard.as_mut()))
     }
 }
@@ -2156,14 +2231,9 @@ fn process_midi_track(
             }
 
             for n in &clip.notes {
-                let s_loc = if clip.loop_enabled {
-                    (n.start + offset).rem_euclid(content_len)
-                } else {
-                    n.start
-                };
+                let s_loc = (n.start + offset).rem_euclid(content_len);
                 let e_loc = s_loc + n.duration;
 
-                // Same wrap split as build_block_midi_events
                 let mut parts: smallvec::SmallVec<[(f64, f64); 2]> = smallvec::smallvec![];
                 if !clip.loop_enabled || e_loc <= content_len {
                     parts.push((s_loc, e_loc));
@@ -2191,17 +2261,21 @@ fn process_midi_track(
     }
 
     let eff0 = beat_at(block_start);
-    let mut desired: HashSet<u8> = HashSet::new();
+    let mut desired: HashSet<(u8, u8)> = HashSet::new();
     for &(pitch, _, s_samp, e_samp) in &segs {
         let sb = converter.samples_to_beats(s_samp);
         let eb = converter.samples_to_beats(e_samp);
         if sb <= eff0 && eff0 < eb {
-            desired.insert(pitch);
+            desired.insert((0, pitch));
         }
     }
-    processor
-        .active_notes
-        .retain(|n| n.channel == 0 && desired.contains(&n.pitch));
+    processor.active_notes.retain(|n| {
+        if n.channel != 0 {
+            !desired.contains(&(0, n.pitch))
+        } else {
+            desired.contains(&(n.channel, n.pitch))
+        }
+    });
     for &(pitch, vel, s_samp, e_samp) in &segs {
         let sb = converter.samples_to_beats(s_samp);
         let eb = converter.samples_to_beats(e_samp);
@@ -2238,7 +2312,7 @@ fn process_midi_track(
             let t = block_start + i as f64;
             let mut sample = 0.0f32;
             for &(pitch, vel, s_samp, e_samp) in &segs {
-                if s_samp > block_start && t >= s_samp && t < e_samp {
+                if s_samp >= block_start && t >= s_samp && t < e_samp {
                     sample += generate_sine_for_note(pitch, vel, t - s_samp, sample_rate);
                 }
             }
