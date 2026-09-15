@@ -1,8 +1,7 @@
 name: Publish to AUR
 
 # Thin dispatcher: rust-app-release dispatches here with version_name,
-# we delegate to the shared reusable (desktop entry + icon included).
-# Desktop Categories/MimeType taken from others/flathub/io.github.mlm_games.yadaw.desktop.
+# we delegate to the shared reusable. .desktop comes from the flathub file.
 on:
   workflow_dispatch:
     inputs:
@@ -24,10 +23,7 @@ jobs:
       optdepends: "'pipewire-pulse: for PipeWire audio support' 'pulseaudio: for PulseAudio audio support'"
       provides: "yadaw clap-host lv2-host"
       conflicts: "yadaw"
-      desktop-comment: "Lightweight mini-DAW for sound design and prototyping with LV2/CLAP plugin support"
-      desktop-categories: "AudioVideo;Audio;Music;Sequencer;Midi;"
-      desktop-mime-type: "audio/midi;audio/x-midi;audio/wav;audio/x-wav;audio/flac;audio/mpeg;audio/ogg;"
-      desktop-args: "%F"
+      desktop-file-path: "others/flathub/io.github.mlm_games.yadaw.desktop"
       icon-url: "https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/icon.png"
       version: ${{ inputs.version_name }}
       maintainer-name: "MLM-stuff"
