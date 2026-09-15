@@ -126,6 +126,8 @@ jobs:
 
       - name: Set up Android SDK/NDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Install Android platforms and NDK
         run: |
