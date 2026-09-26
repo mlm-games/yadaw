@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use egui::scroll_area::ScrollSource;
+
 use super::*;
 use crate::audio_utils::{format_pan, linear_to_db};
 use crate::level_meter::LevelMeter;
@@ -50,16 +52,14 @@ impl TracksPanel {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.heading("Tracks");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.toggle_value(&mut self.show_mixer_strip, "☰")
-                    .on_hover_text("Show/Hide Mixer Strip");
-                ui.toggle_value(&mut self.show_automation_buttons, "〰")
-                    .on_hover_text("Show/Hide Automation");
-                ui.toggle_value(&mut self.show_inputs, "🔣")
-                    .on_hover_text("Show/Hide Input Options");
-            });
+            ui.toggle_value(&mut self.show_mixer_strip, "☰")
+                .on_hover_text("Show/Hide Mixer Strip");
+            ui.toggle_value(&mut self.show_automation_buttons, "〰")
+                .on_hover_text("Show/Hide Automation");
+            ui.toggle_value(&mut self.show_inputs, "🔣")
+                .on_hover_text("Show/Hide Input Options");
         });
 
         ui.separator();
@@ -71,17 +71,22 @@ impl TracksPanel {
             });
 
         ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("➕ Audio Track").clicked() {
-                app.add_audio_track();
-            }
-            if ui.button("➕ MIDI Track").clicked() {
-                app.add_midi_track();
-            }
-            if ui.button("➕ Bus").clicked() {
-                app.add_bus_track();
-            }
-        });
+        egui::ScrollArea::horizontal()
+            .id_salt("tracks_add_row")
+            .scroll_source(ScrollSource::ALL)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("➕ Audio Track").clicked() {
+                        app.add_audio_track();
+                    }
+                    if ui.button("➕ MIDI Track").clicked() {
+                        app.add_midi_track();
+                    }
+                    if ui.button("➕ Bus").clicked() {
+                        app.add_bus_track();
+                    }
+                });
+            });
     }
 
     fn draw_track_list(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {

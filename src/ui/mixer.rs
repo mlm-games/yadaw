@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use egui::scroll_area::ScrollSource;
+
 use crate::{level_meter::LevelMeter, model::track::TrackType};
 
 pub struct MixerWindow {
@@ -109,42 +111,47 @@ impl MixerWindow {
     }
 
     fn draw_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("View:");
+        egui::ScrollArea::horizontal()
+            .id_salt("mx_tool_strip")
+            .scroll_source(ScrollSource::ALL)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("View:");
 
-            ui.toggle_value(&mut self.show_eq, "EQ")
-                .on_hover_text("Show/Hide EQ Section");
+                    ui.toggle_value(&mut self.show_eq, "EQ")
+                        .on_hover_text("Show/Hide EQ Section");
 
-            ui.toggle_value(&mut self.show_sends, "Sends")
-                .on_hover_text("Show/Hide Sends");
+                    ui.toggle_value(&mut self.show_sends, "Sends")
+                        .on_hover_text("Show/Hide Sends");
 
-            ui.toggle_value(&mut self.show_inserts, "Inserts")
-                .on_hover_text("Show/Hide Insert Effects");
+                    ui.toggle_value(&mut self.show_inserts, "Inserts")
+                        .on_hover_text("Show/Hide Insert Effects");
 
-            ui.separator();
+                    ui.separator();
 
-            ui.toggle_value(&mut self.narrow_strips, "Narrow")
-                .on_hover_text("Use Narrow Channel Strips");
+                    ui.toggle_value(&mut self.narrow_strips, "Narrow")
+                        .on_hover_text("Use Narrow Channel Strips");
 
-            if self.narrow_strips {
-                self.strip_width = self.min_strip_width;
-            } else {
-                ui.add(
-                    egui::Slider::new(
-                        &mut self.strip_width,
-                        self.min_strip_width..=self.max_strip_width,
-                    )
-                    .text("Width")
-                    .show_value(false),
-                );
-            }
+                    if self.narrow_strips {
+                        self.strip_width = self.min_strip_width;
+                    } else {
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.strip_width,
+                                self.min_strip_width..=self.max_strip_width,
+                            )
+                            .text("Width")
+                            .show_value(false),
+                        );
+                    }
 
-            ui.separator();
+                    ui.separator();
 
-            if ui.button("Reset All").clicked() {
-                // Reset all mixer settings
-            }
-        });
+                    if ui.button("Reset All").clicked() {
+                        // Reset all mixer settings
+                    }
+                });
+            });
     }
 
     fn draw_mixer_channels(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {

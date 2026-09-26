@@ -154,7 +154,7 @@ impl TimelineView {
     fn draw_toolbar(&mut self, ui: &mut egui::Ui, _app: &super::app::YadawApp) {
         egui::ScrollArea::horizontal()
             .id_salt("tl_tool_strip")
-            .scroll_source(ScrollSource::MOUSE_WHEEL)
+            .scroll_source(ScrollSource::ALL)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Zoom:");
