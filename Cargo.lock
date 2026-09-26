@@ -6273,7 +6273,7 @@ dependencies = [
 
 [[package]]
 name = "yadaw-plugin-api"
-version = "0.1.1"
+version = "0.10.8"
 dependencies = [
  "anyhow",
  "serde",
@@ -6281,7 +6281,7 @@ dependencies = [
 
 [[package]]
 name = "yadaw-plugin-host"
-version = "0.1.1"
+version = "0.10.8"
 dependencies = [
  "anyhow",
  "clack-extensions",
