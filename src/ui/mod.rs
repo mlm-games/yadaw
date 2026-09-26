@@ -8,6 +8,7 @@ mod piano_roll;
 mod piano_roll_view;
 mod theme;
 mod timeline;
+mod touch_gesture;
 mod tracks;
 mod transport;
 mod waveform;

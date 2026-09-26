@@ -104,7 +104,7 @@ impl PianoRollView {
                 },
             );
 
-            self.handle_touch_pan_zoom(ui.ctx(), roll_rect, "roll");
+            self.handle_touch_pan_zoom(ui.ctx(), roll_rect);
 
             // Velocity lane
             if self.show_velocity_lane {
@@ -653,76 +653,27 @@ impl PianoRollView {
         }
     }
 
-    fn handle_touch_pan_zoom(&mut self, ctx: &egui::Context, region: egui::Rect, id_salt: &str) {
-        let id_centroid = egui::Id::new(("pr_gesture", id_salt, "centroid"));
-        let id_dist = egui::Id::new(("pr_gesture", id_salt, "dist"));
-
-        //NOTE: On Android a single frame may contain multiple Event::Touch entries
-        let mut seen: std::collections::HashMap<u64, egui::Pos2> = ctx.input(|i| {
-            let mut map = std::collections::HashMap::new();
-            for e in &i.events {
-                if let egui::Event::Touch { id, pos, phase, .. } = e {
-                    matches!(phase, egui::TouchPhase::Start | egui::TouchPhase::Move).then(|| {
-                        if region.contains(*pos) {
-                            map.insert(id.0, *pos);
-                        }
-                    });
-                }
-            }
-            map
-        });
-
-        // Two-finger pinch/pan requires at least two distinct touch points.
-        if seen.len() < 2 {
-            ctx.memory_mut(|m| {
-                m.data.remove::<egui::Pos2>(id_centroid);
-                m.data.remove::<f32>(id_dist);
-            });
+    fn handle_touch_pan_zoom(&mut self, ctx: &egui::Context, region: egui::Rect) {
+        let Some((delta, scale, centroid)) =
+            super::touch_gesture::two_finger(ctx, region, "pr_roll")
+        else {
             return;
-        }
+        };
 
-        // Pop two arbitrary points for the centroid / distance calculation.
-        let p1 = seen.values().next().copied().unwrap();
-        seen.remove(&seen.keys().next().copied().unwrap());
-        let p2 = seen.values().next().copied().unwrap();
+        self.piano_roll.scroll_x = (self.piano_roll.scroll_x - delta.x).max(0.0);
+        self.piano_roll.scroll_y = (self.piano_roll.scroll_y - delta.y).max(0.0);
 
-        let centroid = egui::pos2((p1.x + p2.x) * 0.5, (p1.y + p2.y) * 0.5);
-        let dist = (p1 - p2).length();
+        if (scale - 1.0).abs() > f32::EPSILON {
+            let old_zoom_x = self.piano_roll.zoom_x;
+            self.piano_roll.zoom_x = (self.piano_roll.zoom_x * scale).clamp(10.0, 500.0);
 
-        let (prev_centroid, prev_dist) = ctx.memory(|m| {
-            (
-                m.data.get_temp::<egui::Pos2>(id_centroid),
-                m.data.get_temp::<f32>(id_dist),
-            )
-        });
-
-        if let (Some(pc), Some(pd)) = (prev_centroid, prev_dist) {
-            // Pan by delta in region space
-            let delta = centroid - pc;
-            self.piano_roll.scroll_x = (self.piano_roll.scroll_x - delta.x).max(0.0);
-            if id_salt == "roll" {
-                self.piano_roll.scroll_y = (self.piano_roll.scroll_y - delta.y).max(0.0);
-            }
-
-            // Pinch zoom horizontally around centroid/
-            if pd > 1.0 {
-                let scale = (dist / pd).clamp(0.5, 2.0);
-                let old_zoom_x = self.piano_roll.zoom_x;
-                self.piano_roll.zoom_x = (self.piano_roll.zoom_x * scale).clamp(10.0, 500.0);
-
-                if (self.piano_roll.zoom_x - old_zoom_x).abs() > f32::EPSILON {
-                    let grid_left = region.left() + crate::constants::PIANO_KEY_WIDTH;
-                    let cx = (centroid.x - grid_left + self.piano_roll.scroll_x) / old_zoom_x;
-                    self.piano_roll.scroll_x =
-                        (cx * self.piano_roll.zoom_x - (centroid.x - grid_left)).max(0.0);
-                }
+            if (self.piano_roll.zoom_x - old_zoom_x).abs() > f32::EPSILON {
+                let grid_left = region.left() + crate::constants::PIANO_KEY_WIDTH;
+                let cx = (centroid.x - grid_left + self.piano_roll.scroll_x) / old_zoom_x;
+                self.piano_roll.scroll_x =
+                    (cx * self.piano_roll.zoom_x - (centroid.x - grid_left)).max(0.0);
             }
         }
-
-        ctx.memory_mut(|m| {
-            m.data.insert_temp(id_centroid, centroid);
-            m.data.insert_temp(id_dist, dist);
-        });
     }
 
     pub fn copy_selected_notes(

@@ -85,12 +85,9 @@ impl GestureRecognizer {
                 actions.push(gesture);
             }
         }
-        // Single-touch gestures
+        // Single-touch gestures. Deliberately no single-touch pan: views reserve
+        // one finger for editing, so panning is two-finger only.
         else if self.touch_points.len() == 1 {
-            if let Some(gesture) = self.detect_pan() {
-                actions.push(gesture);
-            }
-
             // Check for long press
             if let Some(gesture) = self.detect_long_press() {
                 actions.push(gesture);

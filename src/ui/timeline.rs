@@ -151,6 +151,32 @@ impl TimelineView {
         }
     }
 
+    /// Two-finger pan and pinch-zoom over the timeline body, for touch screens
+    /// where there is no wheel and one-finger drags are reserved for clip editing.
+    fn handle_touch_pan_zoom(&mut self, ctx: &egui::Context, region: egui::Rect) {
+        let Some((delta, scale, centroid)) =
+            super::touch_gesture::two_finger(ctx, region, "tl_body")
+        else {
+            return;
+        };
+
+        self.scroll_x = (self.scroll_x - delta.x).max(0.0);
+
+        if (scale - 1.0).abs() > f32::EPSILON {
+            let old_zoom_x = self.zoom_x;
+            self.zoom_x = (self.zoom_x * scale).clamp(10.0, 500.0);
+
+            if (self.zoom_x - old_zoom_x).abs() > f32::EPSILON {
+                // Keep the beat under the centroid pinned while zooming.
+                let beat = (centroid.x - region.left() + self.scroll_x) / old_zoom_x;
+                self.scroll_x = (beat * self.zoom_x - (centroid.x - region.left())).max(0.0);
+            }
+        }
+
+        // A second finger means this is navigation, not a clip edit.
+        self.timeline_interaction = None;
+    }
+
     fn draw_toolbar(&mut self, ui: &mut egui::Ui, _app: &super::app::YadawApp) {
         egui::ScrollArea::horizontal()
             .id_salt("tl_tool_strip")
@@ -291,6 +317,8 @@ impl TimelineView {
                 self.zoom_horiz_around(response.rect, anchor_x, factor);
             }
         }
+
+        self.handle_touch_pan_zoom(ui.ctx(), response.rect);
 
         // Hand-pan with spacebar
         if response.dragged() && ui.input(|i| i.key_down(egui::Key::Space)) {
