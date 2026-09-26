@@ -410,6 +410,8 @@ impl AppState {
         self.patterns = patterns;
         self.groups = groups;
 
+        self.project_name = project.name.clone();
+
         self.bpm = if project.bpm.is_finite() && project.bpm > 0.0 {
             project.bpm
         } else {

@@ -71,9 +71,9 @@ pub fn validate_plugin_uri(backend: BackendKind, uri: &str) -> Result<String> {
             Ok(uri.to_string())
         }
         BackendKind::Clap => {
-            let (path, id) = uri.split_once('#').ok_or_else(|| {
-                anyhow!("CLAP URI must be file:///.../lib#plugin_id, got: {uri}")
-            })?;
+            let (path, id) = uri
+                .split_once('#')
+                .ok_or_else(|| anyhow!("CLAP URI must be file:///.../lib#plugin_id, got: {uri}"))?;
             if id.is_empty() {
                 return Err(anyhow!("CLAP URI has empty plugin id: {uri}"));
             }

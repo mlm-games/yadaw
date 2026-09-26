@@ -78,17 +78,9 @@ pub async fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
         .await
 }
 #[cfg(target_os = "android")]
-use android_activity::WindowManagerFlags;
-
-#[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: android_activity::AndroidApp) {
     use android_activity::AndroidApp;
-
-    app.set_window_flags(
-        WindowManagerFlags::FULLSCREEN | WindowManagerFlags::LAYOUT_NO_LIMITS,
-        WindowManagerFlags::empty(),
-    );
 
     // Initialize Android logging
     android_logger::init_once(
@@ -98,6 +90,8 @@ fn android_main(app: android_activity::AndroidApp) {
     );
 
     log::info!("Starting YADAW on Android...");
+
+    rlobkit_app_events::system_bars::set_immersive_sticky(true);
 
     if let Ok(home) = crate::android_saf::files_dir_path() {
         unsafe {
