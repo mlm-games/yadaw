@@ -1,0 +1,4 @@
+- use rlobkit's immersive sticky flag for #13
+- ci(aur): take .desktop from flathub file
+- fix: setup-android packages '' (legacy tools pkg removed)
+- fix(ci): handle single quotes in pin extraction
