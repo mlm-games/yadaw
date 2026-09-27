@@ -12,6 +12,8 @@ pub struct TransportUI {
     pub loop_end_input: String,
     pub bpm_input: String,
     position_display: String,
+    selected_marker: Option<u64>,
+    marker_name_input: String,
 }
 
 impl TransportUI {
@@ -26,6 +28,8 @@ impl TransportUI {
             loop_end_input: format!("{:.1}", loop_end),
             bpm_input: format!("{:.1}", bpm),
             position_display: "1.1.1".to_string(),
+            selected_marker: None,
+            marker_name_input: String::new(),
         }
     }
 
@@ -275,9 +279,81 @@ impl TransportUI {
                                     format!("{:.1}", app.audio_state.loop_end.load());
                             }
                         }
+
+                        ui.separator();
+
+                        self.show_markers(ui, app);
                     });
                 });
         });
+    }
+
+    fn show_markers(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
+        let markers = app.state.lock_sync().markers.clone();
+        let bpm = f64::from(app.audio_state.bpm.load());
+        let sample_rate = f64::from(app.audio_state.sample_rate.load());
+
+        // Resolved up front so a marker deleted this frame drops its controls
+        // instead of leaving a Jump that would seek to zero.
+        let selected = self
+            .selected_marker
+            .and_then(|id| markers.iter().find(|m| m.id == id))
+            .map(|m| (m.id, m.beat));
+        if selected.is_none() {
+            self.selected_marker = None;
+        }
+
+        ui.label("Markers:");
+        ui.horizontal(|ui| {
+            for marker in &markers {
+                let is_selected = self.selected_marker == Some(marker.id);
+                if ui
+                    .selectable_label(is_selected, &marker.name)
+                    .on_hover_text("Select to rename or jump")
+                    .clicked()
+                {
+                    self.selected_marker = Some(marker.id);
+                    self.marker_name_input = marker.name.clone();
+                }
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Delete Marker")
+                    .clicked()
+                {
+                    app.push_undo();
+                    let _ = app.command_tx.send(AudioCommand::RemoveMarker(marker.id));
+                }
+            }
+        });
+
+        if let Some((id, beat)) = selected {
+            let response = ui
+                .add(egui::TextEdit::singleline(&mut self.marker_name_input).desired_width(120.0));
+            if response.changed() {
+                let name = self.marker_name_input.clone();
+                let _ = app.command_tx.send(AudioCommand::RenameMarker(id, name));
+            }
+            if ui.button("⤓ Jump").clicked() {
+                let samples = (beat * 60.0 / bpm) * sample_rate;
+                if let Some(transport) = &self.transport {
+                    transport.set_position(samples);
+                } else {
+                    let _ = app.command_tx.send(AudioCommand::SetPosition(samples));
+                }
+            }
+        }
+
+        if ui.button("+ Add at Playhead").clicked() {
+            let position = self
+                .transport
+                .as_ref()
+                .map(|t| t.get_position())
+                .unwrap_or(0.0);
+            let beat = (((position / sample_rate) * (bpm / 60.0)) * 4.0).round() / 4.0;
+            let name = format!("Marker {}", markers.len() + 1);
+            app.push_undo();
+            let _ = app.command_tx.send(AudioCommand::AddMarker { beat, name });
+        }
     }
 }
 
@@ -289,6 +365,8 @@ impl Default for TransportUI {
             loop_end_input: String::new(),
             bpm_input: "120.0".to_string(),
             position_display: "1.1.000".to_string(),
+            selected_marker: None,
+            marker_name_input: String::new(),
         }
     }
 }

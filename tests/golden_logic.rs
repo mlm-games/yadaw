@@ -6,6 +6,7 @@ use yadaw::input::shortcuts::{KeyCode, Keybind, ShortcutRegistry};
 use yadaw::midi_utils::MidiNoteUtils;
 use yadaw::model::clip::{MidiClip, MidiNote, MidiPattern};
 use yadaw::model::group::TrackGroup;
+use yadaw::model::marker::Marker;
 use yadaw::model::track::{Send, Track, TrackType};
 use yadaw::project::{AppState, PROJECT_VERSION, Project};
 
@@ -67,6 +68,13 @@ fn project_fixture() -> Project {
         tracks: vec![track_a, track_b.clone(), track_b.clone()],
         patterns: vec![pattern, dup_pattern],
         groups: vec![group],
+        markers: vec![Marker {
+            id: 900,
+            beat: 8.0,
+            name: "Chorus".to_string(),
+            color: Some((241, 196, 15)),
+            comment: None,
+        }],
         bpm: 120.0,
         time_signature: (4, 4),
         sample_rate: 44100.0,
@@ -115,11 +123,16 @@ fn golden_project_lifecycle() {
         .validate_before_save()
         .expect("golden state validates");
 
+    assert_eq!(state.markers.len(), 1, "markers load from the project file");
+    assert_eq!(state.markers[0].name, "Chorus");
+
     let snap = state.snapshot();
     let victim = state.track_order[0];
     state.tracks.remove(&victim);
+    state.markers.clear();
     state.restore(snap);
     assert!(state.tracks.contains_key(&victim));
+    assert_eq!(state.markers.len(), 1, "markers take part in undo");
     state
         .validate_before_save()
         .expect("restored state validates");
@@ -135,6 +148,13 @@ fn golden_project_lifecycle() {
         .validate_before_save()
         .expect("round-tripped state validates");
     assert_eq!(reloaded.project_name, "Golden Song");
+    assert_eq!(
+        reloaded.markers.len(),
+        1,
+        "markers survive the save and load round trip"
+    );
+    assert_eq!(reloaded.markers[0].beat, 8.0);
+    assert_eq!(reloaded.markers[0].color, Some((241, 196, 15)));
 
     let mut notes = vec![note(1, 60, 0.13), note(2, 62, 0.37)];
     EditProcessor::quantize_notes(&mut notes, 0.25, 1.0);

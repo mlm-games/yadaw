@@ -4,11 +4,11 @@ use std::collections::HashMap;
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::clip::MidiPattern;
-use crate::model::{Track, TrackGroup};
+use crate::model::{Marker, Track, TrackGroup};
 use crate::time_utils::TimeConverter;
 
 /// Current on-disk project schema version.
-pub const PROJECT_VERSION: &str = "1.1.0";
+pub const PROJECT_VERSION: &str = "1.2.0";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppState {
@@ -21,6 +21,8 @@ pub struct AppState {
     /// Shared MIDI patterns (for alias clips)
     pub patterns: HashMap<u64, MidiPattern>,
     pub groups: HashMap<u64, TrackGroup>,
+    /// Kept sorted by beat so the timeline can draw them in order.
+    pub markers: Vec<Marker>,
 
     pub master_volume: f32,
     pub playing: bool,
@@ -67,6 +69,7 @@ impl Default for AppState {
             clips_by_id: HashMap::new(),
             patterns: HashMap::new(),
             groups: HashMap::new(),
+            markers: Vec::new(),
             master_volume: 0.8,
             playing: false,
             recording: false,
@@ -92,6 +95,7 @@ pub struct AppStateSnapshot {
     pub master_volume: f32,
     pub patterns: HashMap<u64, MidiPattern>,
     pub groups: HashMap<u64, TrackGroup>,
+    pub markers: Vec<Marker>,
     pub bpm: f32,
     pub loop_start: f64,
     pub loop_end: f64,
@@ -111,6 +115,7 @@ impl AppState {
             track_order: self.track_order.clone(),
             patterns: self.patterns.clone(),
             groups: self.groups.clone(),
+            markers: self.markers.clone(),
             bpm: self.bpm,
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
@@ -128,6 +133,7 @@ impl AppState {
         self.track_order = snapshot.track_order;
         self.patterns = snapshot.patterns;
         self.groups = snapshot.groups;
+        self.markers = snapshot.markers;
         self.bpm = snapshot.bpm;
         self.time_signature = snapshot.time_signature;
         self.sample_rate = snapshot.sample_rate;
@@ -409,6 +415,16 @@ impl AppState {
         }
         self.patterns = patterns;
         self.groups = groups;
+        self.markers = project.markers;
+        let mut seen_marker_ids = std::collections::HashSet::new();
+        for marker in &mut self.markers {
+            if marker.id == 0 || !seen_marker_ids.insert(marker.id) {
+                marker.id = crate::idgen::next();
+                seen_marker_ids.insert(marker.id);
+            }
+        }
+        self.markers
+            .sort_by(|a, b| a.beat.total_cmp(&b.beat).then_with(|| a.id.cmp(&b.id)));
 
         self.project_name = project.name.clone();
 
@@ -448,6 +464,7 @@ impl AppState {
             tracks,
             patterns: self.patterns.values().cloned().collect(),
             groups: self.groups.values().cloned().collect(),
+            markers: self.markers.clone(),
             bpm: self.bpm,
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
@@ -537,6 +554,15 @@ impl AppState {
                 if !n.duration.is_finite() || n.duration <= 0.0 {
                     n.duration = 1e-6;
                 }
+            }
+        }
+
+        for marker in &mut self.markers {
+            if marker.id == 0 {
+                marker.id = crate::idgen::next();
+            }
+            if !marker.beat.is_finite() || marker.beat < 0.0 {
+                marker.beat = 0.0;
             }
         }
 
@@ -659,6 +685,9 @@ impl AppState {
         for (gid, _) in &self.groups {
             max_id = max_id.max(*gid);
         }
+        for marker in &self.markers {
+            max_id = max_id.max(marker.id);
+        }
         max_id
     }
 
@@ -689,6 +718,8 @@ pub struct Project {
     pub patterns: Vec<MidiPattern>,
     #[serde(default)]
     pub groups: Vec<TrackGroup>,
+    #[serde(default)]
+    pub markers: Vec<Marker>,
     #[serde(default = "default_bpm")]
     pub bpm: f32,
     #[serde(default = "default_time_sig")]

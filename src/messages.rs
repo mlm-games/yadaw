@@ -202,6 +202,13 @@ pub enum AudioCommand {
     AddTrackToGroup(u64, u64),
     RemoveTrackFromGroup(u64),
 
+    AddMarker {
+        beat: f64,
+        name: String,
+    },
+    RemoveMarker(u64),
+    RenameMarker(u64, String),
+
     ToggleClipLoop {
         clip_id: u64,
         enabled: bool,

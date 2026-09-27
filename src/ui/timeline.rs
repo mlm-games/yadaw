@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use crate::constants::{DEFAULT_MIDI_CLIP_LEN, DEFAULT_MIN_PROJECT_BEATS};
 use crate::messages::AudioCommand;
 use crate::model::track::TrackType;
-use crate::model::{AudioClip, AutomationTarget, MidiClip, MidiNote, Track};
+use crate::model::{AudioClip, AutomationTarget, Marker, MidiClip, MidiNote, Track};
 use crate::project::ClipLocation;
 use crate::ui::automation_lane::{AutomationAction, AutomationLaneWidget};
 use crate::ui::waveform::draw_waveform;
@@ -42,6 +42,9 @@ pub struct TimelineView {
     track_menu_pos: egui::Pos2,
     track_menu_track_id: Option<u64>,
     track_menu_beat: f64,
+    show_ruler_menu: bool,
+    ruler_menu_pos: egui::Pos2,
+    ruler_menu_beat: f64,
 
     track_height: f32,
     min_track_height: f32,
@@ -121,6 +124,9 @@ impl TimelineView {
             track_menu_pos: egui::Pos2::ZERO,
             track_menu_track_id: None,
             track_menu_beat: 0.0,
+            show_ruler_menu: false,
+            ruler_menu_pos: egui::Pos2::ZERO,
+            ruler_menu_beat: 0.0,
             track_height: 80.0,
             min_track_height: 40.0,
             max_track_height: 200.0,
@@ -335,6 +341,7 @@ impl TimelineView {
 
         // Draw the grid and horizontal ruler
         let rect = response.rect;
+        let markers: Vec<Marker> = app.state.lock_sync().markers.clone();
         self.draw_grid(&painter, rect, app.state.lock_sync().bpm);
 
         // loop/seek
@@ -346,6 +353,15 @@ impl TimelineView {
             ui.id().with("timeline_ruler"),
             egui::Sense::click_and_drag(),
         );
+
+        if ruler_resp.secondary_clicked()
+            && let Some(pos) = ruler_resp.interact_pointer_pos()
+        {
+            self.show_ruler_menu = true;
+            self.ruler_menu_pos = pos;
+            self.ruler_menu_beat = (self.x_to_beat(rect, pos.x) * 4.0).round() / 4.0;
+        }
+        self.draw_markers(&painter, rect, &markers);
 
         // Place each track block at cumulative Y positions
         let mut y_cursor = rect.top();
@@ -433,6 +449,58 @@ impl TimelineView {
 
         if ui.ctx().input(|i| i.pointer.any_released()) {
             self.last_pointer_pos = None;
+        }
+    }
+
+    fn draw_markers(&self, painter: &egui::Painter, rect: egui::Rect, markers: &[Marker]) {
+        const LABEL_W: f32 = 64.0;
+        let ruler_h = 18.0;
+        let label_bg = painter
+            .ctx()
+            .global_style()
+            .visuals
+            .widgets
+            .noninteractive
+            .bg_fill;
+        let font = egui::FontId::proportional(9.0);
+
+        for marker in markers {
+            let x = self.beat_to_x(rect, marker.beat);
+            if x < rect.left() - LABEL_W || x > rect.right() + 8.0 {
+                continue;
+            }
+            let color = match marker.color {
+                Some((r, g, b)) => egui::Color32::from_rgb(r, g, b),
+                None => egui::Color32::from_rgb(241, 196, 15),
+            };
+
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(x - 1.0, rect.top() + 1.0),
+                    egui::vec2(2.0, ruler_h - 2.0),
+                ),
+                0.0,
+                color,
+            );
+
+            let label_w = LABEL_W.min(rect.right() - (x + 3.0)).max(0.0);
+            if label_w > 8.0 {
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(x + 2.0, rect.top() + 2.0),
+                        egui::vec2(label_w, ruler_h - 4.0),
+                    ),
+                    0.0,
+                    label_bg,
+                );
+                painter.text(
+                    egui::pos2(x + 4.0, rect.top() + 3.0),
+                    egui::Align2::LEFT_TOP,
+                    &marker.name,
+                    font.clone(),
+                    color,
+                );
+            }
         }
     }
 
@@ -2205,10 +2273,56 @@ impl TimelineView {
                 self.show_track_menu = false;
             }
         }
+
+        if self.show_ruler_menu {
+            let ctx = ui.ctx();
+            let mut close = false;
+            let popup_rect = egui::Area::new(egui::Id::new("ruler_context_menu"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(self.ruler_menu_pos)
+                .interactable(true)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .show(ui, |ui| {
+                            ui.set_min_width(180.0);
+                            if ui
+                                .button(format!("Add Marker at {:.2}", self.ruler_menu_beat))
+                                .clicked()
+                            {
+                                let count = app.state.lock_sync().markers.len();
+                                app.push_undo();
+                                let name = format!("Marker {}", count + 1);
+                                let _ = app.command_tx.send(AudioCommand::AddMarker {
+                                    beat: self.ruler_menu_beat,
+                                    name,
+                                });
+                                close = true;
+                            }
+                        })
+                        .response
+                        .rect
+                })
+                .inner;
+
+            let outside = ui.ctx().input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .map(|p| !popup_rect.contains(p))
+                        .unwrap_or(true)
+            });
+            if close || outside {
+                self.show_ruler_menu = false;
+            }
+        }
     }
 
     pub fn compute_project_end_beats(&self, app: &super::app::YadawApp) -> f64 {
         let state = app.state.lock_sync();
+        let marker_max = state
+            .markers
+            .iter()
+            .fold(0.0_f64, |m, marker| m.max(marker.beat));
         state
             .tracks
             .values()
@@ -2223,6 +2337,7 @@ impl TimelineView {
                     .fold(0.0, |m: f64, c| m.max(c.start_beat + c.length_beats));
                 max_beat.max(audio_max).max(midi_max)
             })
+            .max(marker_max)
     }
 
     fn x_to_beat(&self, rect: egui::Rect, x: f32) -> f64 {

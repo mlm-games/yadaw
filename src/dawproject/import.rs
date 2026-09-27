@@ -17,6 +17,7 @@ use crate::idgen;
 use crate::model::automation::{AutomationLane, AutomationMode, AutomationPoint, AutomationTarget};
 use crate::model::clip::{MidiClip, MidiNote, MidiPattern};
 use crate::model::group::TrackGroup;
+use crate::model::marker::Marker;
 use crate::model::plugin::PluginDescriptor;
 use crate::model::track::{Send, Track, TrackType};
 use crate::project::{AppState, PROJECT_VERSION, Project};
@@ -264,6 +265,14 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
 
     let patterns = share_repeated_notes(&mut tracks);
 
+    let mut markers = Vec::new();
+    if let Some(arrangement) = child(root, "Arrangement") {
+        read_markers(arrangement, TimeUnit::Beats, bpm, &mut markers);
+    }
+    markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    // A file may spell the arrangement's markers both ways; keep one of each.
+    markers.dedup_by(|a, b| a.beat == b.beat && a.name == b.name);
+
     let audio_clips: usize = tracks.iter().map(|t| t.audio_clips.len()).sum();
     let midi_clips: usize = tracks.iter().map(|t| t.midi_clips.len()).sum();
     report.summary = format!(
@@ -280,6 +289,7 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
         tracks,
         patterns,
         groups,
+        markers,
         bpm: bpm as f32,
         time_signature,
         sample_rate: crate::constants::DEFAULT_SAMPLE_RATE as f32,
@@ -658,7 +668,7 @@ fn read_lane(
             "Notes" => read_lane_notes(node, lane.unit, bpm, track, report),
             "Points" => read_points(node, lane.unit, bpm, params, track, report),
             "markers" => {
-                report.note("Markers have no yadaw equivalent and were skipped");
+                report.note("Markers scoped to a single track lane were skipped");
             }
             "Video" | "Warps" => {
                 report.note("Video timelines have no yadaw equivalent and were skipped");
@@ -682,6 +692,10 @@ fn read_clip(
         .and_then(|r| ids.get(r))
         .copied()
         .unwrap_or(node);
+
+    if child(content, "markers").is_some() {
+        report.note("Markers attached to a clip were skipped");
+    }
 
     let content_unit = TimeUnit::parse(attr(node, "contentTimeUnit"));
     let time = num_attr(node, "time").unwrap_or(0.0);
@@ -749,6 +763,45 @@ fn read_clip(
             track,
             report,
         );
+    }
+}
+
+/// Collect the arrangement's markers. An arrangement declares them as
+/// `<Arrangement><Markers>`, and a `Lanes` scope may also carry the global
+/// lowercase `<markers>`, so both spellings are read. Yadaw markers belong to the
+/// project rather than to a track, so a `Lanes` scope that names a track is left
+/// alone; its markers are reported by `read_lane` instead.
+fn read_markers<'a, 'i>(scope: El<'a, 'i>, inherited: TimeUnit, bpm: f64, out: &mut Vec<Marker>) {
+    let unit = scope_unit(scope, "timeUnit", inherited);
+    for node in children(scope) {
+        match node.tag_name().name() {
+            "markers" | "Markers" => {
+                let marker_unit = scope_unit(node, "timeUnit", unit);
+                for entry in children(node) {
+                    if !entry.has_tag_name("Marker") {
+                        continue;
+                    }
+                    let Some(time) = num_attr(entry, "time") else {
+                        continue;
+                    };
+                    let name = attr(entry, "name")
+                        .map(sanitize_name)
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| format!("Marker {}", out.len() + 1));
+                    out.push(Marker {
+                        id: idgen::next(),
+                        beat: marker_unit.to_beats(time, bpm).max(0.0),
+                        name,
+                        color: attr(entry, "color").and_then(hex_to_rgb),
+                        comment: attr(entry, "comment").map(sanitize_name),
+                    });
+                }
+            }
+            "Lanes" if node.attribute("track").is_none() => {
+                read_markers(node, unit, bpm, out);
+            }
+            _ => {}
+        }
     }
 }
 

@@ -15,7 +15,7 @@ use crate::messages::{AudioCommand, UIUpdate, UiTx};
 use crate::midi_input::MidiInputHandler;
 use crate::model::clip::MidiPattern;
 use crate::model::track::TrackType;
-use crate::model::{AutomationPoint, MidiClip, MidiNote, PluginDescriptor, TrackGroup};
+use crate::model::{AutomationPoint, Marker, MidiClip, MidiNote, PluginDescriptor, TrackGroup};
 use crate::plugin::create_plugin_instance;
 use crate::project::{AppState, ClipLocation, ClipRef};
 use crate::time_utils::quick::samples_to_beats;
@@ -1238,6 +1238,27 @@ fn process_command(
             let mut st = app_state.lock_sync();
             if let Some(g) = st.groups.get_mut(&group_id) {
                 g.collapsed = !g.collapsed;
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::AddMarker { beat, name } => {
+            let mut st = app_state.lock_sync();
+            if beat.is_finite() && beat >= 0.0 {
+                let marker = Marker::new(idgen::next(), beat, name);
+                let at = st.markers.partition_point(|m| m.beat <= marker.beat);
+                st.markers.insert(at, marker);
+            }
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::RemoveMarker(marker_id) => {
+            let mut st = app_state.lock_sync();
+            st.markers.retain(|m| m.id != marker_id);
+            send_graph_snapshot(&st, snapshot_tx);
+        }
+        AudioCommand::RenameMarker(marker_id, name) => {
+            let mut st = app_state.lock_sync();
+            if let Some(m) = st.markers.iter_mut().find(|m| m.id == marker_id) {
+                m.name = name;
             }
             send_graph_snapshot(&st, snapshot_tx);
         }

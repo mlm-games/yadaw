@@ -4,6 +4,7 @@ use yadaw::dawproject;
 use yadaw::model::automation::{AutomationLane, AutomationMode, AutomationPoint, AutomationTarget};
 use yadaw::model::clip::{AudioClip, MidiClip, MidiNote};
 use yadaw::model::group::TrackGroup;
+use yadaw::model::marker::Marker;
 use yadaw::model::plugin::PluginDescriptor;
 use yadaw::model::track::{Send, Track, TrackType};
 use yadaw::project::{PROJECT_VERSION, Project};
@@ -139,6 +140,22 @@ fn fixture() -> Project {
                 ..Default::default()
             },
         ],
+        markers: vec![
+            Marker {
+                id: 900,
+                beat: 8.0,
+                name: "Chorus".to_string(),
+                color: Some((241, 196, 15)),
+                comment: Some("guitars in".to_string()),
+            },
+            Marker {
+                id: 901,
+                beat: 0.0,
+                name: "Intro".to_string(),
+                color: None,
+                comment: None,
+            },
+        ],
         bpm: 140.0,
         time_signature: (3, 4),
         sample_rate: 44100.0,
@@ -234,6 +251,19 @@ fn golden_dawproject_round_trip() {
 
     assert_eq!(imported.tracks[2].track_type, TrackType::Bus);
 
+    assert_eq!(imported.markers.len(), 2, "markers survive the round trip");
+    assert_eq!(imported.markers[0].name, "Intro", "sorted by beat");
+    assert_eq!(imported.markers[0].beat, 0.0);
+    assert_eq!(imported.markers[0].color, None);
+    assert_eq!(imported.markers[1].name, "Chorus");
+    assert_eq!(imported.markers[1].beat, 8.0);
+    assert_eq!(imported.markers[1].color, Some((241, 196, 15)));
+    assert_eq!(
+        imported.markers[1].comment.as_deref(),
+        Some("guitars in"),
+        "a marker comment survives"
+    );
+
     let rhythm = imported
         .groups
         .iter()
@@ -261,6 +291,12 @@ fn golden_dawproject_round_trip() {
         imported.tracks[1].audio_clips[0].samples.len()
     );
     assert_eq!(reimported.groups.len(), imported.groups.len());
+    assert_eq!(
+        reimported.markers.len(),
+        imported.markers.len(),
+        "markers are stable across a second round trip"
+    );
+    assert_eq!(reimported.markers[1].name, "Chorus");
 }
 
 #[test]
@@ -345,6 +381,13 @@ fn dawproject_round_trips_looped_audio_clips() {
         }],
         patterns: Vec::new(),
         groups: Vec::new(),
+        markers: vec![Marker {
+            id: 900,
+            beat: 8.0,
+            name: "Chorus".to_string(),
+            color: Some((241, 196, 15)),
+            comment: Some("guitars in".to_string()),
+        }],
         bpm: 120.0,
         time_signature: (4, 4),
         sample_rate: 44100.0,

@@ -626,6 +626,30 @@ impl Ctx<'_> {
         }
 
         self.xml.close();
+
+        let mut markers = self.project.markers.clone();
+        markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        if !markers.is_empty() {
+            self.xml.open(
+                "Markers",
+                attrs([("timeUnit", "beats".to_string()), ("id", self.ids.next())]),
+            );
+            for marker in &markers {
+                let mut a = attrs([
+                    ("time", num(marker.beat)),
+                    ("name", sanitize_name(&marker.name)),
+                ]);
+                if let Some(color) = marker.color {
+                    a.push(("color", rgb_to_hex(color)));
+                }
+                if let Some(comment) = marker.comment.as_ref().filter(|c| !c.is_empty()) {
+                    a.push(("comment", sanitize_name(comment)));
+                }
+                self.xml.leaf("Marker", a);
+            }
+            self.xml.close();
+        }
+
         self.xml.close();
     }
 

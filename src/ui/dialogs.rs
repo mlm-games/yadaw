@@ -879,9 +879,10 @@ impl DawProjectDialog {
     pub fn show(&mut self, _ctx: &egui::Context, app: &mut super::app::YadawApp) {
         if self.picker_rx.is_none() {
             self.picker_rx = Some(match self.mode {
-                DawProjectMode::Import => {
-                    crate::file_picker::pick_open_file("Import a DAWproject", &[DAWPROJECT_EXTENSION])
-                }
+                DawProjectMode::Import => crate::file_picker::pick_open_file(
+                    "Import a DAWproject",
+                    &[DAWPROJECT_EXTENSION],
+                ),
                 DawProjectMode::Export => {
                     let suggested = app
                         .project_path
