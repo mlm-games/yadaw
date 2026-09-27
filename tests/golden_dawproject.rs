@@ -3,6 +3,7 @@ use std::sync::Arc;
 use yadaw::dawproject;
 use yadaw::model::automation::{AutomationLane, AutomationMode, AutomationPoint, AutomationTarget};
 use yadaw::model::clip::{AudioClip, MidiClip, MidiNote};
+use yadaw::model::group::TrackGroup;
 use yadaw::model::plugin::PluginDescriptor;
 use yadaw::model::track::{Send, Track, TrackType};
 use yadaw::project::{PROJECT_VERSION, Project};
@@ -21,6 +22,7 @@ fn fixture() -> Project {
         id: 1,
         name: "Keys & <Drums>".to_string(),
         track_type: TrackType::Midi,
+        group_id: Some(10),
         color: Some((0xa2, 0xea, 0xbf)),
         volume: 0.66,
         pan: -0.25,
@@ -94,6 +96,7 @@ fn fixture() -> Project {
         id: 2,
         name: "Drums".to_string(),
         track_type: TrackType::Audio,
+        group_id: Some(10),
         volume: 0.5,
         pan: 0.5,
         audio_clips: vec![AudioClip {
@@ -123,7 +126,19 @@ fn fixture() -> Project {
         name: "Round Trip".to_string(),
         tracks: vec![keys, drums, bus],
         patterns: Vec::new(),
-        groups: Vec::new(),
+        groups: vec![
+            TrackGroup {
+                id: 10,
+                name: "Rhythm".to_string(),
+                color: (230, 126, 34),
+                ..Default::default()
+            },
+            TrackGroup {
+                id: 11,
+                name: "Spare".to_string(),
+                ..Default::default()
+            },
+        ],
         bpm: 140.0,
         time_signature: (3, 4),
         sample_rate: 44100.0,
@@ -219,6 +234,23 @@ fn golden_dawproject_round_trip() {
 
     assert_eq!(imported.tracks[2].track_type, TrackType::Bus);
 
+    let rhythm = imported
+        .groups
+        .iter()
+        .find(|g| g.name == "Rhythm")
+        .expect("the group survives the round trip");
+    assert_eq!(rhythm.color, (230, 126, 34));
+    assert_eq!(keys.group_id, Some(rhythm.id));
+    assert_eq!(drums.group_id, Some(rhythm.id));
+    assert_eq!(
+        imported.tracks[2].group_id, None,
+        "a track outside every group stays top level"
+    );
+    assert!(
+        imported.groups.iter().any(|g| g.name == "Spare"),
+        "a group with no tracks is still written and read back"
+    );
+
     let (again, _) = dawproject::export(&imported).expect("re-export succeeds");
     let (reimported, _) = dawproject::import(&again, &no_plugins).expect("re-import succeeds");
     assert_eq!(reimported.tracks.len(), imported.tracks.len());
@@ -228,11 +260,70 @@ fn golden_dawproject_round_trip() {
         reimported.tracks[1].audio_clips[0].samples.len(),
         imported.tracks[1].audio_clips[0].samples.len()
     );
+    assert_eq!(reimported.groups.len(), imported.groups.len());
+}
+
+#[test]
+fn dawproject_exports_groups_as_nested_tracks() {
+    let (bytes, _) = dawproject::export(&fixture()).expect("export succeeds");
+    let xml = project_xml(&bytes);
+
+    let structure = xml
+        .split_once("<Structure>")
+        .and_then(|(_, rest)| rest.split_once("</Structure>"))
+        .expect("a Structure element is written")
+        .0;
+
+    let top_level: Vec<&str> = structure
+        .lines()
+        .filter(|l| l.starts_with("    <Track"))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        top_level.len(),
+        4,
+        "the Rhythm group, the Bus, the empty Spare group and the Master, got {top_level:?}"
+    );
+    assert!(
+        top_level[0].contains("contentType=\"tracks\""),
+        "a group is a contentType=\"tracks\" Track: {}",
+        top_level[0]
+    );
+    assert!(top_level[0].contains("name=\"Rhythm\""));
+    assert!(top_level[0].contains("color=\"#e67e22\""));
+    assert!(
+        top_level[1].contains("name=\"Bus\""),
+        "an ungrouped track stays top level: {}",
+        top_level[1]
+    );
+    assert!(
+        top_level[2].contains("name=\"Spare\"") && top_level[2].ends_with("/>"),
+        "a group with no members is an empty element: {}",
+        top_level[2]
+    );
+    assert!(top_level[3].contains("name=\"Master\""));
+
+    let members: Vec<&str> = structure
+        .lines()
+        .filter(|l| l.starts_with("      <Track"))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        members.len(),
+        2,
+        "both members of Rhythm nest inside it, got {members:?}"
+    );
+    assert!(members[0].contains("name=\"Keys &amp; &lt;Drums&gt;\""));
+    assert!(members[1].contains("name=\"Drums\""));
+    assert!(
+        structure.contains("\n    </Track>\n    <Track"),
+        "the group closes before the next top-level Track opens"
+    );
 }
 
 #[test]
 fn dawproject_imports_bitwig_style_alias_and_nested_clips() {
-    let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Project version="1.0">
   <Application name="Bitwig Studio" version="5.0"/>
   <Transport>
@@ -240,20 +331,23 @@ fn dawproject_imports_bitwig_style_alias_and_nested_clips() {
     <TimeSignature denominator="4" numerator="4" id="id1"/>
   </Transport>
   <Structure>
-    <Track contentType="notes" loaded="true" id="id2" name="Bass">
-      <Channel audioChannels="2" destination="id15" role="regular" solo="false" id="id3">
-        <Devices>
-          <ClapPlugin deviceID="org.surge-synth-team.surge-xt" deviceName="Surge XT" deviceRole="instrument" loaded="true" id="id7" name="Surge XT">
-            <Parameters>
-              <RealParameter name="Gain" value="0.5" unit="normalized" id="id20"/>
-            </Parameters>
-            <Enabled value="true" id="id8" name="On/Off"/>
-          </ClapPlugin>
-        </Devices>
-        <Mute value="false" id="id6" name="Mute"/>
-        <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="id5" name="Pan"/>
-        <Volume max="2.000000" min="0.000000" unit="linear" value="0.659140" id="id4" name="Volume"/>
-      </Channel>
+    <Track color="#e67e22" contentType="tracks" id="id40" loaded="true" name="Rhythm">
+      <Channel audioChannels="2" destination="id15" role="submix" solo="false" id="id41"/>
+      <Track contentType="notes" loaded="true" id="id2" name="Bass">
+        <Channel audioChannels="2" destination="id15" role="regular" solo="false" id="id3">
+          <Devices>
+            <ClapPlugin deviceID="org.surge-synth-team.surge-xt" deviceName="Surge XT" deviceRole="instrument" loaded="true" id="id7" name="Surge XT">
+              <Parameters>
+                <RealParameter name="Gain" value="0.5" unit="normalized" id="id20"/>
+              </Parameters>
+              <Enabled value="true" id="id8" name="On/Off"/>
+            </ClapPlugin>
+          </Devices>
+          <Mute value="false" id="id6" name="Mute"/>
+          <Pan max="1.000000" min="0.000000" unit="normalized" value="0.500000" id="id5" name="Pan"/>
+          <Volume max="2.000000" min="0.000000" unit="linear" value="0.659140" id="id4" name="Volume"/>
+        </Channel>
+      </Track>
     </Track>
     <Track contentType="audio notes" loaded="true" id="id14" name="Master">
       <Channel audioChannels="2" role="master" solo="false" id="id15">
@@ -278,7 +372,7 @@ fn dawproject_imports_bitwig_style_alias_and_nested_clips() {
   </Arrangement>
   <Scenes/>
 </Project>
-"#;
+"##;
 
     let (bytes, _) = zip_fixture(xml);
     let (project, report) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
@@ -293,6 +387,23 @@ fn dawproject_imports_bitwig_style_alias_and_nested_clips() {
 
     let bass = &project.tracks[0];
     assert_eq!(bass.name, "Bass");
+
+    let rhythm = &project.groups[0];
+    assert_eq!(rhythm.name, "Rhythm");
+    assert_eq!(rhythm.color, (230, 126, 34));
+    assert_eq!(
+        bass.group_id,
+        Some(rhythm.id),
+        "a nested Track joins the group that holds it"
+    );
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("Group track 'Rhythm' has its own mixer channel")),
+        "a group channel yadaw cannot model must be reported"
+    );
+
     assert!((bass.volume - 0.65914).abs() < 1e-4);
     assert_eq!(
         bass.midi_clips.len(),
@@ -324,6 +435,67 @@ fn dawproject_imports_bitwig_style_alias_and_nested_clips() {
             .any(|n| n.contains("could not be matched")),
         "an unresolved plugin must be reported"
     );
+}
+
+#[test]
+fn dawproject_reads_a_bare_master_channel() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Transport>
+    <Tempo max="666" min="20" unit="bpm" value="100" id="id0" name="Tempo"/>
+    <TimeSignature denominator="4" numerator="4" id="id1"/>
+  </Transport>
+  <Structure>
+    <Channel audioChannels="2" role="master" solo="false" id="id2">
+      <Volume max="2" min="0" unit="linear" value="0.5" id="id3" name="Volume"/>
+    </Channel>
+    <Track contentType="notes" loaded="true" id="id4" name="Pad">
+      <Channel audioChannels="2" role="regular" solo="false" id="id5">
+        <Volume max="2" min="0" unit="linear" value="1" id="id6" name="Volume"/>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement id="id7">
+    <Lanes timeUnit="beats" id="id8">
+      <Lanes track="id4" id="id9">
+        <Clips id="id10">
+          <Clip time="0.0" duration="4.0" contentTimeUnit="beats" playStart="0.0">
+            <Notes id="id11">
+              <Note time="0.0" duration="1.0" channel="0" key="60" vel="0.5"/>
+            </Notes>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+
+    assert_eq!(project.bpm, 100.0);
+    assert_eq!(
+        project.master_volume, 0.5,
+        "a master Channel directly under Structure carries the master volume"
+    );
+    assert_eq!(project.tracks.len(), 1);
+    assert_eq!(project.tracks[0].name, "Pad");
+    assert_eq!(project.tracks[0].group_id, None);
+}
+
+fn project_xml(bytes: &[u8]) -> String {
+    use std::io::Read;
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("export is a zip");
+    let mut file = archive
+        .by_name("project.xml")
+        .expect("the container holds project.xml");
+    let mut xml = String::new();
+    file.read_to_string(&mut xml).expect("project.xml is utf-8");
+    xml
 }
 
 fn zip_fixture(project_xml: &str) -> (Vec<u8>, String) {

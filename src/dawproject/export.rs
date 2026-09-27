@@ -130,6 +130,7 @@ struct Ctx<'a> {
     report: Report,
     track_ids: HashMap<u64, String>,
     channel_ids: HashMap<u64, String>,
+    group_track_ids: HashMap<u64, String>,
     automation: HashMap<u64, Automation>,
 }
 
@@ -147,6 +148,7 @@ pub fn export(project: &Project) -> Result<(Vec<u8>, Report)> {
         report: Report::default(),
         track_ids: HashMap::new(),
         channel_ids: HashMap::new(),
+        group_track_ids: HashMap::new(),
         automation: HashMap::new(),
     };
     ctx.write_project()?;
@@ -218,15 +220,41 @@ impl Ctx<'_> {
             self.track_ids.insert(track.id, self.ids.next());
             self.channel_ids.insert(track.id, self.ids.next());
         }
+        for group in &self.project.groups {
+            self.group_track_ids.insert(group.id, self.ids.next());
+        }
         let master_track_id = self.ids.next();
         let master_channel_id = self.ids.next();
         let master_volume = f64::from(self.project.master_volume);
 
-        self.xml.open("Structure", attrs([]));
         for track in self.project.tracks.clone() {
             let auto = self.collect_automation(&track);
             self.automation.insert(track.id, auto);
-            self.write_track(&track, &master_channel_id);
+        }
+
+        self.xml.open("Structure", attrs([]));
+        let mut written: Vec<u64> = Vec::new();
+        let mut orphaned: Vec<u64> = Vec::new();
+        for track in self.project.tracks.clone() {
+            match track.group_id {
+                Some(id) if self.group_track_ids.contains_key(&id) => {
+                    if !written.contains(&id) {
+                        written.push(id);
+                        self.write_group(id, &master_channel_id);
+                    }
+                }
+                Some(id) => {
+                    orphaned.push(id);
+                    self.write_track(&track, &master_channel_id);
+                }
+                None => self.write_track(&track, &master_channel_id),
+            }
+        }
+        for group in self.project.groups.clone() {
+            if !written.contains(&group.id) {
+                written.push(group.id);
+                self.write_group(group.id, &master_channel_id);
+            }
         }
 
         self.xml.open(
@@ -254,10 +282,16 @@ impl Ctx<'_> {
         self.xml.close();
         self.xml.close();
 
-        if !self.project.groups.is_empty() {
-            self.report
-                .note("Track groups have no DAWproject equivalent and were not exported");
+        if !orphaned.is_empty() {
+            self.report.note(format!(
+                "{} track(s) referenced a group that no longer exists and were written to the top level",
+                orphaned.len()
+            ));
         }
+        self.report.count(
+            "group(s) lost their collapsed state and VCA-style control links, which DAWproject cannot express",
+            self.project.groups.len(),
+        );
         if self.project.loop_enabled {
             self.report
                 .note("The loop region has no DAWproject equivalent and was not exported");
@@ -280,6 +314,38 @@ impl Ctx<'_> {
             audio_clips,
             midi_clips
         );
+    }
+
+    /// DAWproject represents a group or folder as a `contentType="tracks"` Track
+    /// holding the member Tracks as children.
+    fn write_group(&mut self, group_id: u64, master_channel_id: &str) {
+        let Some(group) = self.project.groups.iter().find(|g| g.id == group_id) else {
+            return;
+        };
+        let name = sanitize_name(&group.name);
+        let color = rgb_to_hex(group.color);
+        let members: Vec<Track> = self
+            .project
+            .tracks
+            .iter()
+            .filter(|t| t.group_id == Some(group_id))
+            .cloned()
+            .collect();
+
+        self.xml.open(
+            "Track",
+            attrs([
+                ("id", self.group_track_ids[&group_id].clone()),
+                ("name", name),
+                ("color", color),
+                ("contentType", "tracks".to_string()),
+                ("loaded", "true".to_string()),
+            ]),
+        );
+        for track in members {
+            self.write_track(&track, master_channel_id);
+        }
+        self.xml.close();
     }
 
     fn write_mute(&mut self, _auto: Option<&Automation>, muted: bool) {

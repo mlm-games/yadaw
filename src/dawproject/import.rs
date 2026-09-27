@@ -16,6 +16,7 @@ use crate::audio_import::import_audio_data;
 use crate::idgen;
 use crate::model::automation::{AutomationLane, AutomationMode, AutomationPoint, AutomationTarget};
 use crate::model::clip::{MidiClip, MidiNote, MidiPattern};
+use crate::model::group::TrackGroup;
 use crate::model::plugin::PluginDescriptor;
 use crate::model::track::{Send, Track, TrackType};
 use crate::project::{AppState, PROJECT_VERSION, Project};
@@ -198,46 +199,18 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
     let mut master_volume = AppState::default().master_volume;
     let mut channel_to_track: HashMap<String, u64> = HashMap::new();
     let mut raw_tracks: Vec<RawTrack> = Vec::new();
+    let mut groups: Vec<TrackGroup> = Vec::new();
 
     if let Some(structure) = structure {
-        for node in children(structure) {
-            let is_master_channel =
-                node.has_tag_name("Channel") && attr(node, "role") == Some("master");
-            let is_track = node.has_tag_name("Track");
-            if !is_master_channel && !is_track {
-                continue;
-            }
-            let channel = if is_track {
-                child(node, "Channel")
-            } else {
-                Some(node)
-            };
-            let Some(channel) = channel else { continue };
-
-            if attr(channel, "role") == Some("master") {
-                if let Some(volume) = child(channel, "Volume").and_then(|v| num_attr(v, "value")) {
-                    master_volume = volume.clamp(0.0, 2.0) as f32;
-                }
-                if let Some(id) = attr(channel, "id") {
-                    channel_to_track.insert(id.to_string(), u64::MAX);
-                }
-                continue;
-            }
-            if attr(channel, "role") == Some("vca") {
-                report.note(
-                    "Mixer group (VCA) channels have no yadaw equivalent; their child tracks were imported without grouping",
-                );
-                continue;
-            }
-            if !is_track {
-                continue;
-            }
-            raw_tracks.push(RawTrack {
-                xml_id: attr(node, "id").map(str::to_owned),
-                track_id: idgen::next(),
-                node,
-            });
-        }
+        read_structure(
+            structure,
+            None,
+            &mut raw_tracks,
+            &mut groups,
+            &mut master_volume,
+            &mut channel_to_track,
+            &mut report,
+        );
     }
 
     for raw in &raw_tracks {
@@ -259,7 +232,7 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
                 .or_insert(raw.track_id);
         }
 
-        let mut track = read_track(raw.node, channel, raw.track_id);
+        let mut track = read_track(raw.node, channel, raw.track_id, raw.group_id);
         let mut params: HashMap<String, ParamTarget> = HashMap::new();
         read_channel_params(channel, &mut track, &mut params, resolve, &mut report);
         read_sends(
@@ -306,7 +279,7 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
         name: title.unwrap_or_else(|| "Imported DAWproject".to_string()),
         tracks,
         patterns,
-        groups: Vec::new(),
+        groups,
         bpm: bpm as f32,
         time_signature,
         sample_rate: crate::constants::DEFAULT_SAMPLE_RATE as f32,
@@ -324,7 +297,110 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
 struct RawTrack<'a, 'i> {
     xml_id: Option<String>,
     track_id: u64,
+    group_id: Option<u64>,
     node: El<'a, 'i>,
+}
+
+fn read_master_channel(
+    channel: El,
+    master_volume: &mut f32,
+    channel_to_track: &mut HashMap<String, u64>,
+) {
+    if attr(channel, "role") != Some("master") {
+        return;
+    }
+    if let Some(volume) = child(channel, "Volume").and_then(|v| num_attr(v, "value")) {
+        *master_volume = volume.clamp(0.0, 2.0) as f32;
+    }
+    if let Some(id) = attr(channel, "id") {
+        channel_to_track.insert(id.to_string(), u64::MAX);
+    }
+}
+
+fn read_structure<'a, 'i>(
+    parent: El<'a, 'i>,
+    parent_group: Option<u64>,
+    raw_tracks: &mut Vec<RawTrack<'a, 'i>>,
+    groups: &mut Vec<TrackGroup>,
+    master_volume: &mut f32,
+    channel_to_track: &mut HashMap<String, u64>,
+    report: &mut Report,
+) {
+    for node in children(parent) {
+        if node.has_tag_name("Channel") {
+            match attr(node, "role") {
+                Some("master") => read_master_channel(node, master_volume, channel_to_track),
+                Some("vca") => report.note(
+                    "Mixer group (VCA) channels have no yadaw equivalent; their child tracks were imported without grouping",
+                ),
+                _ => {}
+            }
+            continue;
+        }
+        if !node.has_tag_name("Track") {
+            continue;
+        }
+
+        if content_type(node)
+            .split_ascii_whitespace()
+            .any(|t| t == "tracks")
+        {
+            let group_id = read_group(node, groups, report);
+            read_structure(
+                node,
+                Some(group_id),
+                raw_tracks,
+                groups,
+                master_volume,
+                channel_to_track,
+                report,
+            );
+            continue;
+        }
+
+        let Some(channel) = child(node, "Channel") else {
+            continue;
+        };
+        if attr(channel, "role") == Some("master") {
+            read_master_channel(channel, master_volume, channel_to_track);
+            continue;
+        }
+        if attr(channel, "role") == Some("vca") {
+            report.note(
+                "Mixer group (VCA) channels have no yadaw equivalent; their child tracks were imported without grouping",
+            );
+            continue;
+        }
+
+        raw_tracks.push(RawTrack {
+            xml_id: attr(node, "id").map(str::to_owned),
+            track_id: idgen::next(),
+            group_id: parent_group,
+            node,
+        });
+    }
+}
+
+fn read_group(node: El, groups: &mut Vec<TrackGroup>, report: &mut Report) -> u64 {
+    let id = idgen::next();
+    let name = attr(node, "name")
+        .map(sanitize_name)
+        .unwrap_or_else(|| "Group".to_string());
+    let mut group = TrackGroup::new(id, name.clone());
+    if let Some(color) = attr(node, "color").and_then(hex_to_rgb) {
+        group.color = color;
+    }
+    if child(node, "Channel").is_some() {
+        report.note(format!(
+            "Group track '{name}' has its own mixer channel, which yadaw cannot represent; its child tracks were imported without it"
+        ));
+    }
+    groups.push(group);
+    id
+}
+
+fn content_type<'a, 'i>(node: El<'a, 'i>) -> &'a str {
+    attr(node, "contentType").unwrap_or_default()
 }
 
 struct Lane<'a, 'i> {
@@ -362,11 +438,13 @@ fn visit_lanes<'a, 'i>(
     }
 }
 
-fn read_track(node: El, channel: El, id: u64) -> Track {
-    let content_type = attr(node, "contentType").unwrap_or_default();
+fn read_track(node: El, channel: El, id: u64, group_id: Option<u64>) -> Track {
     let track_type = if attr(channel, "role") == Some("submix") {
         TrackType::Bus
-    } else if content_type.split_ascii_whitespace().any(|t| t == "notes") {
+    } else if content_type(node)
+        .split_ascii_whitespace()
+        .any(|t| t == "notes")
+    {
         TrackType::Midi
     } else {
         TrackType::Audio
@@ -378,6 +456,7 @@ fn read_track(node: El, channel: El, id: u64) -> Track {
             .map(sanitize_name)
             .unwrap_or_else(|| "Track".to_string()),
         color: attr(node, "color").and_then(hex_to_rgb),
+        group_id,
         track_type,
         solo: parse_bool(attr(channel, "solo")).unwrap_or(false),
         ..Track::default()
