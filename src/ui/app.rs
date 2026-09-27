@@ -1,6 +1,6 @@
 use crate::audio_state::AudioState;
 use crate::config::Config;
-use crate::constants::DEFAULT_MIN_PROJECT_BEATS;
+use crate::constants::{DAWPROJECT_EXTENSION, DEFAULT_MIN_PROJECT_BEATS};
 use crate::edit_actions::EditProcessor;
 use crate::error::{ResultExt, UserNotification, common};
 use crate::input::InputManager;
@@ -16,7 +16,8 @@ use crate::paths::{current_theme_path, custom_themes_path, shortcuts_path};
 use crate::performance::PerformanceMonitor;
 use crate::project::{AppState, AppStateSnapshot, ClipLocation};
 use crate::project_manager::ProjectManager;
-use yadaw_plugin_api::UnifiedPluginInfo;
+use crate::ui::dialogs::{read_picked_bytes, write_picked_bytes};
+use yadaw_plugin_api::{BackendKind, UnifiedPluginInfo};
 
 use crate::track_manager::{TrackManager, UITrackType};
 use crate::transport::Transport;
@@ -704,6 +705,118 @@ impl YadawApp {
                 self.hydrate_audio_cache();
             })
             .notify_user(&mut self.dialogs);
+    }
+
+    pub fn import_dawproject_dialog(&mut self) {
+        self.dialogs.show_import_dawproject();
+    }
+
+    pub fn export_dawproject_dialog(&mut self) {
+        self.dialogs.show_export_dawproject();
+    }
+
+    /// Reads a `.dawproject` from a picked file and replaces the project.
+    pub fn import_dawproject_file(&mut self, file: &crate::file_picker::PlatformFile) {
+        let bytes = match read_picked_bytes(file) {
+            Some(bytes) => bytes,
+            None => {
+                self.dialogs
+                    .show_error("Failed to read the selected DAWproject file");
+                return;
+            }
+        };
+        self.import_dawproject_bytes(bytes);
+    }
+
+    pub fn import_dawproject_bytes(&mut self, bytes: Vec<u8>) {
+        let resolve = |backend: BackendKind, device_id: &str, device_name: &str| {
+            self.available_plugins
+                .iter()
+                .find(|(_, info)| {
+                    info.backend == backend
+                        && match backend {
+                            BackendKind::Clap => info.uri.split('#').next_back() == Some(device_id),
+                            _ => {
+                                info.uri == device_id || info.name.eq_ignore_ascii_case(device_name)
+                            }
+                        }
+                })
+                .map(|(uri, _)| uri.clone())
+        };
+
+        let (project, report) = match crate::dawproject::import(&bytes, &resolve) {
+            Ok(result) => result,
+            Err(e) => {
+                self.dialogs
+                    .show_error(&format!("Failed to import DAWproject: {e}"));
+                return;
+            }
+        };
+
+        {
+            let mut state = self.state.lock_sync();
+            state.load_project(project);
+            self.audio_state.bpm.store(state.bpm);
+            self.transport_ui.bpm_input = format!("{:.1}", state.bpm);
+            state.ensure_ids();
+        }
+
+        self.project_path = None;
+        self.select_track(0);
+        self.selected_clips.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+
+        let _ = self.command_tx.send(AudioCommand::UpdateTracks);
+        let _ = self.command_tx.send(AudioCommand::RebuildAllRtChains);
+
+        self.hydrate_audio_cache();
+
+        let message = if report.notes.is_empty() {
+            format!("Imported DAWproject: {}", report.summary)
+        } else {
+            format!(
+                "Imported DAWproject: {}\n\n{}",
+                report.summary,
+                report.notes.join("\n")
+            )
+        };
+        self.dialogs.show_info(&message);
+    }
+
+    /// Writes the current project as a `.dawproject` to a picked destination.
+    pub fn export_dawproject_file(&mut self, file: &crate::file_picker::PlatformFile) {
+        let live_bpm = self.audio_state.bpm.load();
+        let exported = {
+            let mut state = self.state.lock_sync();
+            state.bpm = live_bpm;
+            crate::dawproject::export(&state.to_project())
+        };
+        let (bytes, report) = match exported {
+            Ok(result) => result,
+            Err(e) => {
+                self.dialogs
+                    .show_error(&format!("Failed to export DAWproject: {e}"));
+                return;
+            }
+        };
+
+        if let Err(e) = write_picked_bytes(file, &bytes, DAWPROJECT_EXTENSION) {
+            self.dialogs
+                .show_error(&format!("Failed to write DAWproject: {e}"));
+            return;
+        }
+
+        let message = if report.notes.is_empty() {
+            format!("Exported DAWproject: {}", report.summary)
+        } else {
+            format!(
+                "Exported DAWproject: {}\n\n{}",
+                report.summary,
+                report.notes.join("\n")
+            )
+        };
+        self.dialogs.show_info(&message);
     }
 
     // Audio operations
@@ -1606,6 +1719,8 @@ impl YadawApp {
             SaveProjectAs => self.dialogs.show_save_dialog(),
             ImportAudio => self.import_audio_dialog(),
             ExportAudio => self.export_audio_dialog(),
+            ImportDawProject => self.import_dawproject_dialog(),
+            ExportDawProject => self.export_dawproject_dialog(),
 
             ZoomIn => {
                 if self.is_selected_track_midi() {
@@ -1903,6 +2018,12 @@ impl YadawApp {
             Some("yadaw") => {
                 self.load_project_from_path(path);
             }
+            Some("dawproject") => match std::fs::read(path) {
+                Ok(bytes) => self.import_dawproject_bytes(bytes),
+                Err(e) => self
+                    .dialogs
+                    .show_error(&format!("Failed to read DAWproject file: {e}")),
+            },
             Some("wav") | Some("flac") | Some("mp3") | Some("ogg") | Some("m4a") | Some("aac") => {
                 self.import_audio_file_to_new_track(path);
             }

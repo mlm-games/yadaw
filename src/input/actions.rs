@@ -29,6 +29,8 @@ pub enum AppAction {
     SaveProjectAs,
     ImportAudio,
     ExportAudio,
+    ImportDawProject,
+    ExportDawProject,
 
     // View
     ZoomIn,
@@ -110,6 +112,8 @@ impl AppAction {
             SaveProjectAs,
             ImportAudio,
             ExportAudio,
+            ImportDawProject,
+            ExportDawProject,
             ZoomIn,
             ZoomOut,
             ZoomToFit,
@@ -170,7 +174,9 @@ impl AppAction {
             | Self::SaveProject
             | Self::SaveProjectAs
             | Self::ImportAudio
-            | Self::ExportAudio => &[Global],
+            | Self::ExportAudio
+            | Self::ImportDawProject
+            | Self::ExportDawProject => &[Global],
 
             // Global view
             Self::ZoomIn
@@ -237,6 +243,8 @@ impl AppAction {
             Self::SaveProjectAs => "Save Project As",
             Self::ImportAudio => "Import Audio",
             Self::ExportAudio => "Export Audio",
+            Self::ImportDawProject => "Import DAWproject",
+            Self::ExportDawProject => "Export DAWproject",
 
             Self::ZoomIn => "Zoom In",
             Self::ZoomOut => "Zoom Out",
@@ -302,7 +310,9 @@ impl AppAction {
             | Self::SaveProject
             | Self::SaveProjectAs
             | Self::ImportAudio
-            | Self::ExportAudio => "File",
+            | Self::ExportAudio
+            | Self::ImportDawProject
+            | Self::ExportDawProject => "File",
 
             Self::ZoomIn
             | Self::ZoomOut

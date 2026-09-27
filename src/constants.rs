@@ -66,6 +66,7 @@ pub const DEFAULT_PROJECT_NAME: &str = "Untitled Project";
 // File Extensions
 pub const PROJECT_EXTENSION: &str = "yadaw";
 pub const PROJECT_ALT_EXTENSION: &str = "ydw";
+pub const DAWPROJECT_EXTENSION: &str = "dawproject";
 pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "m4a", "aac"];
 pub const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 pub const EXPORT_EXTENSIONS: &[&str] = &["wav", "flac", "ogg"];

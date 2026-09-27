@@ -8,7 +8,7 @@ use crate::file_picker::RlobKit;
 use serde::{Deserialize, Serialize};
 
 use super::*;
-use crate::constants::{PROJECT_ALT_EXTENSION, PROJECT_EXTENSION};
+use crate::constants::{DAWPROJECT_EXTENSION, PROJECT_ALT_EXTENSION, PROJECT_EXTENSION};
 use crate::error::UserNotification;
 use crate::input::InputManager;
 use crate::input::actions::{ActionContext, AppAction};
@@ -45,11 +45,102 @@ fn load_project_from_uri(_app: &mut super::app::YadawApp, _file: &PlatformFile) 
     unreachable!("load_project_from_uri should not be called on desktop");
 }
 
+/// Reads the whole picked file into memory, whatever the platform hands back.
+pub(crate) fn read_picked_bytes(file: &PlatformFile) -> Option<Vec<u8>> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(data) = file.data() {
+        return Some(data.to_vec());
+    }
+
+    if let Some(path) = file.path() {
+        return std::fs::read(path).ok();
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let temp_path = crate::paths::cache_dir().join(format!(
+            "picked_{}.{}",
+            chrono::Local::now().format("%Y%m%d_%H%M%S"),
+            file.extension().unwrap_or("bin")
+        ));
+        if RlobKit::read_file_to_path(file, &temp_path).is_ok() {
+            let bytes = std::fs::read(&temp_path).ok();
+            let _ = std::fs::remove_file(&temp_path);
+            return bytes;
+        }
+    }
+
+    None
+}
+
+pub(crate) fn write_picked_bytes(
+    file: &PlatformFile,
+    data: &[u8],
+    #[allow(unused_variables)] extension: &str,
+) -> anyhow::Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if trigger_download(file.name(), data) {
+            return Ok(());
+        }
+        anyhow::bail!("browser download failed");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some(path) = file.path() {
+            std::fs::write(path, data)?;
+            return Ok(());
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            let temp_path = crate::paths::cache_dir().join(format!(
+                "picked_{}.{extension}",
+                chrono::Local::now().format("%Y%m%d_%H%M%S")
+            ));
+            std::fs::write(&temp_path, data)?;
+            let result = RlobKit::write_file_from_path(file, &temp_path);
+            let _ = std::fs::remove_file(&temp_path);
+            result.map_err(|e| anyhow::anyhow!("{e}"))?;
+            return Ok(());
+        }
+
+        anyhow::bail!("no writable destination")
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
-fn save_project_wasm(app: &mut super::app::YadawApp, filename: &str) {
+fn trigger_download(filename: &str, data: &[u8]) -> bool {
     use wasm_bindgen::JsCast;
     use web_sys::HtmlAnchorElement;
 
+    let uint8 = js_sys::Uint8Array::from(data);
+    let parts = js_sys::Array::new();
+    parts.push(&uint8.into());
+    let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence(&parts) else {
+        return false;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        return false;
+    };
+    let mut ok = false;
+    if let Some(window) = web_sys::window()
+        && let Some(document) = window.document()
+        && let Ok(element) = document.create_element("a")
+        && let Ok(anchor) = element.dyn_into::<HtmlAnchorElement>()
+    {
+        anchor.set_href(&url);
+        anchor.set_download(filename);
+        anchor.click();
+        ok = true;
+    }
+    let _ = web_sys::Url::revoke_object_url(&url);
+    ok
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_project_wasm(app: &mut super::app::YadawApp, filename: &str) {
     let live_bpm = app.audio_state.bpm.load();
     let live_loop_start = app.audio_state.loop_start.load();
     let live_loop_end = app.audio_state.loop_end.load();
@@ -67,32 +158,13 @@ fn save_project_wasm(app: &mut super::app::YadawApp, filename: &str) {
         serde_json::to_string_pretty(&state.to_project()).unwrap_or_default()
     };
 
-    let data = json.into_bytes();
-    let uint8 = js_sys::Uint8Array::from(&data[..]);
-    let parts = js_sys::Array::new();
-    parts.push(&uint8.into());
-    if let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence(&parts) {
-        if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
-            if let Some(window) = web_sys::window() {
-                if let Some(document) = window.document() {
-                    if let Ok(a) = document.create_element("a") {
-                        if let Ok(anchor) = a.dyn_into::<HtmlAnchorElement>() {
-                            anchor.set_href(&url);
-                            anchor.set_download(filename);
-                            anchor.click();
-                            let _ = web_sys::Url::revoke_object_url(&url);
-                            app.project_path = Some(filename.to_string());
-                            app.dialogs.show_success("Project saved successfully");
-                            return;
-                        }
-                    }
-                }
-            }
-            let _ = web_sys::Url::revoke_object_url(&url);
-        }
+    if trigger_download(filename, json.as_bytes()) {
+        app.project_path = Some(filename.to_string());
+        app.dialogs.show_success("Project saved successfully");
+    } else {
+        app.dialogs
+            .show_error("Failed to save project: browser download failed");
     }
-    app.dialogs
-        .show_error("Failed to save project: browser download failed");
 }
 
 #[cfg(target_os = "android")]
@@ -356,6 +428,7 @@ pub struct DialogManager {
 
     pub open_dialog: Option<OpenDialog>,
     pub save_dialog: Option<SaveDialog>,
+    pub dawproject: Option<DawProjectDialog>,
 
     pub audio_setup: Option<AudioSetupDialog>,
     pub plugin_browser: Option<PluginBrowserDialog>,
@@ -383,6 +456,7 @@ impl DialogManager {
         Self {
             open_dialog: None,
             save_dialog: None,
+            dawproject: None,
             audio_setup: None,
             plugin_browser: None,
             plugin_manager: None,
@@ -420,6 +494,12 @@ impl DialogManager {
             d.show(ctx, app);
             if !d.is_closed() {
                 self.save_dialog = Some(d);
+            }
+        }
+        if let Some(mut d) = self.dawproject.take() {
+            d.show(ctx, app);
+            if !d.is_closed() {
+                self.dawproject = Some(d);
             }
         }
 
@@ -569,6 +649,14 @@ impl DialogManager {
 
     pub fn show_save_dialog(&mut self) {
         self.save_dialog = Some(SaveDialog::new());
+    }
+
+    pub fn show_import_dawproject(&mut self) {
+        self.dawproject = Some(DawProjectDialog::new(DawProjectMode::Import));
+    }
+
+    pub fn show_export_dawproject(&mut self) {
+        self.dawproject = Some(DawProjectDialog::new(DawProjectMode::Export));
     }
 
     pub fn show_plugin_browser(&mut self) {
@@ -760,6 +848,80 @@ impl SaveDialog {
                 self.picker_rx = Some(picker);
             }
         }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DawProjectMode {
+    Import,
+    Export,
+}
+
+pub struct DawProjectDialog {
+    mode: DawProjectMode,
+    closed: bool,
+    picker_rx: Option<Picker<PlatformFile>>,
+}
+
+impl DawProjectDialog {
+    pub fn new(mode: DawProjectMode) -> Self {
+        DawProjectDialog {
+            mode,
+            closed: false,
+            picker_rx: None,
+        }
+    }
+
+    pub fn show(&mut self, _ctx: &egui::Context, app: &mut super::app::YadawApp) {
+        if self.picker_rx.is_none() {
+            self.picker_rx = Some(match self.mode {
+                DawProjectMode::Import => {
+                    crate::file_picker::pick_open_file("Import DAWproject", &[DAWPROJECT_EXTENSION])
+                }
+                DawProjectMode::Export => {
+                    let suggested = app
+                        .project_path
+                        .as_ref()
+                        .and_then(|p| Path::new(p).file_stem().and_then(|s| s.to_str()))
+                        .map(|stem| format!("{stem}.{DAWPROJECT_EXTENSION}"))
+                        .unwrap_or_else(|| format!("untitled.{DAWPROJECT_EXTENSION}"));
+                    crate::file_picker::pick_save_file(
+                        "Export DAWproject",
+                        &suggested,
+                        DAWPROJECT_EXTENSION,
+                    )
+                }
+            });
+        }
+
+        let Some(mut picker) = self.picker_rx.take() else {
+            return;
+        };
+        let Some(result) = picker.poll() else {
+            self.picker_rx = Some(picker);
+            return;
+        };
+
+        match result {
+            Ok(Some(file)) => match self.mode {
+                DawProjectMode::Import => app.import_dawproject_file(&file),
+                DawProjectMode::Export => app.export_dawproject_file(&file),
+            },
+            Ok(None) => {}
+            Err(e) => {
+                let what = match self.mode {
+                    DawProjectMode::Import => "Import",
+                    DawProjectMode::Export => "Export",
+                };
+                app.dialogs
+                    .show_error(&format!("{what} DAWproject picker failed: {e}"));
+            }
+        }
+        self.closed = true;
     }
 
     pub fn is_closed(&self) -> bool {

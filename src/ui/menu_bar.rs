@@ -99,6 +99,16 @@ impl MenuBar {
                 ui.close();
             }
 
+            if ui.button("Import DAWproject...").clicked() {
+                app.handle_action(AppAction::ImportDawProject);
+                ui.close();
+            }
+
+            if ui.button("Export DAWproject...").clicked() {
+                app.handle_action(AppAction::ExportDawProject);
+                ui.close();
+            }
+
             ui.separator();
 
             if ui.button("Project Settings...").clicked() {

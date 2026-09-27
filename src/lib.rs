@@ -9,6 +9,7 @@ pub mod audio_utils;
 pub mod command_processor;
 pub mod config;
 pub mod constants;
+pub mod dawproject;
 pub mod edit_actions;
 pub mod entry;
 pub mod error;
