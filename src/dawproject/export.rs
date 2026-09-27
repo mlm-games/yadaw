@@ -10,7 +10,7 @@ use yadaw_plugin_api::BackendKind;
 use super::{
     AUDIO_DIR, DAWPROJECT_VERSION, METADATA_ENTRY, PROJECT_ENTRY, Report, TimeUnit,
     beats_to_seconds, device_id, num, pan_to_normalized, rgb_to_hex, sanitize_name,
-    velocity_to_normalized, xml_text,
+    seconds_to_beats, velocity_to_normalized, xml_text,
 };
 use crate::model::automation::{AutomationPoint, AutomationTarget};
 use crate::model::clip::{AudioClip, MidiClip, MidiNote};
@@ -634,11 +634,6 @@ impl Ctx<'_> {
             self.report.count("empty audio clips were skipped", 1);
             return Ok(());
         }
-        if clip.loop_enabled {
-            self.report
-                .note("Audio clip looping is not expressible in DAWproject and was not exported");
-        }
-
         let (start, end) = source_range(clip, self.bpm);
         let region = &clip.samples[start..end];
         let region_seconds = region.len() as f64 / f64::from(clip.sample_rate);
@@ -647,16 +642,28 @@ impl Ctx<'_> {
         self.media
             .push((path.clone(), wav_bytes(region, clip.sample_rate)?));
 
-        let stretched =
-            (region_seconds - beats_to_seconds(clip.length_beats, self.bpm)).abs() > 1e-6;
+        // A looping clip repeats its material, so the warp only has to describe
+        // one pass; stretching is a one-shot clip's business.
+        let pass_beats = if clip.loop_enabled {
+            seconds_to_beats(region_seconds, self.bpm).min(clip.length_beats)
+        } else {
+            clip.length_beats
+        };
+        let stretched = !clip.loop_enabled
+            && (region_seconds - beats_to_seconds(clip.length_beats, self.bpm)).abs() > 1e-6;
 
         let mut a = attrs([
             ("time", num(clip.start_beat)),
             ("duration", num(clip.length_beats)),
+            ("contentTimeUnit", "seconds".to_string()),
             ("fadeTimeUnit", TimeUnit::Beats.name().to_string()),
             ("enable", (!clip.muted).to_string()),
             ("name", sanitize_name(&clip.name)),
         ]);
+        if clip.loop_enabled {
+            a.push(("loopStart", "0".to_string()));
+            a.push(("loopEnd", num(region_seconds)));
+        }
         if let Some(color) = clip.color {
             a.push(("color", rgb_to_hex(color)));
         }
@@ -695,7 +702,7 @@ impl Ctx<'_> {
         self.xml.leaf(
             "Warp",
             attrs([
-                ("time", num(clip.length_beats)),
+                ("time", num(pass_beats)),
                 ("contentTime", num(region_seconds)),
             ]),
         );

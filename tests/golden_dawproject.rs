@@ -322,6 +322,124 @@ fn dawproject_exports_groups_as_nested_tracks() {
 }
 
 #[test]
+fn dawproject_round_trips_looped_audio_clips() {
+    let project = Project {
+        version: PROJECT_VERSION.to_string(),
+        name: "Looped".to_string(),
+        tracks: vec![Track {
+            id: 1,
+            name: "Drums".to_string(),
+            track_type: TrackType::Audio,
+            audio_clips: vec![AudioClip {
+                id: 21,
+                name: "riser.wav".to_string(),
+                start_beat: 0.0,
+                length_beats: 8.0,
+                offset_beats: 0.0,
+                samples: tone(44_100),
+                sample_rate: 44100.0,
+                loop_enabled: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        patterns: Vec::new(),
+        groups: Vec::new(),
+        bpm: 120.0,
+        time_signature: (4, 4),
+        sample_rate: 44100.0,
+        master_volume: 0.8,
+        loop_start: 0.0,
+        loop_end: 16.0,
+        loop_enabled: false,
+        created_at: chrono::Utc::now(),
+        modified_at: chrono::Utc::now(),
+    };
+
+    let (bytes, _) = dawproject::export(&project).expect("export succeeds");
+    let clip_xml = project_xml(&bytes)
+        .lines()
+        .find(|l| l.contains("<Clip "))
+        .expect("an audio clip is written")
+        .to_string();
+    assert!(
+        clip_xml.contains("loopStart=") && clip_xml.contains("loopEnd="),
+        "a looping clip declares its loop region: {clip_xml}"
+    );
+
+    let (imported, report) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+    let clip = &imported.tracks[0].audio_clips[0];
+    assert!(clip.loop_enabled, "clip looping survives the round trip");
+    assert_eq!(
+        clip.samples.len(),
+        44_100,
+        "the material that repeats is kept whole"
+    );
+    assert_eq!(
+        clip.length_beats, 8.0,
+        "a clip longer than its material is not truncated, got {}",
+        clip.length_beats
+    );
+    assert!(
+        !report.notes.iter().any(|n| n.contains("looped audio clip")),
+        "nothing was dropped: {:?}",
+        report.notes
+    );
+}
+
+#[test]
+fn dawproject_imports_a_partial_audio_loop_region() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Transport>
+    <Tempo max="666.000000" min="20.000000" unit="bpm" value="120.000000" id="id0" name="Tempo"/>
+    <TimeSignature denominator="4" numerator="4" id="id1"/>
+  </Transport>
+  <Structure>
+    <Track contentType="audio" loaded="true" id="id2" name="Drums">
+      <Channel audioChannels="2" role="regular" solo="false" id="id3">
+        <Volume max="2.000000" min="0.000000" unit="linear" value="1.000000" id="id4" name="Volume"/>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement id="id5">
+    <Lanes timeUnit="beats" id="id6">
+      <Lanes track="id2" id="id7">
+        <Clips id="id8">
+          <Clip time="0.0" duration="4.0" contentTimeUnit="seconds" loopStart="0.5" loopEnd="1.0" name="riser.wav">
+            <Audio channels="1" duration="2.0" sampleRate="44100" id="id9">
+              <File path="Audio/riser.wav" id="id10"/>
+            </Audio>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let media = wav(&tone(88_200));
+    let (bytes, _) = zip_fixture_with_media(xml, &[("Audio/riser.wav", media)]);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+
+    let clip = &project.tracks[0].audio_clips[0];
+    assert!(clip.loop_enabled, "a sub-region loop still loops");
+    assert_eq!(
+        clip.samples.len(),
+        22_050,
+        "the material is cut down to the 0.5s..1.0s loop region, got {}",
+        clip.samples.len()
+    );
+    assert_eq!(
+        clip.length_beats, 4.0,
+        "the arrangement length outlasts the material it repeats"
+    );
+    assert!(!clip.warp_mode, "a loop region is not a time warp");
+}
+
+#[test]
 fn dawproject_imports_bitwig_style_alias_and_nested_clips() {
     let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Project version="1.0">
@@ -499,6 +617,10 @@ fn project_xml(bytes: &[u8]) -> String {
 }
 
 fn zip_fixture(project_xml: &str) -> (Vec<u8>, String) {
+    zip_fixture_with_media(project_xml, &[])
+}
+
+fn zip_fixture_with_media(project_xml: &str, media: &[(&str, Vec<u8>)]) -> (Vec<u8>, String) {
     use std::io::Write;
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
@@ -507,7 +629,29 @@ fn zip_fixture(project_xml: &str) -> (Vec<u8>, String) {
             .compression_method(zip::CompressionMethod::Deflated);
         writer.start_file("project.xml", options).unwrap();
         writer.write_all(project_xml.as_bytes()).unwrap();
+        for (name, data) in media {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(data).unwrap();
+        }
         writer.finish().unwrap();
     }
     (cursor.into_inner(), project_xml.to_string())
+}
+
+fn wav(samples: &[f32]) -> Vec<u8> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44_100,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).unwrap();
+        for sample in samples {
+            writer.write_sample(*sample).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+    cursor.into_inner()
 }

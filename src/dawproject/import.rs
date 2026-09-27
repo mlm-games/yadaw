@@ -866,11 +866,22 @@ fn read_audio_clip(
         .map(|w| scope_unit(w, "timeUnit", unit))
         .unwrap_or(unit);
 
+    let loop_region = match (num_attr(node, "loopStart"), num_attr(node, "loopEnd")) {
+        (Some(start), Some(end)) if end > start => Some((
+            content_unit.to_seconds(start, bpm),
+            content_unit.to_seconds(end, bpm),
+        )),
+        _ => None,
+    };
+
     let audio_seconds =
         content_seconds_unit.to_seconds(num_attr(audio, "duration").unwrap_or(0.0), bpm);
     let slope = warps.and_then(|w| warp_slope(w, warps_unit, content_seconds_unit, bpm));
     let slope = slope.or_else(|| {
-        (length_beats > 0.0 && audio_seconds > 0.0).then(|| audio_seconds / length_beats)
+        // A looping clip repeats its loop region at natural speed unless Warps
+        // says otherwise, so the whole-file ratio says nothing about it.
+        (loop_region.is_none() && length_beats > 0.0 && audio_seconds > 0.0)
+            .then(|| audio_seconds / length_beats)
     });
 
     let start_seconds = content_unit.to_seconds(num_attr(node, "playStart").unwrap_or(0.0), bpm);
@@ -880,6 +891,16 @@ fn read_audio_clip(
         .min(clip.samples.len());
     if start_sample > 0 {
         clip.samples = Arc::new(clip.samples[start_sample..].to_vec());
+    }
+
+    if let Some((from, to)) = loop_region {
+        let first = ((from * f64::from(clip.sample_rate)).round().max(0.0) as usize)
+            .min(clip.samples.len());
+        let last = ((to * f64::from(clip.sample_rate)).round().max(0.0) as usize)
+            .clamp(first, clip.samples.len());
+        if first > 0 || last < clip.samples.len() {
+            clip.samples = Arc::new(clip.samples[first..last].to_vec());
+        }
     }
 
     let natural = 60.0 / bpm;
@@ -897,13 +918,25 @@ fn read_audio_clip(
         }
     }
 
-    let length_beats = if length_beats > 0.0 {
+    let content_beats =
+        seconds_to_beats(clip.samples.len() as f64 / f64::from(clip.sample_rate), bpm);
+    let mut length_beats = if length_beats > 0.0 {
         length_beats
     } else {
-        seconds_to_beats(clip.samples.len() as f64 / f64::from(clip.sample_rate), bpm)
+        content_beats
     };
-    let length_beats =
-        length_beats.min(clip.samples.len() as f64 / f64::from(clip.sample_rate) * bpm / 60.0);
+    // Warping stretches the material across the whole clip, leaving no room to
+    // also repeat a region of it.
+    let looped = loop_region.is_some() && content_beats + 1.0e-9 < length_beats;
+    if looped && clip.warp_mode {
+        report.note(
+            "Warped audio clips cannot also repeat a region of their material; that loop was dropped",
+        );
+    }
+    let loop_enabled = looped && !clip.warp_mode;
+    if !loop_enabled {
+        length_beats = length_beats.min(content_beats);
+    }
 
     let fade_unit = TimeUnit::parse(attr(node, "fadeTimeUnit"));
     clip.fade_in = read_fade(node, "fadeInTime", fade_unit, bpm, false);
@@ -916,7 +949,7 @@ fn read_audio_clip(
     clip.color = color;
     clip.muted = muted;
     clip.name = clip_name;
-    clip.loop_enabled = attr(node, "loopStart").is_some() && attr(node, "loopEnd").is_some();
+    clip.loop_enabled = loop_enabled;
 
     track.audio_clips.push(clip);
 }

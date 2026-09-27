@@ -306,6 +306,7 @@ pub struct AudioClipSnapshot {
     pub samples: Arc<Vec<f32>>,
     pub sample_rate: f32,
     pub warp_mode: bool,
+    pub loop_enabled: bool,
     pub fade_in: Option<f64>,
     pub fade_out: Option<f64>,
     pub gain: f32,

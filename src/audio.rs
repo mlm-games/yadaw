@@ -2361,7 +2361,14 @@ fn process_audio_track(
         };
 
         let visual_length_samples = converter.beats_to_samples(clip.length_beats);
-        let clip_length_samples = audio_length_samples.min(visual_length_samples);
+        let src_len = clip.samples.len() as f64;
+        // A looping clip spans its whole arrangement length and repeats the
+        // source; a one-shot clip is capped by however much source it has.
+        let clip_length_samples = if clip.loop_enabled {
+            visual_length_samples
+        } else {
+            audio_length_samples.min(visual_length_samples)
+        };
 
         let clip_end_samples = clip_start_samples + clip_length_samples;
 
@@ -2400,8 +2407,11 @@ fn process_audio_track(
 
             // Project sample offset inside the clip window (dst/project domain)
             let proj_off = (overlap_start - clip_start_samples) + i as f64;
-            // Source float index (clip domain)
-            let src_pos = (proj_off + offset_samples) * ratio;
+            // Source float index (clip domain), wrapping once per source length
+            let mut src_pos = (proj_off + offset_samples) * ratio;
+            if clip.loop_enabled && src_len > 1.0 {
+                src_pos = src_pos.rem_euclid(src_len);
+            }
             let src_idx = src_pos.floor() as usize;
             let frac = (src_pos - src_idx as f64) as f32;
 
