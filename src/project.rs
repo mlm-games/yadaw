@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::constants::DEFAULT_LOOP_LEN;
-use crate::model::clip::MidiPattern;
+use crate::model::clip::{AudioClip, MidiPattern, WarpPoint};
 use crate::model::{GroupLinkMode, Marker, Track, TrackGroup};
 use crate::time_utils::TimeConverter;
 
@@ -153,6 +153,9 @@ impl AppState {
         self.group_order.retain(|id| self.groups.contains_key(id));
         let track_ids: Vec<u64> = self.tracks.keys().copied().collect();
         for track in self.tracks.values_mut() {
+            for clip in &mut track.audio_clips {
+                sanitize_warp_points(clip);
+            }
             if track
                 .group_id
                 .is_some_and(|g| !self.groups.contains_key(&g))
@@ -176,6 +179,41 @@ impl AppState {
 pub enum ArrangementRow {
     Group(u64),
     Track(u64),
+}
+
+/// Puts a clip's warp map back into the shape the audio thread assumes: sorted
+/// by beat, no repeated beats, and content time never running backwards. A map
+/// that cannot be repaired is dropped so the clip falls back to a synthesised one.
+pub fn sanitize_warp_points(clip: &mut AudioClip) {
+    let mut points = std::mem::take(&mut clip.warps);
+    if points.len() < 2 {
+        return;
+    }
+    if points
+        .iter()
+        .any(|p| !p.beat.is_finite() || !p.content_seconds.is_finite())
+    {
+        log::warn!("Warp map holds a non-finite point; dropped");
+        return;
+    }
+    points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    let mut kept: Vec<WarpPoint> = Vec::with_capacity(points.len());
+    for point in points {
+        match kept.last_mut() {
+            Some(last) if last.beat == point.beat => *last = point,
+            Some(last) if point.content_seconds < last.content_seconds => {
+                log::warn!(
+                    "Warp map runs content time backwards at beat {}; dropped",
+                    point.beat
+                );
+                return;
+            }
+            _ => kept.push(point),
+        }
+    }
+    if kept.len() >= 2 {
+        clip.warps = kept;
+    }
 }
 
 /// Drops dead parents and breaks cycles; each pass severs one cycle edge.
@@ -660,6 +698,12 @@ impl AppState {
         }
         self.markers
             .sort_by(|a, b| a.beat.total_cmp(&b.beat).then_with(|| a.id.cmp(&b.id)));
+
+        for track in self.tracks.values_mut() {
+            for clip in &mut track.audio_clips {
+                sanitize_warp_points(clip);
+            }
+        }
 
         self.project_name = project.name.clone();
 

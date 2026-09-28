@@ -99,7 +99,7 @@ impl MenuBar {
                 ui.close();
             }
 
-            if ui.button("Import DAWproject...").clicked() {
+            if ui.button("Import a DAWproject...").clicked() {
                 app.handle_action(AppAction::ImportDawProject);
                 ui.close();
             }

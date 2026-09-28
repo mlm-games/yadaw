@@ -1960,9 +1960,6 @@ fn process_command(
                 if let ClipLocation::Audio(idx) = loc {
                     if let Some(ac) = track.audio_clips.get_mut(idx) {
                         ac.warp_mode = warp_mode;
-                        if ac.time_stretch <= 0.0 || !ac.time_stretch.is_finite() {
-                            ac.time_stretch = 1.0;
-                        }
                     }
                 }
             }

@@ -2550,23 +2550,13 @@ fn process_audio_track(
             continue;
         }
 
-        let offset_samples = if clip.warp_mode {
-            converter.beats_to_samples(clip.offset_beats)
-        } else {
-            ((clip.offset_beats * 60.0 / bpm as f64) * clip.sample_rate as f64)
-                * (sample_rate / clip.sample_rate as f64)
-        };
-
         let frames = ((overlap_end - overlap_start).round() as usize)
             .min(num_frames.saturating_sub((overlap_start - buffer_start).round() as usize));
         let start_in_buffer = (overlap_start - buffer_start).round() as usize;
 
-        let ratio = if clip.warp_mode {
-            let stretched_len_dst = audio_length_samples.max(1.0);
-            clip.samples.len() as f64 / stretched_len_dst
-        } else {
-            clip.sample_rate as f64 / sample_rate
-        }; // src_per_dst
+        let warp = clip.warp_curve(bpm as f64);
+        let clip_rate = clip.sample_rate as f64;
+        let clip_offset_beat = clip.offset_beats;
         let clip_length_beats = clip.length_beats;
         let fade_in_beats = clip.fade_in.unwrap_or(0.0).max(0.0);
         let fade_out_beats = clip.fade_out.unwrap_or(0.0).max(0.0);
@@ -2580,7 +2570,9 @@ fn process_audio_track(
             // Project sample offset inside the clip window (dst/project domain)
             let proj_off = (overlap_start - clip_start_samples) + i as f64;
             // Source float index (clip domain), wrapping once per source length
-            let mut src_pos = (proj_off + offset_samples) * ratio;
+            let mut src_pos = warp
+                .content_seconds_at(clip_offset_beat + converter.samples_to_beats(proj_off))
+                * clip_rate;
             if clip.loop_enabled && src_len > 1.0 {
                 src_pos = src_pos.rem_euclid(src_len);
             }

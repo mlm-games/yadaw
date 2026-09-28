@@ -926,16 +926,7 @@ fn track_content_type(track: &Track) -> String {
 
 fn source_range(clip: &AudioClip, bpm: f64) -> (usize, usize) {
     let total = clip.samples.len();
-    let audio_seconds = total as f64 / f64::from(clip.sample_rate);
-    let start_seconds = if clip.warp_mode {
-        if clip.length_beats > 0.0 {
-            clip.offset_beats * audio_seconds / clip.length_beats
-        } else {
-            0.0
-        }
-    } else {
-        beats_to_seconds(clip.offset_beats, bpm)
-    };
+    let start_seconds = clip.warp_curve(bpm).content_seconds_at(clip.offset_beats);
     let start = (start_seconds * f64::from(clip.sample_rate))
         .round()
         .max(0.0)

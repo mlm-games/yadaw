@@ -4,7 +4,7 @@ use yadaw::edit_actions::EditProcessor;
 use yadaw::input::actions::AppAction;
 use yadaw::input::shortcuts::{KeyCode, Keybind, ShortcutRegistry};
 use yadaw::midi_utils::MidiNoteUtils;
-use yadaw::model::clip::{MidiClip, MidiNote, MidiPattern};
+use yadaw::model::clip::{AudioClip, MidiClip, MidiNote, MidiPattern, WarpPoint};
 use yadaw::model::group::{GroupLinkMode, TrackGroup};
 use yadaw::model::marker::Marker;
 use yadaw::model::track::{Send, Track, TrackType};
@@ -458,5 +458,151 @@ fn moving_a_group_into_its_own_subtree_is_refused() {
     assert!(
         !state.group_descendants(20).contains(&10),
         "and the reverse is fine"
+    );
+}
+
+fn audio_clip_fixture(warp_mode: bool, warps: Vec<WarpPoint>, length_beats: f64) -> AudioClip {
+    AudioClip {
+        id: 1,
+        name: "Take".to_string(),
+        start_beat: 0.0,
+        length_beats,
+        sample_rate: 48_000.0,
+        samples: std::sync::Arc::new(vec![0.0; 48_000 * 4]),
+        warp_mode,
+        warps,
+        ..AudioClip::default()
+    }
+}
+
+fn close(actual: f64, expected: f64) -> bool {
+    (actual - expected).abs() < 1.0e-9
+}
+
+#[test]
+fn an_unwarped_clip_reads_at_natural_speed_whatever_points_it_holds() {
+    let clip = audio_clip_fixture(
+        false,
+        vec![
+            WarpPoint {
+                beat: 0.0,
+                content_seconds: 0.0,
+            },
+            WarpPoint {
+                beat: 4.0,
+                content_seconds: 9.0,
+            },
+        ],
+        4.0,
+    );
+
+    // 120 BPM: one beat is half a second, so beat 4 is 2 s in.
+    assert!(
+        close(clip.warp_curve(120.0).content_seconds_at(4.0), 2.0),
+        "warp mode off wins over stored points"
+    );
+}
+
+#[test]
+fn a_warped_clip_without_points_stretches_its_whole_source_over_its_length() {
+    let clip = audio_clip_fixture(true, Vec::new(), 4.0);
+
+    // The source is 4 s and the clip is 4 beats, so one beat is one second of
+    // material whatever the project tempo is.
+    let curve = clip.warp_curve(120.0);
+    assert!(close(curve.content_seconds_at(0.0), 0.0));
+    assert!(close(curve.content_seconds_at(1.0), 1.0));
+    assert!(close(curve.content_seconds_at(4.0), 4.0));
+    assert!(
+        close(
+            curve.content_seconds_at(4.0),
+            clip.warp_curve(174.0).content_seconds_at(4.0)
+        ),
+        "a stretched clip reads the same content per beat at any tempo"
+    );
+}
+
+#[test]
+fn a_warped_clip_with_points_follows_them_and_stops_at_their_ends() {
+    let clip = audio_clip_fixture(
+        true,
+        vec![
+            WarpPoint {
+                beat: 0.0,
+                content_seconds: 0.0,
+            },
+            WarpPoint {
+                beat: 2.0,
+                content_seconds: 1.0,
+            },
+            WarpPoint {
+                beat: 4.0,
+                content_seconds: 5.0,
+            },
+        ],
+        4.0,
+    );
+
+    let curve = clip.warp_curve(120.0);
+    assert!(close(curve.content_seconds_at(0.0), 0.0));
+    assert!(
+        close(curve.content_seconds_at(1.0), 0.5),
+        "the first segment runs at half a second per beat"
+    );
+    assert!(
+        close(curve.content_seconds_at(2.0), 1.0),
+        "and joins the second segment exactly"
+    );
+    assert!(
+        close(curve.content_seconds_at(3.0), 3.0),
+        "the second segment runs at two seconds per beat"
+    );
+    assert!(
+        close(curve.content_seconds_at(4.0), 5.0),
+        "the last point is the end of the material"
+    );
+    assert!(
+        close(curve.content_seconds_at(9.0), 5.0) && close(curve.content_seconds_at(-3.0), 0.0),
+        "reading past either end clamps rather than running off the source"
+    );
+}
+
+#[test]
+fn a_warp_map_that_cannot_be_repaired_is_dropped_rather_than_played() {
+    use yadaw::project::sanitize_warp_points;
+
+    let point = |beat, content_seconds| WarpPoint {
+        beat,
+        content_seconds,
+    };
+
+    let mut unsorted = audio_clip_fixture(true, vec![point(4.0, 5.0), point(0.0, 0.0)], 4.0);
+    sanitize_warp_points(&mut unsorted);
+    assert_eq!(
+        unsorted.warps,
+        vec![point(0.0, 0.0), point(4.0, 5.0)],
+        "points out of order are sorted, not discarded"
+    );
+
+    let mut backwards = audio_clip_fixture(
+        true,
+        vec![point(0.0, 0.0), point(2.0, 4.0), point(4.0, 1.0)],
+        4.0,
+    );
+    sanitize_warp_points(&mut backwards);
+    assert!(
+        backwards.warps.is_empty(),
+        "content time running backwards falls back to a synthesised map"
+    );
+
+    let mut nan = audio_clip_fixture(true, vec![point(0.0, 0.0), point(4.0, f64::NAN)], 4.0);
+    sanitize_warp_points(&mut nan);
+    assert!(nan.warps.is_empty(), "and so does a non-finite point");
+
+    let mut lonely = audio_clip_fixture(true, vec![point(0.0, 0.0)], 4.0);
+    sanitize_warp_points(&mut lonely);
+    assert!(
+        lonely.warps.is_empty(),
+        "a single point is not a map, so it is discarded"
     );
 }

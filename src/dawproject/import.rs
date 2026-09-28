@@ -977,14 +977,12 @@ fn read_audio_clip(
     match slope {
         Some(value) if (value - natural).abs() > 1.0e-9 => {
             clip.warp_mode = true;
-            clip.time_stretch = (value / natural) as f32;
             report.note(
                 "Time-warped audio was flattened to a single fixed speed mapping, which is all yadaw can store",
             );
         }
         _ => {
             clip.warp_mode = false;
-            clip.time_stretch = 1.0;
         }
     }
 

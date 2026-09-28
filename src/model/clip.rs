@@ -108,6 +108,93 @@ fn default_opt_u64_none() -> Option<u64> {
     None
 }
 
+/// One anchor of an audio clip's beat-to-content time map. `beat` is a
+/// clip-local beat, `content_seconds` is how far into the source material that
+/// beat reads.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct WarpPoint {
+    pub beat: f64,
+    pub content_seconds: f64,
+}
+
+/// A resolved clip-local beat -> content-seconds map. The two-point form is the
+/// common case and stays a pair of scalars so the audio thread never allocates.
+#[derive(Debug, Clone, Copy)]
+pub enum WarpCurve<'a> {
+    Linear { origin: f64, slope: f64 },
+    Points(&'a [WarpPoint]),
+}
+
+impl WarpCurve<'_> {
+    /// Content time to read at a clip-local beat, clamped to the curve's ends.
+    #[inline]
+    pub fn content_seconds_at(&self, beat: f64) -> f64 {
+        match self {
+            Self::Linear { origin, slope } => origin + beat * slope,
+            Self::Points(points) => interp_warp_points(points, beat),
+        }
+    }
+}
+
+fn interp_warp_points(points: &[WarpPoint], beat: f64) -> f64 {
+    let first = points[0];
+    if beat <= first.beat {
+        return first.content_seconds;
+    }
+    let last = points[points.len() - 1];
+    if beat >= last.beat {
+        return last.content_seconds;
+    }
+    let mut lo = 0usize;
+    let mut hi = points.len() - 1;
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if points[mid].beat <= beat {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let a = points[lo];
+    let b = points[hi];
+    let span = b.beat - a.beat;
+    if span <= f64::EPSILON {
+        return b.content_seconds;
+    }
+    let t = (beat - a.beat) / span;
+    a.content_seconds + (b.content_seconds - a.content_seconds) * t
+}
+
+/// Resolve a clip's warp map. `warp_mode` is the master switch: when it is off
+/// the clip reads at natural speed and any stored points are ignored. When it is
+/// on, two or more stored points are used verbatim, and otherwise the map is
+/// synthesised so the whole source is stretched to fill `length_beats`.
+pub fn resolve_warp<'a>(
+    warps: &'a [WarpPoint],
+    warp_mode: bool,
+    length_beats: f64,
+    source_seconds: f64,
+    bpm: f64,
+) -> WarpCurve<'a> {
+    if !warp_mode {
+        return WarpCurve::Linear {
+            origin: 0.0,
+            slope: 60.0 / bpm,
+        };
+    }
+    if warps.len() >= 2 {
+        return WarpCurve::Points(warps);
+    }
+    WarpCurve::Linear {
+        origin: 0.0,
+        slope: if length_beats > f64::EPSILON {
+            source_seconds / length_beats
+        } else {
+            source_seconds
+        },
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioClip {
     #[serde(default = "zero_u64")]
@@ -125,9 +212,10 @@ pub struct AudioClip {
     pub fade_out: Option<f64>,
     pub gain: f32,
     pub pitch_shift: f32,
-    pub time_stretch: f32,
     #[serde(default = "default_false")]
     pub warp_mode: bool,
+    #[serde(default)]
+    pub warps: Vec<WarpPoint>,
     pub reverse: bool,
     pub loop_enabled: bool,
     pub color: Option<(u8, u8, u8)>,
@@ -152,8 +240,8 @@ impl Default for AudioClip {
             fade_out: None,
             gain: 1.0,
             pitch_shift: 0.0,
-            time_stretch: 1.0,
             warp_mode: false,
+            warps: Vec::new(),
             reverse: false,
             loop_enabled: false,
             color: None,
@@ -162,5 +250,22 @@ impl Default for AudioClip {
             crossfade_in: None,
             crossfade_out: None,
         }
+    }
+}
+
+impl AudioClip {
+    #[inline]
+    pub fn source_seconds(&self) -> f64 {
+        self.samples.len() as f64 / f64::from(self.sample_rate)
+    }
+
+    pub fn warp_curve(&self, bpm: f64) -> WarpCurve<'_> {
+        resolve_warp(
+            &self.warps,
+            self.warp_mode,
+            self.length_beats,
+            self.source_seconds(),
+            bpm,
+        )
     }
 }

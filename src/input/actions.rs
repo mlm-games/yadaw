@@ -262,8 +262,8 @@ impl AppAction {
             Self::SaveProjectAs => "Save Project As",
             Self::ImportAudio => "Import Audio",
             Self::ExportAudio => "Export Audio",
-            Self::ImportDawProject => "Import DAWproject",
-            Self::ExportDawProject => "Export DAWproject",
+            Self::ImportDawProject => "Import a DAWproject",
+            Self::ExportDawProject => "Export as a DAWproject",
 
             Self::ZoomIn => "Zoom In",
             Self::ZoomOut => "Zoom Out",

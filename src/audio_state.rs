@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::constants::DEFAULT_LOOP_LEN;
+use crate::model::clip::{WarpCurve, WarpPoint, resolve_warp};
 use crate::model::track::TrackType;
 use yadaw_plugin_api::{BackendKind, PluginInstance as UnifiedInstance};
 
@@ -321,10 +322,28 @@ pub struct AudioClipSnapshot {
     pub samples: Arc<Vec<f32>>,
     pub sample_rate: f32,
     pub warp_mode: bool,
+    pub warps: Vec<WarpPoint>,
     pub loop_enabled: bool,
     pub fade_in: Option<f64>,
     pub fade_out: Option<f64>,
     pub gain: f32,
+}
+
+impl AudioClipSnapshot {
+    #[inline]
+    fn source_seconds(&self) -> f64 {
+        self.samples.len() as f64 / self.sample_rate as f64
+    }
+
+    pub fn warp_curve(&self, bpm: f64) -> WarpCurve<'_> {
+        resolve_warp(
+            &self.warps,
+            self.warp_mode,
+            self.length_beats,
+            self.source_seconds(),
+            bpm,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default)]
