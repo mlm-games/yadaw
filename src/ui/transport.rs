@@ -53,7 +53,7 @@ impl TransportUI {
                             transport.rewind();
                         }
 
-                        if ui.button("⏪").on_hover_text("Rewind").clicked()
+                        if ui.button("«").on_hover_text("Rewind").clicked()
                             && let Some(transport) = &self.transport
                         {
                             transport.rewind_beats(4.0);
@@ -65,7 +65,7 @@ impl TransportUI {
                             .map(|t| t.is_playing())
                             .unwrap_or(false);
 
-                        let play_button = if is_playing { "⏸" } else { "▶" };
+                        let play_button = if is_playing { "⏸" } else { "⏵" };
                         if ui.button(play_button).on_hover_text("Play/Pause").clicked() {
                             // Needed on wasm for autoplay policy with spacebar.
                             #[cfg(target_arch = "wasm32")]
@@ -112,7 +112,7 @@ impl TransportUI {
                             let _ = app.command_tx.send(cmd);
                         }
 
-                        if ui.button("⏩").on_hover_text("Fast Forward").clicked()
+                        if ui.button("»").on_hover_text("Fast Forward").clicked()
                             && let Some(transport) = &self.transport
                         {
                             transport.fast_forward(4.0);

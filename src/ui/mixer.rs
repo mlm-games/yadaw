@@ -442,7 +442,7 @@ impl MixerWindow {
                     }
                     // Record arm
                     if ui
-                        .selectable_label(track.armed, if track.armed { "●" } else { "○" })
+                        .selectable_label(track.armed, if track.armed { "■" } else { "○" })
                         .on_hover_text("Record Arm")
                         .clicked()
                     {

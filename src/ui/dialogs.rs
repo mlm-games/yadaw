@@ -1781,7 +1781,7 @@ impl ShortcutsEditorDialog {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Add binding button
-                if ui.small_button("➕").on_hover_text("Add Keybind").clicked() {
+                if ui.small_button("+").on_hover_text("Add Keybind").clicked() {
                     self.capturing = Some(action);
                     self.capture_buffer = None;
                 }

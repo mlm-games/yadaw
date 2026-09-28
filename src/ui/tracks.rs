@@ -56,7 +56,7 @@ impl TracksPanel {
             ui.heading("Tracks");
             ui.toggle_value(&mut self.show_mixer_strip, "☰")
                 .on_hover_text("Show/Hide Mixer Strip");
-            ui.toggle_value(&mut self.show_automation_buttons, "〰")
+            ui.toggle_value(&mut self.show_automation_buttons, "~")
                 .on_hover_text("Show/Hide Automation");
             ui.toggle_value(&mut self.show_inputs, "🔣")
                 .on_hover_text("Show/Hide Input Options");
@@ -76,13 +76,13 @@ impl TracksPanel {
             .scroll_source(ScrollSource::ALL)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("➕ Audio Track").clicked() {
+                    if ui.button("+ Audio Track").clicked() {
                         app.add_audio_track();
                     }
-                    if ui.button("➕ MIDI Track").clicked() {
+                    if ui.button("+ MIDI Track").clicked() {
                         app.add_midi_track();
                     }
-                    if ui.button("➕ Bus").clicked() {
+                    if ui.button("+ Bus").clicked() {
                         app.add_bus_track();
                     }
                 });
@@ -215,7 +215,7 @@ impl TracksPanel {
 
                     // Selected marker
                     if is_selected {
-                        ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "▶");
+                        ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "⏵");
                     } else {
                         ui.label(" ");
                     }
@@ -257,7 +257,7 @@ impl TracksPanel {
                     }
 
                     ui.label(name);
-                    ui.label(if is_midi { "🎹" } else { "🎵" });
+                    ui.label(if is_midi { "🎹" } else { "♪" });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.menu_button("⚙", |ui| {
@@ -370,7 +370,7 @@ impl TracksPanel {
                     .send(AudioCommand::SetTrackSolo(track_id, !solo));
             }
             if ui
-                .selectable_label(armed, if armed { "●" } else { "○" })
+                .selectable_label(armed, if armed { "■" } else { "○" })
                 .on_hover_text("Record Arm")
                 .clicked()
             {
