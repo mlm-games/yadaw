@@ -52,6 +52,13 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.11.0" date="2026-09-28" type="stable">
+      <description>
+        <ul>
+          <li>DAWproject 1.0 support for Import/Export (#16)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.9" date="2026-09-26" type="stable">
       <description>
         <ul>

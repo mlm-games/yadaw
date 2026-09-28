@@ -1,3 +1,8 @@
+## v0.11.0
+
+- DAWproject 1.0 support for Import/Export (#16)
+
+
 ## v0.10.9
 
 - use rlobkit's immersive sticky flag for #13
