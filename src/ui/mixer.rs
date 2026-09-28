@@ -355,7 +355,7 @@ impl MixerWindow {
                                     let _ = app.command_tx.send(crate::messages::AudioCommand::SetSendPreFader(track_id, idx, pre));
                                 }
                                 // Remove
-                                if ui.small_button("✕").clicked() {
+                                if ui.small_button("×").clicked() {
                                     let _ = app.command_tx.send(crate::messages::AudioCommand::RemoveSend(track_id, idx));
                                 }
                             });

@@ -316,7 +316,7 @@ impl TransportUI {
                     self.marker_name_input = marker.name.clone();
                 }
                 if ui
-                    .small_button("✕")
+                    .small_button("×")
                     .on_hover_text("Delete Marker")
                     .clicked()
                 {
@@ -333,7 +333,7 @@ impl TransportUI {
                 let name = self.marker_name_input.clone();
                 let _ = app.command_tx.send(AudioCommand::RenameMarker(id, name));
             }
-            if ui.button("⤓ Jump").clicked() {
+            if ui.button("» Jump").clicked() {
                 let samples = (beat * 60.0 / bpm) * sample_rate;
                 if let Some(transport) = &self.transport {
                     transport.set_position(samples);

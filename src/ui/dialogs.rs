@@ -1791,7 +1791,7 @@ impl ShortcutsEditorDialog {
 
                 for (i, bind) in bindings.iter().enumerate().rev() {
                     // Remove button
-                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                    if ui.small_button("×").on_hover_text("Remove").clicked() {
                         input_mgr.shortcuts_mut().unbind(bind);
                         let _ = input_mgr.save_shortcuts(&crate::paths::shortcuts_path());
                     }
