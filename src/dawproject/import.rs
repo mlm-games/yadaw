@@ -291,6 +291,7 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
         groups,
         markers,
         bpm: bpm as f32,
+        tempo_map: Vec::new(),
         time_signature,
         sample_rate: crate::constants::DEFAULT_SAMPLE_RATE as f32,
         master_volume,

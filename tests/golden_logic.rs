@@ -7,8 +7,9 @@ use yadaw::midi_utils::MidiNoteUtils;
 use yadaw::model::clip::{AudioClip, MidiClip, MidiNote, MidiPattern, WarpPoint};
 use yadaw::model::group::{GroupLinkMode, TrackGroup};
 use yadaw::model::marker::Marker;
+use yadaw::model::tempo::{TempoCurve, TempoPoint};
 use yadaw::model::track::{Send, Track, TrackType};
-use yadaw::project::{AppState, ArrangementRow, PROJECT_VERSION, Project};
+use yadaw::project::{AppState, ArrangementRow, PROJECT_VERSION, Project, tempo_map_base_bpm};
 
 fn note(id: u64, pitch: u8, start: f64) -> MidiNote {
     MidiNote {
@@ -76,6 +77,7 @@ fn project_fixture() -> Project {
             comment: None,
         }],
         bpm: 120.0,
+        tempo_map: Vec::new(),
         time_signature: (4, 4),
         sample_rate: 44100.0,
         master_volume: 0.8,
@@ -605,4 +607,180 @@ fn a_warp_map_that_cannot_be_repaired_is_dropped_rather_than_played() {
         lonely.warps.is_empty(),
         "a single point is not a map, so it is discarded"
     );
+}
+
+fn near(actual: f64, expected: f64, tol: f64) -> bool {
+    (actual - expected).abs() <= tol * expected.abs().max(1.0)
+}
+
+#[test]
+fn a_constant_tempo_curve_reproduces_the_old_converter_bit_for_bit() {
+    for bpm in [40.0_f64, 60.0, 120.0, 174.0, 999.0] {
+        let curve = TempoCurve::from_map(&[], bpm);
+        assert!(curve.is_constant());
+        assert_eq!(curve.constant_bpm(), bpm);
+        for beats in [0.0, 0.25, 1.0, 4.0, 128.0, 1000.0] {
+            assert_eq!(
+                curve.beats_to_seconds(beats),
+                beats * 60.0 / bpm,
+                "beats to seconds at {bpm} BPM, beat {beats}"
+            );
+            assert!(
+                near(curve.seconds_to_beats(beats * 60.0 / bpm), beats, 1e-12),
+                "seconds to beats at {bpm} BPM, beat {beats}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_tempo_ramp_is_integrated_exactly_and_round_trips() {
+    let map = [
+        TempoPoint::new(0.0, 90.0),
+        TempoPoint::new(4.0, 200.0),
+        TempoPoint::new(5.0, 40.0),
+        TempoPoint::new(9.0, 40.0),
+        TempoPoint::new(10.0, 300.0),
+    ];
+    let curve = TempoCurve::from_map(&map, 90.0);
+    assert!(!curve.is_constant());
+
+    let mut beat = -8.0;
+    while beat <= 14.0 {
+        let seconds = curve.beats_to_seconds(beat);
+        assert!(
+            near(curve.seconds_to_beats(seconds), beat, 1e-9),
+            "beat {beat} went out at {seconds} s and came back at {}",
+            curve.seconds_to_beats(seconds)
+        );
+        beat += 0.125;
+    }
+
+    assert!(near(curve.bpm_at(0.0), 90.0, 1e-12));
+    assert!(
+        near(curve.bpm_at(2.0), 145.0, 1e-12),
+        "halfway up the first ramp"
+    );
+    assert!(
+        near(curve.bpm_at(20.0), 300.0, 1e-12),
+        "past the end it holds"
+    );
+    assert!(
+        near(curve.bpm_at(-20.0), 90.0, 1e-12),
+        "before the start it holds"
+    );
+}
+
+#[test]
+fn a_flat_tempo_map_is_still_a_constant_tempo() {
+    let map = [
+        TempoPoint::new(0.0, 100.0),
+        TempoPoint::new(8.0, 100.0),
+        TempoPoint::new(16.0, 100.0),
+    ];
+    let curve = TempoCurve::from_map(&map, 100.0);
+    assert!(near(curve.beats_to_seconds(4.0), 2.4, 1e-12));
+    assert!(near(curve.beats_to_seconds(16.0), 9.6, 1e-12));
+    assert!(near(curve.bpm_at(9.0), 100.0, 1e-12));
+}
+
+#[test]
+fn a_tempo_map_that_starts_late_inherits_the_project_tempo() {
+    let curve = TempoCurve::from_map(&[TempoPoint::new(8.0, 60.0)], 120.0);
+    assert!(near(curve.beats_to_seconds(0.0), 0.0, 1e-12));
+    assert!(near(curve.bpm_at(0.0), 120.0, 1e-12));
+    // The tempo ramps over beats 0..8, so beat 8 lands between 4 s and 8 s.
+    let at_eight = curve.beats_to_seconds(8.0);
+    assert!(at_eight > 4.0 && at_eight < 8.0, "beat 8 is {at_eight} s");
+    let k = (60.0 - 120.0) / 8.0_f64;
+    assert!(near(at_eight, (60.0 / k) * (60.0_f64 / 120.0).ln(), 1e-12));
+    assert!(near(curve.seconds_to_beats(at_eight), 8.0, 1e-9));
+    assert!(near(curve.bpm_at(8.0), 60.0, 1e-12));
+}
+
+#[test]
+fn an_unusable_tempo_map_falls_back_to_a_constant_tempo() {
+    let curve = TempoCurve::from_map(
+        &[
+            TempoPoint::new(f64::NAN, 100.0),
+            TempoPoint::new(4.0, 0.0),
+            TempoPoint::new(8.0, f64::INFINITY),
+        ],
+        128.0,
+    );
+    assert!(curve.is_constant());
+    assert_eq!(curve.constant_bpm(), 128.0);
+
+    for bad in [0.0_f64, -5.0, f64::NAN, f64::INFINITY] {
+        let curve = TempoCurve::from_map(&[], bad);
+        assert_eq!(curve.constant_bpm(), 120.0, "tempo {bad} falls back");
+        assert_eq!(curve.beats_to_seconds(1.0), 0.5);
+    }
+}
+
+#[test]
+fn a_non_finite_tempo_query_does_not_poison_the_curve() {
+    let curve = TempoCurve::from_map(
+        &[TempoPoint::new(0.0, 120.0), TempoPoint::new(8.0, 60.0)],
+        120.0,
+    );
+    assert_eq!(curve.beats_to_seconds(f64::NAN), 0.0);
+    assert_eq!(curve.beats_to_seconds(f64::INFINITY), 0.0);
+    assert_eq!(curve.seconds_to_beats(f64::NEG_INFINITY), 0.0);
+    assert!(curve.bpm_at(f64::NAN).is_finite());
+    // Beat 4 is the midpoint of the 120 -> 60 ramp, so the answer is the exact
+    // integral of that ramp, not either tempo's own.
+    let k = (60.0_f64 - 120.0) / 8.0;
+    let expected = (60.0 / k) * ((120.0 + k * 4.0) / 120.0).ln();
+    assert!(near(curve.beats_to_seconds(4.0), expected, 1e-12));
+}
+
+#[test]
+fn a_saved_tempo_map_survives_a_save_and_load() {
+    let map = vec![TempoPoint::new(0.0, 100.0), TempoPoint::new(8.0, 140.0)];
+    let state = AppState {
+        bpm: 100.0,
+        tempo_map: map.clone(),
+        ..AppState::default()
+    };
+
+    let project = state.to_project();
+    assert_eq!(project.tempo_map, map, "the map is written out");
+
+    let mut reloaded = AppState::default();
+    reloaded.load_project(project);
+    assert_eq!(reloaded.tempo_map, map, "and read back unchanged");
+    assert!(
+        near(
+            f64::from(tempo_map_base_bpm(&reloaded.tempo_map, 999.0)),
+            100.0,
+            1e-12
+        ),
+        "the tempo at beat zero mirrors the map, not the fallback"
+    );
+}
+
+#[test]
+fn a_project_without_a_tempo_map_reads_as_a_constant_tempo() {
+    let legacy = r#"{
+        "version": "1.3.0",
+        "name": "Old",
+        "tracks": [],
+        "groups": [], "markers": [], "bpm": 96.0, "time_signature": [3, 4],
+        "sample_rate": 48000.0, "master_volume": 0.8, "loop_start": 0.0,
+        "loop_end": 4.0, "loop_enabled": false
+    }"#;
+
+    let project: Project = serde_json::from_str(legacy).expect("a 1.3 project deserializes");
+    let mut state = AppState::default();
+    state.load_project(project);
+    assert!(
+        state.tempo_map.is_empty(),
+        "no map means the old constant behaviour"
+    );
+    assert_eq!(state.bpm, 96.0);
+
+    let curve = TempoCurve::from_map(&state.tempo_map, f64::from(state.bpm));
+    assert!(curve.is_constant());
+    assert_eq!(curve.beats_to_seconds(4.0), 2.5);
 }

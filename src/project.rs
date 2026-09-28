@@ -4,11 +4,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::clip::{AudioClip, MidiPattern, WarpPoint};
+use crate::model::tempo::TempoPoint;
 use crate::model::{GroupLinkMode, Marker, Track, TrackGroup};
 use crate::time_utils::TimeConverter;
 
 /// Current on-disk project schema version.
-pub const PROJECT_VERSION: &str = "1.3.0";
+pub const PROJECT_VERSION: &str = "1.4.0";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppState {
@@ -31,6 +32,9 @@ pub struct AppState {
     pub playing: bool,
     pub recording: bool,
     pub bpm: f32,
+    /// Empty means a constant `bpm`; otherwise the tempo ramps between points.
+    #[serde(default)]
+    pub tempo_map: Vec<TempoPoint>,
     pub sample_rate: f32,
     pub buffer_size: usize,
     pub current_position: f64,
@@ -78,6 +82,7 @@ impl Default for AppState {
             playing: false,
             recording: false,
             bpm: 120.0,
+            tempo_map: Vec::new(),
             sample_rate: 44100.0,
             buffer_size: 512,
             current_position: 0.0,
@@ -102,6 +107,8 @@ pub struct AppStateSnapshot {
     pub group_order: Vec<u64>,
     pub markers: Vec<Marker>,
     pub bpm: f32,
+    #[serde(default)]
+    pub tempo_map: Vec<TempoPoint>,
     pub loop_start: f64,
     pub loop_end: f64,
     pub loop_enabled: bool,
@@ -123,6 +130,7 @@ impl AppState {
             group_order: self.group_order.clone(),
             markers: self.markers.clone(),
             bpm: self.bpm,
+            tempo_map: self.tempo_map.clone(),
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
             playing: false,
@@ -142,6 +150,7 @@ impl AppState {
         self.group_order = snapshot.group_order;
         self.markers = snapshot.markers;
         self.bpm = snapshot.bpm;
+        self.tempo_map = snapshot.tempo_map;
         self.time_signature = snapshot.time_signature;
         self.sample_rate = snapshot.sample_rate;
         self.master_volume = snapshot.master_volume;
@@ -179,6 +188,42 @@ impl AppState {
 pub enum ArrangementRow {
     Group(u64),
     Track(u64),
+}
+
+/// Puts a tempo map into the shape the audio thread assumes: sorted, no
+/// repeated beats, every tempo usable. A map that ends up empty means the
+/// project is at a constant `bpm`, which is the pre-tempo-map behaviour.
+pub fn sanitise_tempo_map(map: Vec<TempoPoint>) -> Vec<TempoPoint> {
+    let total = map.len();
+    let mut points: Vec<TempoPoint> = map
+        .into_iter()
+        .filter(|p| p.beat.is_finite() && p.bpm.is_finite() && p.bpm > 0.0)
+        .collect();
+    if points.is_empty() {
+        return Vec::new();
+    }
+    points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    let before_dedup = points.len();
+    points.dedup_by(|a, b| a.beat == b.beat);
+    if points.len() == 1 && points[0].beat.abs() <= f64::EPSILON {
+        // A lone point at beat zero is just the constant tempo in disguise.
+        return Vec::new();
+    }
+    if points.len() != total || before_dedup != points.len() {
+        log::warn!(
+            "Tempo map in project file had unusable entries; kept {} of {}",
+            points.len(),
+            total
+        );
+    }
+    points
+}
+
+/// The tempo in force at beat zero, which is what `bpm` always mirrors.
+pub fn tempo_map_base_bpm(map: &[TempoPoint], bpm: f32) -> f32 {
+    map.iter()
+        .find(|p| p.beat.abs() <= f64::EPSILON)
+        .map_or(bpm, |p| p.bpm as f32)
 }
 
 /// Puts a clip's warp map back into the shape the audio thread assumes: sorted
@@ -713,6 +758,7 @@ impl AppState {
             log::warn!("Invalid bpm {} in project file; using 120", project.bpm);
             120.0
         };
+        self.tempo_map = sanitise_tempo_map(project.tempo_map);
         self.time_signature = project.time_signature;
         self.sample_rate = if project.sample_rate.is_finite() && project.sample_rate > 0.0 {
             project.sample_rate
@@ -749,6 +795,7 @@ impl AppState {
                 .collect(),
             markers: self.markers.clone(),
             bpm: self.bpm,
+            tempo_map: self.tempo_map.clone(),
             time_signature: self.time_signature,
             sample_rate: self.sample_rate,
             master_volume: self.master_volume,
@@ -997,6 +1044,8 @@ pub struct Project {
     pub markers: Vec<Marker>,
     #[serde(default = "default_bpm")]
     pub bpm: f32,
+    #[serde(default)]
+    pub tempo_map: Vec<TempoPoint>,
     #[serde(default = "default_time_sig")]
     pub time_signature: (i32, i32),
     #[serde(default = "default_sample_rate")]
