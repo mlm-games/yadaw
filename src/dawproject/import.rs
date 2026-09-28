@@ -355,7 +355,7 @@ fn read_structure<'a, 'i>(
             .split_ascii_whitespace()
             .any(|t| t == "tracks")
         {
-            let group_id = read_group(node, groups, report);
+            let group_id = read_group(node, parent_group, groups, report);
             read_structure(
                 node,
                 Some(group_id),
@@ -391,19 +391,36 @@ fn read_structure<'a, 'i>(
     }
 }
 
-fn read_group(node: El, groups: &mut Vec<TrackGroup>, report: &mut Report) -> u64 {
+fn read_group(
+    node: El,
+    parent_group: Option<u64>,
+    groups: &mut Vec<TrackGroup>,
+    report: &mut Report,
+) -> u64 {
     let id = idgen::next();
     let name = attr(node, "name")
         .map(sanitize_name)
         .unwrap_or_else(|| "Group".to_string());
     let mut group = TrackGroup::new(id, name.clone());
+    group.parent_id = parent_group;
     if let Some(color) = attr(node, "color").and_then(hex_to_rgb) {
         group.color = color;
     }
-    if child(node, "Channel").is_some() {
-        report.note(format!(
-            "Group track '{name}' has its own mixer channel, which yadaw cannot represent; its child tracks were imported without it"
-        ));
+    if let Some(channel) = child(node, "Channel") {
+        if let Some(v) = child(channel, "Volume").and_then(|v| num_attr(v, "value")) {
+            group.volume = v.clamp(0.0, 2.0) as f32;
+        }
+        group.muted = child(channel, "Mute")
+            .and_then(|m| parse_bool(attr(m, "value")))
+            .unwrap_or(false);
+        group.solo = parse_bool(attr(channel, "solo")).unwrap_or(false);
+        // A folder channel is a mixer group (audio routed through it) or a VCA
+        // (controls channels). yadaw groups are always the latter.
+        if attr(channel, "role") == Some("submix") {
+            report.note(format!(
+                "Group track '{name}' is a mixer group, which routes audio through it; yadaw imported its level, mute and solo as a VCA-style control instead"
+            ));
+        }
     }
     groups.push(group);
     id

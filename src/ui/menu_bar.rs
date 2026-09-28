@@ -319,7 +319,40 @@ impl MenuBar {
 
             ui.separator();
 
-            if ui.button("Group Tracks...").clicked() {
+            if ui
+                .button("Group Selected Tracks")
+                .on_hover_text("Ctrl+G")
+                .clicked()
+            {
+                app.handle_action(AppAction::GroupSelectedTracks);
+                ui.close();
+            }
+
+            if ui
+                .button("Ungroup Selected Tracks")
+                .on_hover_text("Ctrl+Shift+G")
+                .clicked()
+            {
+                app.handle_action(AppAction::UngroupSelectedTracks);
+                ui.close();
+            }
+
+            if ui
+                .button("Select All Tracks in Group")
+                .on_hover_text("Ctrl+Shift+A")
+                .clicked()
+            {
+                app.handle_action(AppAction::SelectGroupMembers);
+                ui.close();
+            }
+
+            ui.separator();
+
+            if ui
+                .button("Group Tracks...")
+                .on_hover_text("Ctrl+Shift+L")
+                .clicked()
+            {
                 app.dialogs.show_track_grouping();
                 ui.close();
             }

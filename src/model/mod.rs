@@ -7,7 +7,7 @@ pub mod track;
 
 pub use automation::{AutomationLane, AutomationMode, AutomationPoint, AutomationTarget};
 pub use clip::{AudioClip, MidiClip, MidiNote};
-pub use group::{COLOR_PALETTE, TrackGroup};
+pub use group::{COLOR_PALETTE, GroupLinkMode, GroupNode, GroupResolution, TrackGroup};
 pub use marker::Marker;
 pub use plugin::{PluginDescriptor, PluginParam};
 pub use track::{Send, Track};

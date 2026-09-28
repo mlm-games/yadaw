@@ -71,6 +71,13 @@ pub enum AppAction {
     TransposeDialog,
     HumanizeDialog,
 
+    // Track Groups
+    GroupSelectedTracks,
+    UngroupSelectedTracks,
+    UngroupAndDiscardGroup,
+    SelectGroupMembers,
+    ToggleGroupDialog,
+
     // Other
     Escape,
 }
@@ -143,6 +150,11 @@ impl AppAction {
             QuantizeDialog,
             TransposeDialog,
             HumanizeDialog,
+            GroupSelectedTracks,
+            UngroupSelectedTracks,
+            UngroupAndDiscardGroup,
+            SelectGroupMembers,
+            ToggleGroupDialog,
             Escape,
         ]
     }
@@ -213,6 +225,13 @@ impl AppAction {
             // Dialogs
             Self::QuantizeDialog | Self::TransposeDialog | Self::HumanizeDialog => &[PianoRoll],
 
+            // Track groups
+            Self::GroupSelectedTracks
+            | Self::UngroupSelectedTracks
+            | Self::UngroupAndDiscardGroup
+            | Self::SelectGroupMembers
+            | Self::ToggleGroupDialog => &[Global],
+
             Self::Delete => &[Global, PianoRoll, Timeline],
             Self::Escape => &[Global],
         }
@@ -282,6 +301,12 @@ impl AppAction {
             Self::TransposeDialog => "Transpose...",
             Self::HumanizeDialog => "Humanize...",
 
+            Self::GroupSelectedTracks => "Group Selected Tracks",
+            Self::UngroupSelectedTracks => "Ungroup Selected Tracks",
+            Self::UngroupAndDiscardGroup => "Ungroup and Delete Group",
+            Self::SelectGroupMembers => "Select All Tracks in Group",
+            Self::ToggleGroupDialog => "Manage Track Groups...",
+
             Self::Escape => "Escape",
         }
     }
@@ -344,6 +369,12 @@ impl AppAction {
             | Self::Reverse
             | Self::FadeIn
             | Self::FadeOut => "Timeline",
+
+            Self::GroupSelectedTracks
+            | Self::UngroupSelectedTracks
+            | Self::UngroupAndDiscardGroup
+            | Self::SelectGroupMembers
+            | Self::ToggleGroupDialog => "Track Groups",
 
             Self::Escape => "Other",
         }

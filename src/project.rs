@@ -1,14 +1,14 @@
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::clip::MidiPattern;
-use crate::model::{Marker, Track, TrackGroup};
+use crate::model::{GroupLinkMode, Marker, Track, TrackGroup};
 use crate::time_utils::TimeConverter;
 
 /// Current on-disk project schema version.
-pub const PROJECT_VERSION: &str = "1.2.0";
+pub const PROJECT_VERSION: &str = "1.3.0";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppState {
@@ -21,6 +21,9 @@ pub struct AppState {
     /// Shared MIDI patterns (for alias clips)
     pub patterns: HashMap<u64, MidiPattern>,
     pub groups: HashMap<u64, TrackGroup>,
+    /// Group header order, mirroring `track_order` for groups.
+    #[serde(default)]
+    pub group_order: Vec<u64>,
     /// Kept sorted by beat so the timeline can draw them in order.
     pub markers: Vec<Marker>,
 
@@ -69,6 +72,7 @@ impl Default for AppState {
             clips_by_id: HashMap::new(),
             patterns: HashMap::new(),
             groups: HashMap::new(),
+            group_order: Vec::new(),
             markers: Vec::new(),
             master_volume: 0.8,
             playing: false,
@@ -95,6 +99,7 @@ pub struct AppStateSnapshot {
     pub master_volume: f32,
     pub patterns: HashMap<u64, MidiPattern>,
     pub groups: HashMap<u64, TrackGroup>,
+    pub group_order: Vec<u64>,
     pub markers: Vec<Marker>,
     pub bpm: f32,
     pub loop_start: f64,
@@ -115,6 +120,7 @@ impl AppState {
             track_order: self.track_order.clone(),
             patterns: self.patterns.clone(),
             groups: self.groups.clone(),
+            group_order: self.group_order.clone(),
             markers: self.markers.clone(),
             bpm: self.bpm,
             time_signature: self.time_signature,
@@ -133,6 +139,7 @@ impl AppState {
         self.track_order = snapshot.track_order;
         self.patterns = snapshot.patterns;
         self.groups = snapshot.groups;
+        self.group_order = snapshot.group_order;
         self.markers = snapshot.markers;
         self.bpm = snapshot.bpm;
         self.time_signature = snapshot.time_signature;
@@ -142,6 +149,8 @@ impl AppState {
         self.loop_end = snapshot.loop_end;
         self.loop_enabled = snapshot.loop_enabled;
         self.track_order.retain(|id| self.tracks.contains_key(id));
+        sanitize_group_forest(&mut self.groups);
+        self.group_order.retain(|id| self.groups.contains_key(id));
         let track_ids: Vec<u64> = self.tracks.keys().copied().collect();
         for track in self.tracks.values_mut() {
             if track
@@ -156,11 +165,185 @@ impl AppState {
                 }
             }
         }
+        self.append_unlisted_groups();
         self.rebuild_clip_index();
         self.rebuild_plugin_indices();
         crate::idgen::seed_from_max(self.max_id_in_project());
     }
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrangementRow {
+    Group(u64),
+    Track(u64),
+}
+
+/// Drops dead parents and breaks cycles; each pass severs one cycle edge.
+pub fn sanitize_group_forest(groups: &mut HashMap<u64, TrackGroup>) {
+    loop {
+        let mut severed = false;
+        let ids: Vec<u64> = groups.keys().copied().collect();
+        for gid in ids {
+            let mut chain: Vec<u64> = vec![gid];
+            let mut cursor = groups[&gid].parent_id;
+            while let Some(pid) = cursor {
+                if let Some(pos) = chain.iter().position(|&c| c == pid) {
+                    if let Some(entry) = groups.get_mut(&chain[pos]) {
+                        entry.parent_id = None;
+                        severed = true;
+                    }
+                    break;
+                }
+                let Some(parent) = groups.get(&pid) else {
+                    if let Some(g) = groups.get_mut(&gid) {
+                        g.parent_id = None;
+                        severed = true;
+                    }
+                    break;
+                };
+                chain.push(pid);
+                cursor = parent.parent_id;
+            }
+        }
+        if !severed {
+            return;
+        }
+    }
+}
+
+impl AppState {
+
+    pub fn append_unlisted_groups(&mut self) {
+        self.group_order = self.ordered_group_ids();
+    }
+
+    pub fn ordered_group_ids(&self) -> Vec<u64> {
+        let mut order: Vec<u64> = self
+            .group_order
+            .iter()
+            .copied()
+            .filter(|id| self.groups.contains_key(id))
+            .collect();
+        let listed: HashSet<u64> = order.iter().copied().collect();
+        let mut missing: Vec<u64> = self
+            .groups
+            .keys()
+            .copied()
+            .filter(|id| !listed.contains(id))
+            .collect();
+        missing.sort_unstable();
+        order.extend(missing);
+        order
+    }
+
+    pub fn arrangement_rows(&self) -> Vec<ArrangementRow> {
+        let order = self.ordered_group_ids();
+        let mut rows = Vec::with_capacity(order.len() + self.track_order.len());
+        let mut walked: HashSet<u64> = HashSet::new();
+        for &gid in &order {
+            self.push_group_rows(gid, &order, &mut rows, &mut walked);
+        }
+        for &tid in &self.track_order {
+            if self.tracks.contains_key(&tid) && !self.track_in_group(tid) {
+                rows.push(ArrangementRow::Track(tid));
+            }
+        }
+        rows
+    }
+
+    fn push_group_rows(
+        &self,
+        gid: u64,
+        order: &[u64],
+        rows: &mut Vec<ArrangementRow>,
+        walked: &mut HashSet<u64>,
+    ) {
+        if !walked.insert(gid) {
+            return;
+        }
+        rows.push(ArrangementRow::Group(gid));
+        for child in self.child_groups_in(gid, order) {
+            self.push_group_rows(child, order, rows, walked);
+        }
+        for &tid in &self.track_order {
+            if self
+                .tracks
+                .get(&tid)
+                .is_some_and(|t| t.group_id == Some(gid))
+            {
+                rows.push(ArrangementRow::Track(tid));
+            }
+        }
+    }
+
+    pub fn child_groups(&self, parent: u64) -> Vec<u64> {
+        self.child_groups_in(parent, &self.ordered_group_ids())
+    }
+
+    fn child_groups_in(&self, parent: u64, order: &[u64]) -> Vec<u64> {
+        order
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.groups
+                    .get(id)
+                    .is_some_and(|g| g.parent_id == Some(parent))
+            })
+            .collect()
+    }
+
+    pub fn track_in_group(&self, track_id: u64) -> bool {
+        self.tracks
+            .get(&track_id)
+            .is_some_and(|t| t.group_id.is_some_and(|g| self.groups.contains_key(&g)))
+    }
+
+    pub fn group_descendants(&self, group_id: u64) -> HashSet<u64> {
+        let mut found = HashSet::new();
+        let mut frontier = vec![group_id];
+        while let Some(gid) = frontier.pop() {
+            for child in self.child_groups(gid) {
+                if found.insert(child) {
+                    frontier.push(child);
+                }
+            }
+        }
+        found
+    }
+
+    pub fn get_group_members(&self, group_id: u64) -> Vec<u64> {
+        self.track_order
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.tracks
+                    .get(id)
+                    .is_some_and(|t| t.group_id == Some(group_id))
+            })
+            .collect()
+    }
+
+    pub fn get_group_subtree_tracks(&self, group_id: u64) -> Vec<u64> {
+        let mut groups = vec![group_id];
+        let mut i = 0;
+        while i < groups.len() {
+            groups.extend(self.child_groups(groups[i]));
+            i += 1;
+        }
+        let group_set: HashSet<u64> = groups.into_iter().collect();
+        self.track_order
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.tracks
+                    .get(id)
+                    .is_some_and(|t| t.group_id.is_some_and(|g| group_set.contains(&g)))
+            })
+            .collect()
+    }
+}
+
+impl AppState {
     /// Rebuild the clip index from current track state
     pub fn rebuild_clip_index(&mut self) {
         self.clips_by_id.clear();
@@ -212,6 +395,7 @@ impl AppState {
         let mut clips = HashSet::new();
         let mut plugins = HashSet::new();
         let mut notes = HashSet::new();
+        let mut group_ids = HashSet::new();
 
         for (&track_id, track) in &self.tracks {
             if track_id == 0 || track.id == 0 {
@@ -261,9 +445,50 @@ impl AppState {
                 }
             }
         }
-        for (&gid, _) in &self.groups {
+        for (&gid, group) in &self.groups {
             if gid == 0 {
                 return Err(anyhow!("Group with unassigned (0) ID"));
+            }
+            if !group_ids.insert(gid) {
+                return Err(anyhow!("Duplicate group ID: {}", gid));
+            }
+            if group.id != gid {
+                return Err(anyhow!("Group key/id mismatch: {} != {}", gid, group.id));
+            }
+            if !group.volume.is_finite() || group.volume < 0.0 {
+                return Err(anyhow!("Group {} has an invalid volume {}", gid, group.volume));
+            }
+            if group.link_mode != GroupLinkMode::Vca {
+                return Err(anyhow!(
+                    "Group '{}' uses linked faders, which this build does not implement",
+                    group.name
+                ));
+            }
+        }
+        for &gid in &self.group_order {
+            if !self.groups.contains_key(&gid) {
+                return Err(anyhow!("Group order references missing group {}", gid));
+            }
+        }
+        for (&gid, group) in &self.groups {
+            if let Some(pid) = group.parent_id {
+                if pid == gid {
+                    return Err(anyhow!("Group {} is its own parent", gid));
+                }
+                if !self.groups.contains_key(&pid) {
+                    return Err(anyhow!("Group {} has missing parent {}", gid, pid));
+                }
+            }
+        }
+        for (&gid, _) in &self.groups {
+            let mut seen = HashSet::new();
+            seen.insert(gid);
+            let mut cursor = self.groups[&gid].parent_id;
+            while let Some(pid) = cursor {
+                if !seen.insert(pid) {
+                    return Err(anyhow!("Group {} takes part in a parent cycle", gid));
+                }
+                cursor = self.groups[&pid].parent_id;
             }
         }
         for (&pid, pat) in &self.patterns {
@@ -367,6 +592,7 @@ impl AppState {
         }
 
         let mut groups: HashMap<u64, TrackGroup> = HashMap::new();
+        let mut group_order: Vec<u64> = Vec::with_capacity(project.groups.len());
         for mut group in project.groups {
             let old_gid = group.id;
             if group.id == 0 {
@@ -383,6 +609,7 @@ impl AppState {
                 group_remap.insert(old_gid, group.id);
             }
             let gid = group.id;
+            group_order.push(gid);
             groups.insert(gid, group);
         }
 
@@ -406,6 +633,11 @@ impl AppState {
                     }
                 }
             }
+            for group in groups.values_mut() {
+                if let Some(new_parent) = group.parent_id.and_then(|old| group_remap.get(&old)) {
+                    group.parent_id = Some(*new_parent);
+                }
+            }
         }
 
         for track in tracks {
@@ -415,6 +647,9 @@ impl AppState {
         }
         self.patterns = patterns;
         self.groups = groups;
+        self.group_order = group_order;
+        sanitize_group_forest(&mut self.groups);
+        self.append_unlisted_groups();
         self.markers = project.markers;
         let mut seen_marker_ids = std::collections::HashSet::new();
         for marker in &mut self.markers {
@@ -463,7 +698,11 @@ impl AppState {
             name: self.project_name.clone(),
             tracks,
             patterns: self.patterns.values().cloned().collect(),
-            groups: self.groups.values().cloned().collect(),
+            groups: self
+                .ordered_group_ids()
+                .into_iter()
+                .filter_map(|id| self.groups.get(&id).cloned())
+                .collect(),
             markers: self.markers.clone(),
             bpm: self.bpm,
             time_signature: self.time_signature,
@@ -689,14 +928,6 @@ impl AppState {
             max_id = max_id.max(marker.id);
         }
         max_id
-    }
-
-    pub fn get_group_members(&self, group_id: u64) -> Vec<u64> {
-        self.tracks
-            .iter()
-            .filter(|(_, t)| t.group_id == Some(group_id))
-            .map(|(&id, _)| id)
-            .collect()
     }
 }
 

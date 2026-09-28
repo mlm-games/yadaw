@@ -5,10 +5,10 @@ use yadaw::input::actions::AppAction;
 use yadaw::input::shortcuts::{KeyCode, Keybind, ShortcutRegistry};
 use yadaw::midi_utils::MidiNoteUtils;
 use yadaw::model::clip::{MidiClip, MidiNote, MidiPattern};
-use yadaw::model::group::TrackGroup;
+use yadaw::model::group::{GroupLinkMode, TrackGroup};
 use yadaw::model::marker::Marker;
 use yadaw::model::track::{Send, Track, TrackType};
-use yadaw::project::{AppState, PROJECT_VERSION, Project};
+use yadaw::project::{AppState, ArrangementRow, PROJECT_VERSION, Project};
 
 fn note(id: u64, pitch: u8, start: f64) -> MidiNote {
     MidiNote {
@@ -229,4 +229,234 @@ fn golden_config_hardening() {
         yadaw::wasm_persist::read_config_string("config/config.json", &path).expect("config read");
     assert!(back.contains("audio"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn group(id: u64, name: &str, parent_id: Option<u64>) -> TrackGroup {
+    TrackGroup {
+        id,
+        name: name.to_string(),
+        parent_id,
+        ..Default::default()
+    }
+}
+
+fn plain_track(id: u64, group_id: Option<u64>) -> Track {
+    Track {
+        id,
+        name: format!("Track {id}"),
+        group_id,
+        ..Default::default()
+    }
+}
+
+fn nested_group_project() -> Project {
+    Project {
+        version: PROJECT_VERSION.to_string(),
+        name: "Nested".to_string(),
+        tracks: vec![
+            plain_track(1, Some(10)),
+            plain_track(2, Some(20)),
+            plain_track(3, Some(20)),
+            plain_track(4, Some(30)),
+            plain_track(5, None),
+        ],
+        groups: vec![
+            group(10, "Drums", None),
+            group(20, "Toms", Some(10)),
+            group(30, "Keys", None),
+        ],
+        ..project_fixture()
+    }
+}
+
+#[test]
+fn golden_nested_groups_survive_a_save_and_load() {
+    let mut state = AppState::default();
+    state.load_project(nested_group_project());
+
+    let toms = state.groups[&20]
+        .parent_id
+        .expect("a folder inside a folder keeps its parent");
+    assert_eq!(toms, 10, "the nested group points at the outer one");
+
+    let rows = state.arrangement_rows();
+    assert_eq!(
+        rows,
+        vec![
+            ArrangementRow::Group(10),
+            ArrangementRow::Group(20),
+            ArrangementRow::Track(2),
+            ArrangementRow::Track(3),
+            ArrangementRow::Track(1),
+            ArrangementRow::Group(30),
+            ArrangementRow::Track(4),
+            ArrangementRow::Track(5),
+        ],
+        "subgroups come before their parent's own tracks, and ungrouped tracks come last, got {rows:?}"
+    );
+
+    let json = serde_json::to_string(&state.to_project()).expect("project serializes");
+    let mut reloaded = AppState::default();
+    reloaded.load_project(serde_json::from_str(&json).expect("project deserializes"));
+    reloaded
+        .validate_before_save()
+        .expect("round-tripped state validates");
+    assert_eq!(
+        reloaded.arrangement_rows(),
+        rows,
+        "the same tree comes back out of the file"
+    );
+    assert_eq!(
+        reloaded.groups[&20].parent_id,
+        Some(10),
+        "nesting survives the round trip"
+    );
+}
+
+#[test]
+fn a_group_created_without_a_nested_member_keeps_its_place() {
+    let mut state = AppState::default();
+    state.load_project(Project {
+        groups: vec![],
+        tracks: vec![plain_track(1, None)],
+        ..project_fixture()
+    });
+    let empty = state.fresh_id();
+    state.groups.insert(empty, group(empty, "Empty", None));
+
+    assert_eq!(
+        state.arrangement_rows(),
+        vec![ArrangementRow::Group(empty), ArrangementRow::Track(1)],
+        "a group with no members is still a row of the list"
+    );
+
+    let saved = state.to_project();
+    assert_eq!(
+        saved.groups.len(),
+        1,
+        "a group missing from group_order must not vanish on save"
+    );
+}
+
+#[test]
+fn a_legacy_group_file_loads_with_unity_level() {
+
+    let legacy = format!(
+        r#"{{
+        "version": "1.2.0",
+        "name": "Old",
+        "tracks": [{}],
+        "groups": [{{"id": 7, "name": "Band", "color": [1, 2, 3], "collapsed": false}}]
+    }}"#,
+        serde_json::to_string(&plain_track(1, Some(7))).expect("track serializes")
+    );
+    let project: Project = serde_json::from_str(&legacy).expect("a 1.2 project deserializes");
+    let mut state = AppState::default();
+    state.load_project(project);
+
+    let g = &state.groups[&7];
+    assert_eq!(g.volume, 1.0, "an older group opens at unity, got {}", g.volume);
+    assert!(!g.muted && !g.solo, "and is not muted or soloed");
+    assert_eq!(g.parent_id, None, "and is a top level group");
+    assert_eq!(g.link_mode, GroupLinkMode::Vca, "and is a VCA");
+    state
+        .validate_before_save()
+        .expect("a migrated project still validates");
+}
+
+#[test]
+fn a_broken_group_tree_is_repaired_rather_than_saved_back() {
+    let mut state = AppState::default();
+    state.load_project(Project {
+        tracks: vec![plain_track(1, Some(1))],
+        groups: vec![group(1, "A", Some(2)), group(2, "B", Some(1)), group(3, "C", Some(99))],
+        ..project_fixture()
+    });
+
+    let a = state.groups[&1].parent_id;
+    let b = state.groups[&2].parent_id;
+    assert!(
+        !(a == Some(2) && b == Some(1)),
+        "the A <-> B cycle is broken on load, got a->{a:?} b->{b:?}"
+    );
+    assert_eq!(
+        state.groups[&3].parent_id, None,
+        "a group pointing at a group that does not exist becomes top level"
+    );
+    assert_eq!(
+        state.get_group_members(1),
+        vec![1],
+        "the track stays with the group it named, got {:?}",
+        state.get_group_members(1)
+    );
+    state
+        .validate_before_save()
+        .expect("a repaired tree validates");
+
+    let json = serde_json::to_string(&state.to_project()).expect("serializes");
+    let mut again = AppState::default();
+    again.load_project(serde_json::from_str(&json).expect("deserializes"));
+    again
+        .validate_before_save()
+        .expect("the repaired tree survives a round trip");
+}
+
+#[test]
+fn linked_group_faders_are_refused_instead_of_silently_mixed_as_proxies() {
+    let mut state = AppState::default();
+    state.load_project(Project {
+        tracks: vec![plain_track(1, Some(10))],
+        groups: vec![TrackGroup {
+            link_mode: GroupLinkMode::Linked,
+            ..group(10, "Linked", None)
+        }],
+        ..project_fixture()
+    });
+
+    let err = state
+        .validate_before_save()
+        .expect_err("an unimplemented link mode is not silently accepted");
+    assert!(
+        err.to_string().contains("linked faders"),
+        "the message names the problem, got {err}"
+    );
+}
+
+#[test]
+fn a_group_only_holds_its_own_tracks() {
+    let mut state = AppState::default();
+    state.load_project(nested_group_project());
+
+    assert_eq!(
+        state.get_group_members(10),
+        vec![1],
+        "Drums holds one track of its own as well as the nested group"
+    );
+    assert_eq!(state.get_group_members(20), vec![2, 3], "in track order");
+    assert_eq!(
+        state.get_group_subtree_tracks(10),
+        vec![1, 2, 3],
+        "the subtree covers the group's own track and reaches through the nested group, got {:?}",
+        state.get_group_subtree_tracks(10)
+    );
+    assert_eq!(
+        state.group_descendants(10),
+        HashSet::from([20]),
+        "Drums has exactly one subgroup below it"
+    );
+}
+
+#[test]
+fn moving_a_group_into_its_own_subtree_is_refused() {
+
+    let mut state = AppState::default();
+    state.load_project(nested_group_project());
+    assert!(
+        state.group_descendants(10).contains(&20),
+        "Toms is a descendant of Drums, so Drums cannot be moved into Toms"
+    );
+    assert!(
+        !state.group_descendants(20).contains(&10),
+        "and the reverse is fine"
+    );
 }

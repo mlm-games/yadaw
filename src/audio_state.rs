@@ -106,6 +106,17 @@ pub struct TrackSnapshot {
     pub automation_lanes: Vec<RtAutomationLaneSnapshot>,
     pub sends: Vec<crate::model::track::Send>,
     pub track_type: TrackType,
+    pub group_id: Option<u64>,
+}
+
+
+#[derive(Debug, Clone, Copy)]
+pub struct GroupSnapshot {
+    pub group_id: u64,
+    pub parent_id: Option<u64>,
+    pub volume: f32,
+    pub muted: bool,
+    pub solo: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +176,10 @@ pub enum RealtimeCommand {
     UpdateTrackPan(u64, f32),                 // Track ID
     UpdateTrackMute(u64, bool),               // Track ID
     UpdateTrackSolo(u64, bool),               // Track ID
+    UpdateGroupVolume(u64, f32),              // Group ID
+    UpdateGroupMute(u64, bool),               // Group ID
+    UpdateGroupSolo(u64, bool),               // Group ID
+    UpdateGroups(Vec<GroupSnapshot>),
     UpdatePluginBypass(u64, u64, bool),       // track_id, plugin_id, bypass
     UpdatePluginParam(u64, u64, String, f32), // track_id, plugin_id, param, value
     PreviewNote(u64, u8, f64),                // Track ID
@@ -316,4 +331,5 @@ pub struct AudioClipSnapshot {
 pub struct AudioGraphSnapshot {
     pub tracks: Vec<TrackSnapshot>,
     pub track_order: Vec<u64>,
+    pub groups: Vec<GroupSnapshot>,
 }

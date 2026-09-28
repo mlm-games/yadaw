@@ -333,11 +333,19 @@ fn dawproject_exports_groups_as_nested_tracks() {
         top_level[1]
     );
     assert!(
-        top_level[2].contains("name=\"Spare\"") && top_level[2].ends_with("/>"),
-        "a group with no members is an empty element: {}",
+        top_level[2].contains("name=\"Spare\""),
+        "a group with no members still gets an element: {}",
         top_level[2]
     );
-    assert!(top_level[3].contains("name=\"Master\""));
+    assert!(
+        top_level[3].contains("name=\"Master\""),
+        "the master comes after the last group: {}",
+        top_level[3]
+    );
+    assert!(
+        structure.contains("name=\"Spare\" color=\"#3498db\" contentType=\"tracks\" loaded=\"true\">\n      <Channel"),
+        "even a member-less group carries its own channel, so it is not self-closing"
+    );
 
     let members: Vec<&str> = structure
         .lines()
@@ -561,8 +569,9 @@ fn dawproject_imports_bitwig_style_alias_and_nested_clips() {
         report
             .notes
             .iter()
-            .any(|n| n.contains("Group track 'Rhythm' has its own mixer channel")),
-        "a group channel yadaw cannot model must be reported"
+            .any(|n| n.contains("Group track 'Rhythm' is a mixer group")),
+        "a submix folder channel is not the same as a VCA and must be reported, got {:?}",
+        report.notes
     );
 
     assert!((bass.volume - 0.65914).abs() < 1e-4);
@@ -596,6 +605,191 @@ fn dawproject_imports_bitwig_style_alias_and_nested_clips() {
             .any(|n| n.contains("could not be matched")),
         "an unresolved plugin must be reported"
     );
+}
+
+#[test]
+fn dawproject_keeps_a_folder_inside_a_folder() {
+
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Transport>
+    <Tempo max="666" min="20" unit="bpm" value="120" id="id0" name="Tempo"/>
+    <TimeSignature denominator="4" numerator="4" id="id1"/>
+  </Transport>
+  <Structure>
+    <Track color="#e67e22" contentType="tracks" id="id10" loaded="true" name="Drums">
+      <Track color="#3498db" contentType="tracks" id="id11" loaded="true" name="Toms">
+        <Track contentType="audio" loaded="true" id="id12" name="Floor">
+          <Channel audioChannels="2" destination="id20" role="regular" solo="false" id="id13">
+            <Volume max="2" min="0" unit="linear" value="1" id="id14" name="Volume"/>
+          </Channel>
+        </Track>
+      </Track>
+    </Track>
+    <Track contentType="notes" loaded="true" id="id15" name="Lead">
+      <Channel audioChannels="2" destination="id20" role="regular" solo="false" id="id16">
+        <Volume max="2" min="0" unit="linear" value="1" id="id17" name="Volume"/>
+      </Channel>
+    </Track>
+    <Track contentType="audio notes" loaded="true" id="id19" name="Master">
+      <Channel audioChannels="2" role="master" solo="false" id="id20">
+        <Volume max="2" min="0" unit="linear" value="1" id="id21" name="Volume"/>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement id="id30">
+    <Lanes timeUnit="beats" id="id31">
+      <Lanes track="id12" id="id32"/>
+      <Lanes track="id15" id="id33"/>
+    </Lanes>
+  </Arrangement>
+  <AudioRegions/>
+  <MidiRegions/>
+</Project>
+"##;
+    let (bytes, _) = zip_fixture(xml);
+    let (project, report) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+
+    let drums = project
+        .groups
+        .iter()
+        .find(|g| g.name == "Drums")
+        .expect("the outer folder is a group");
+    let toms = project
+        .groups
+        .iter()
+        .find(|g| g.name == "Toms")
+        .expect("the inner folder is a group");
+
+    assert_eq!(
+        toms.parent_id,
+        Some(drums.id),
+        "the inner folder keeps the outer one as its parent, got {:?}",
+        toms.parent_id
+    );
+    assert_eq!(
+        drums.parent_id, None,
+        "the outer folder stays at the top level"
+    );
+
+    let floor = project
+        .tracks
+        .iter()
+        .find(|t| t.name == "Floor")
+        .expect("the track inside both folders is imported");
+    assert_eq!(
+        floor.group_id,
+        Some(toms.id),
+        "a track joins the folder that directly contains it"
+    );
+    assert_eq!(
+        project
+            .tracks
+            .iter()
+            .find(|t| t.name == "Lead")
+            .expect("an ungrouped track is imported")
+            .group_id,
+        None,
+        "a track outside every folder stays top level"
+    );
+    let _ = report;
+
+    let (bytes, _) = dawproject::export(&project).expect("export succeeds");
+    let out = project_xml(&bytes);
+    let outer = out.find("name=\"Drums\"").expect("Drums is written");
+    let inner = out.find("name=\"Toms\"").expect("Toms is written");
+    let floor_at = out.find("name=\"Floor\"").expect("Floor is written");
+    let lead_at = out.find("name=\"Lead\"").expect("Lead is written");
+    assert!(
+        outer < inner && inner < floor_at,
+        "Toms nests inside Drums and Floor nests inside Toms"
+    );
+    assert!(
+        floor_at < lead_at,
+        "and Lead, which is in no folder, comes after the closed Drums folder"
+    );
+
+    let (re_bytes, _) = zip_fixture(&out);
+    let (again, _) = dawproject::import(&re_bytes, &no_plugins).expect("re-import succeeds");
+    let drums2 = again.groups.iter().find(|g| g.name == "Drums").unwrap();
+    let toms2 = again.groups.iter().find(|g| g.name == "Toms").unwrap();
+    assert_eq!(
+        toms2.parent_id,
+        Some(drums2.id),
+        "a round trip keeps the folder inside the folder"
+    );
+}
+
+#[test]
+fn dawproject_carries_a_groups_level_mute_and_solo() {
+
+    let original = Project {
+        groups: vec![
+            TrackGroup {
+                id: 10,
+                name: "Drums".to_string(),
+                volume: 0.25,
+                muted: true,
+                solo: true,
+                ..Default::default()
+            },
+            TrackGroup {
+                id: 11,
+                name: "Keys".to_string(),
+                ..Default::default()
+            },
+        ],
+        ..fixture()
+    };
+
+    let (bytes, report) = dawproject::export(&original).expect("export succeeds");
+    let xml = project_xml(&bytes);
+    assert!(
+        !xml.contains("VCA-style control links"),
+        "the lossy note is no longer accurate now that level is written"
+    );
+
+    let drums_channel = xml
+        .split_once("name=\"Drums\"")
+        .and_then(|(_, rest)| rest.split_once("</Channel>"))
+        .map(|(head, _)| head)
+        .expect("a Drums channel is written");
+    assert!(
+        drums_channel.contains("role=\"vca\""),
+        "the group channel is a vca, which controls other channels: {drums_channel}"
+    );
+    assert!(
+        drums_channel.contains("solo=\"true\""),
+        "group solo is written: {drums_channel}"
+    );
+    assert!(
+        drums_channel.contains("<Mute value=\"true\""),
+        "group mute is written: {drums_channel}"
+    );
+    assert!(
+        drums_channel.contains("value=\"0.25\""),
+        "group level is written: {drums_channel}"
+    );
+    let _ = report;
+
+    let (reimported, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+    let drums = reimported
+        .groups
+        .iter()
+        .find(|g| g.name == "Drums")
+        .expect("Drums is a group again");
+    assert!(
+        (drums.volume - 0.25).abs() < 1e-6,
+        "the group fader survives the round trip, got {}",
+        drums.volume
+    );
+    assert!(drums.muted, "group mute survives");
+    assert!(drums.solo, "group solo survives");
+
+    let keys = reimported.groups.iter().find(|g| g.name == "Keys").unwrap();
+    assert_eq!(keys.volume, 1.0, "an untouched group stays at unity");
+    assert!(!keys.muted && !keys.solo, "and is neither muted nor soloed");
 }
 
 #[test]

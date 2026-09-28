@@ -1,6 +1,7 @@
 use crate::audio_state::{
-    AudioGraphSnapshot, AudioState, EngineEvent, MidiClipSnapshot, PluginWorkerCommand,
-    RealtimeCommand, RtAutomationLaneSnapshot, RtAutomationTarget, RtCurveType, TrackSnapshot,
+    AudioGraphSnapshot, AudioState, EngineEvent, GroupSnapshot, MidiClipSnapshot,
+    PluginWorkerCommand, RealtimeCommand, RtAutomationLaneSnapshot, RtAutomationTarget, RtCurveType,
+    TrackSnapshot,
 };
 use crate::audio_utils::{calculate_stereo_gains, soft_clip};
 #[cfg(not(target_arch = "wasm32"))]
@@ -9,6 +10,9 @@ use crate::constants::{DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATIO
 use crate::messages::{UIUpdate, UiTx};
 use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::ChannelStrip;
+use crate::model::group::{
+    GroupNode, GroupResolution, any_group_soloed, group_index, resolve_track_groups,
+};
 use crate::model::track::TrackType;
 use crate::time_utils::TimeConverter;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -99,6 +103,12 @@ pub struct AudioEngine {
     sample_rate: f64,
     updates: UiTx,
     channel_strips: HashMap<u64, ChannelStrip>,
+    /// Realtime-updated so a fader drag never rebuilds a graph snapshot.
+    group_strips: HashMap<u64, GroupStrip>,
+
+    group_resolutions: HashMap<u64, GroupResolution>,
+    group_resolutions_dirty: bool,
+    any_group_soloed: bool,
     xrun_count: u64,
     paused_last: bool,
     last_ui_meter_update: f64,
@@ -115,6 +125,7 @@ struct EngineScratch {
     bus_ids: Vec<u64>,
     track_order_ids: Vec<u64>,
     monitor_block: Vec<f32>,
+    group_nodes: Vec<GroupNode>,
 }
 
 impl EngineScratch {
@@ -125,8 +136,16 @@ impl EngineScratch {
             bus_ids: Vec::new(),
             track_order_ids: Vec::new(),
             monitor_block: Vec::new(),
+            group_nodes: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GroupStrip {
+    gain: f32,
+    mute: bool,
+    solo: bool,
 }
 
 struct TrackProcessor {
@@ -513,6 +532,10 @@ pub fn run_audio_thread(
         sample_rate,
         updates: updates.clone(),
         channel_strips: HashMap::new(),
+        group_strips: HashMap::new(),
+        group_resolutions: HashMap::new(),
+        group_resolutions_dirty: true,
+        any_group_soloed: false,
         xrun_count: 0,
         paused_last: false,
         last_ui_meter_update: now_secs(),
@@ -680,6 +703,10 @@ pub fn run_audio_wasm(
         sample_rate,
         updates: updates.clone(),
         channel_strips: HashMap::new(),
+        group_strips: HashMap::new(),
+        group_resolutions: HashMap::new(),
+        group_resolutions_dirty: true,
+        any_group_soloed: false,
         xrun_count: 0,
         paused_last: false,
         last_ui_meter_update: now_secs(),
@@ -731,7 +758,7 @@ pub fn run_audio_wasm(
 
 impl AudioEngine {
     pub fn new_for_offline_render(
-        initial_tracks: &[TrackSnapshot],
+        initial: &AudioGraphSnapshot,
         audio_state: &AudioState,
         export_sample_rate: f32,
     ) -> Result<Self, anyhow::Error> {
@@ -794,6 +821,10 @@ impl AudioEngine {
             sample_rate: export_sample_rate as f64,
             updates: dummy_tx,
             channel_strips: HashMap::new(),
+            group_strips: HashMap::new(),
+            group_resolutions: HashMap::new(),
+            group_resolutions_dirty: true,
+            any_group_soloed: false,
             xrun_count: 0,
             paused_last: false,
             last_ui_meter_update: now_secs(),
@@ -801,7 +832,7 @@ impl AudioEngine {
             offline_missing_plugins: HashSet::new(),
         };
 
-        for track_snapshot in initial_tracks {
+        for track_snapshot in &initial.tracks {
             let _ = engine
                 .plugin_worker_tx
                 .try_send(PluginWorkerCommand::RebuildChain {
@@ -809,9 +840,9 @@ impl AudioEngine {
                     chain: track_snapshot.plugin_chain.clone(),
                 });
         }
-        engine.wait_offline_installs(initial_tracks);
+        engine.wait_offline_installs(&initial.tracks);
 
-        engine.full_sync_for_offline_setup(initial_tracks);
+        engine.full_sync_for_offline_setup(&initial.tracks, &initial.groups);
 
         Ok(engine)
     }
@@ -860,10 +891,11 @@ impl AudioEngine {
         self.offline_missing_plugins = expected;
     }
 
-    fn full_sync_for_offline_setup(&mut self, tracks: &[TrackSnapshot]) {
+    fn full_sync_for_offline_setup(&mut self, tracks: &[TrackSnapshot], groups: &[GroupSnapshot]) {
         // 1. Clear any existing state
         self.track_processors.clear();
         self.channel_strips.clear();
+        self.group_strips.clear();
 
         // 2. Build new processors and anchor all installed instances
         for track_snapshot in tracks {
@@ -932,7 +964,10 @@ impl AudioEngine {
         self.graph_snapshot = AudioGraphSnapshot {
             tracks: tracks.to_vec(),
             track_order: tracks.iter().map(|t| t.track_id).collect(),
+            groups: groups.to_vec(),
         };
+        self.sync_group_strips();
+        self.group_resolutions_dirty = true;
 
         // 4. Update the recording track reference (though it won't be used)
         self.recording_state.recording_track = tracks
@@ -962,6 +997,38 @@ impl AudioEngine {
                 if let Some(strip) = self.channel_strips.get_mut(&track_id) {
                     strip.solo = solo;
                 }
+            }
+            RealtimeCommand::UpdateGroupVolume(group_id, gain) => {
+                let strip = self.group_strips.entry(group_id).or_insert(GroupStrip {
+                    gain: 1.0,
+                    mute: false,
+                    solo: false,
+                });
+                strip.gain = gain;
+                self.group_resolutions_dirty = true;
+            }
+            RealtimeCommand::UpdateGroupMute(group_id, mute) => {
+                let strip = self.group_strips.entry(group_id).or_insert(GroupStrip {
+                    gain: 1.0,
+                    mute: false,
+                    solo: false,
+                });
+                strip.mute = mute;
+                self.group_resolutions_dirty = true;
+            }
+            RealtimeCommand::UpdateGroupSolo(group_id, solo) => {
+                let strip = self.group_strips.entry(group_id).or_insert(GroupStrip {
+                    gain: 1.0,
+                    mute: false,
+                    solo: false,
+                });
+                strip.solo = solo;
+                self.group_resolutions_dirty = true;
+            }
+            RealtimeCommand::UpdateGroups(groups) => {
+                self.sync_group_strips_from(&groups);
+                self.graph_snapshot.groups = groups;
+                self.group_resolutions_dirty = true;
             }
 
             RealtimeCommand::UpdatePluginBypass(track_id, plugin_id, bypass) => {
@@ -1069,7 +1136,8 @@ impl AudioEngine {
                 }
             }
             RealtimeCommand::UpdateTracks(new_tracks) => {
-                self.full_sync(&new_tracks);
+                let groups = std::mem::take(&mut self.graph_snapshot.groups);
+                self.full_sync(&new_tracks, &groups);
             }
             _ => {}
         }
@@ -1159,7 +1227,53 @@ impl AudioEngine {
         }
     }
 
-    fn full_sync(&mut self, tracks: &[TrackSnapshot]) {
+    fn sync_group_strips_from(&mut self, groups: &[GroupSnapshot]) {
+        self.group_strips.clear();
+        for g in groups {
+            self.group_strips.insert(
+                g.group_id,
+                GroupStrip {
+                    gain: g.volume,
+                    mute: g.muted,
+                    solo: g.solo,
+                },
+            );
+        }
+    }
+
+    fn sync_group_strips(&mut self) {
+        let groups = self.graph_snapshot.groups.clone();
+        self.sync_group_strips_from(&groups);
+    }
+
+    /// Rebuilt on group change only, never per block.
+    fn rebuild_group_resolutions(&mut self) {
+        let mut nodes = std::mem::take(&mut self.scratch.group_nodes);
+        nodes.clear();
+        for g in &self.graph_snapshot.groups {
+            let strip = self.group_strips.get(&g.group_id);
+            nodes.push(GroupNode {
+                id: g.group_id,
+                parent: g.parent_id,
+                volume: strip.map_or(g.volume, |s| s.gain),
+                muted: strip.map_or(g.muted, |s| s.mute),
+                solo: strip.map_or(g.solo, |s| s.solo),
+            });
+        }
+        let index = group_index(&nodes);
+        self.any_group_soloed = any_group_soloed(&index);
+        self.group_resolutions = resolve_track_groups(
+            &index,
+            self.graph_snapshot
+                .tracks
+                .iter()
+                .map(|t| (t.track_id, t.group_id)),
+        );
+        self.scratch.group_nodes = nodes;
+        self.group_resolutions_dirty = false;
+    }
+
+    fn full_sync(&mut self, tracks: &[TrackSnapshot], groups: &[GroupSnapshot]) {
         let track_ids: HashSet<u64> = tracks.iter().map(|t| t.track_id).collect();
 
         // Remove processors/channels for tracks that no longer exist.
@@ -1179,12 +1293,15 @@ impl AudioEngine {
             strip.mute = track_snapshot.muted;
             strip.solo = track_snapshot.solo;
         }
+        self.sync_group_strips_from(groups);
         self.sync_track_chains(tracks);
 
         self.graph_snapshot = AudioGraphSnapshot {
             tracks: tracks.to_vec(),
             track_order: tracks.iter().map(|t| t.track_id).collect(),
+            groups: groups.to_vec(),
         };
+        self.group_resolutions_dirty = true;
         self.recording_state.recording_track = tracks
             .iter()
             .find(|t| t.armed && !matches!(t.track_type, TrackType::Midi))
@@ -1319,6 +1436,7 @@ impl AudioEngine {
 
         // Meters
         let mut track_peaks: HashMap<u64, (f32, f32)> = HashMap::new();
+        let mut group_peaks: HashMap<u64, (f32, f32)> = HashMap::new();
         let mut master_peak_l = 0.0f32;
         let mut master_peak_r = 0.0f32;
 
@@ -1364,7 +1482,11 @@ impl AudioEngine {
             }
 
             // Solo/mute state (short immutable borrow; ends at statement)
+            if self.group_resolutions_dirty {
+                self.rebuild_group_resolutions();
+            }
             let any_track_soloed = self.channel_strips.values().any(|s| s.solo);
+            let any_soloed = any_track_soloed || self.any_group_soloed;
 
             // Snapshots used for this block
             let preview_opt = self.preview_note.clone();
@@ -1425,8 +1547,16 @@ impl AudioEngine {
                     .channel_strips
                     .get(&track_id)
                     .map_or(track.solo, |s| s.solo);
+                let group_state = self
+                    .group_resolutions
+                    .get(&track_id)
+                    .cloned()
+                    .unwrap_or_else(GroupResolution::neutral);
 
-                if strip_mute || (any_track_soloed && !strip_solo) {
+                if strip_mute
+                    || group_state.muted
+                    || (any_soloed && !strip_solo && !group_state.soloed)
+                {
                     continue;
                 }
 
@@ -1521,6 +1651,7 @@ impl AudioEngine {
 
                     let mut tp_l = 0.0f32;
                     let mut tp_r = 0.0f32;
+                    let group_gain = group_state.gain;
 
                     for i in 0..frames_to_process {
                         // Determine gain/pan per sample
@@ -1551,19 +1682,18 @@ impl AudioEngine {
                         let l_src = processor.input_buffers[0][i]; // post-plugins, pre-track strip
                         let r_src = processor.input_buffers[1][i];
 
-                        let l = l_src * left_gain;
-                        let r = r_src * right_gain;
+                        // Track meter reads pre-group.
+                        let track_l = l_src * left_gain;
+                        let track_r = r_src * right_gain;
+                        tp_l = tp_l.max(track_l.abs());
+                        tp_r = tp_r.max(track_r.abs());
 
-                        let out_idx = (frames_processed + i) * channels;
-                        output[out_idx] += l;
-                        if channels > 1 {
-                            output[out_idx + 1] += r;
-                        }
+                        // Group fader acts before the send tap, so post-fader
+                        // sends ride it and effect balance survives. Pre-fader sends
+                        // bypass the track fader, so they bypass this too.
+                        let l = track_l * group_gain;
+                        let r = track_r * group_gain;
 
-                        tp_l = tp_l.max(l.abs());
-                        tp_r = tp_r.max(r.abs());
-
-                        // Route sends to Bus accumulators
                         for s in &track.sends {
                             if s.muted || s.amount <= 0.0 {
                                 continue;
@@ -1582,9 +1712,21 @@ impl AudioEngine {
                                 acc_r[i] += sr;
                             }
                         }
+
+                        let out_idx = (frames_processed + i) * channels;
+                        output[out_idx] += l;
+                        if channels > 1 {
+                            output[out_idx + 1] += r;
+                        }
                     }
 
+                    // Group meters read post-group.
                     track_peaks.insert(track_id, (tp_l, tp_r));
+                    for gid in &group_state.chain {
+                        let e = group_peaks.entry(*gid).or_insert((0.0, 0.0));
+                        e.0 = e.0.max(tp_l * group_gain);
+                        e.1 = e.1.max(tp_r * group_gain);
+                    }
                     processor.automation_sample_buffers.clear();
                 }
             }
@@ -1601,6 +1743,22 @@ impl AudioEngine {
                 let Some(bus_track) = bus_track_opt else {
                     continue;
                 };
+
+                let bus_group = self
+                    .group_resolutions
+                    .get(&bus_id)
+                    .cloned()
+                    .unwrap_or_else(GroupResolution::neutral);
+                if bus_group.muted
+                    || (any_soloed
+                        && !self
+                            .channel_strips
+                            .get(&bus_id)
+                            .map_or(bus_track.solo, |s| s.solo)
+                        && !bus_group.soloed)
+                {
+                    continue;
+                }
 
                 // Feed accumulators and apply automation (short borrow)
                 {
@@ -1683,15 +1841,22 @@ impl AudioEngine {
                         let (left_gain, right_gain) = calculate_stereo_gains(vol, pan);
                         let l = proc.input_buffers[0][i] * left_gain;
                         let r = proc.input_buffers[1][i] * right_gain;
+                        tp_l = tp_l.max(l.abs());
+                        tp_r = tp_r.max(r.abs());
+                        let l = l * bus_group.gain;
+                        let r = r * bus_group.gain;
                         let out_idx = (frames_processed + i) * channels;
                         output[out_idx] += l;
                         if channels > 1 {
                             output[out_idx + 1] += r;
                         }
-                        tp_l = tp_l.max(l.abs());
-                        tp_r = tp_r.max(r.abs());
                     }
                     track_peaks.insert(bus_id, (tp_l, tp_r));
+                    for gid in &bus_group.chain {
+                        let e = group_peaks.entry(*gid).or_insert((0.0, 0.0));
+                        e.0 = e.0.max(tp_l * bus_group.gain);
+                        e.1 = e.1.max(tp_r * bus_group.gain);
+                    }
                     proc.automation_sample_buffers.clear();
                 }
             }
@@ -1760,7 +1925,14 @@ impl AudioEngine {
             self.last_ui_meter_update = now;
             let _ = self
                 .updates
-                .send_sync(crate::messages::UIUpdate::TrackLevels(track_peaks));
+                .send_sync(crate::messages::UIUpdate::TrackLevels(
+                    std::mem::take(&mut track_peaks),
+                ));
+            let _ = self
+                .updates
+                .send_sync(crate::messages::UIUpdate::GroupLevels(
+                    std::mem::take(&mut group_peaks),
+                ));
             let _ = self
                 .updates
                 .send_sync(crate::messages::UIUpdate::MasterLevel(
@@ -1872,7 +2044,7 @@ impl AudioEngine {
     }
 
     fn apply_new_snapshot(&mut self, new_snapshot: AudioGraphSnapshot) {
-        self.full_sync(&new_snapshot.tracks);
+        self.full_sync(&new_snapshot.tracks, &new_snapshot.groups);
     }
 
     fn run_plugin_chain(

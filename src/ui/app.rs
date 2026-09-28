@@ -68,6 +68,8 @@ pub struct YadawApp {
 
     // Selection state
     pub(super) selected_track: u64,
+    pub(super) selected_tracks: Vec<u64>,
+    pub(super) selected_group: Option<u64>,
     pub(super) selected_pattern: u64,
     pub(super) selected_clips: Vec<u64>,
 
@@ -210,6 +212,8 @@ impl YadawApp {
             clap_param_meta: std::collections::HashMap::new(),
 
             selected_track: initial_track_id,
+            selected_tracks: vec![initial_track_id],
+            selected_group: None,
             selected_pattern: 0,
             selected_clips: Vec::new(),
             selected_track_for_plugin: None,
@@ -619,6 +623,11 @@ impl YadawApp {
 
     pub fn deselect_all(&mut self) {
         self.selected_clips.clear();
+    }
+
+    pub fn clear_track_selection(&mut self) {
+        self.selected_tracks.clear();
+        self.selected_group = None;
     }
 
     // Project management
@@ -1292,6 +1301,9 @@ impl YadawApp {
             UIUpdate::TrackLevels(levels) => {
                 self.tracks_ui.update_levels(levels);
             }
+            UIUpdate::GroupLevels(levels) => {
+                self.tracks_ui.update_group_levels(levels);
+            }
             UIUpdate::RecordingFinished(track_id, mut clip) => {
                 self.push_undo();
                 let mut state = self.state.lock_sync();
@@ -1791,9 +1803,52 @@ impl YadawApp {
             TransposeDialog => self.dialogs.show_transpose_dialog(),
             HumanizeDialog => self.dialogs.show_humanize_dialog(),
 
+            GroupSelectedTracks => {
+                if self.selected_tracks.len() < 2 {
+                    self.dialogs.show_message(
+                        "Select two or more tracks (Ctrl/Cmd-click or Shift-click) to group them.",
+                    );
+                } else {
+                    self.create_group_from_selection();
+                }
+            }
+            UngroupSelectedTracks => self.ungroup_selected_tracks(),
+            UngroupAndDiscardGroup => {
+                let groups: Vec<u64> = {
+                    let state = self.state.lock_sync();
+                    self.selected_tracks
+                        .iter()
+                        .filter_map(|tid| state.tracks.get(tid).and_then(|t| t.group_id))
+                        .collect()
+                };
+                if groups.is_empty() {
+                    self.dialogs.show_message("No selected track is in a group.");
+                } else {
+                    self.push_undo();
+                    for gid in groups {
+                        let _ = self.command_tx.send(AudioCommand::RemoveGroup(gid));
+                    }
+                }
+            }
+            SelectGroupMembers => {
+                let group_id = self.selected_group.or_else(|| {
+                    let state = self.state.lock_sync();
+                    self.selected_tracks
+                        .first()
+                        .and_then(|tid| state.tracks.get(tid))
+                        .and_then(|t| t.group_id)
+                });
+                match group_id {
+                    Some(gid) => self.select_group_tracks(gid),
+                    None => self.dialogs.show_message("No group selected."),
+                }
+            }
+            ToggleGroupDialog => self.dialogs.show_track_grouping(),
+
             Escape => {
                 // Close dialogs or deselect
                 self.deselect_all();
+                self.clear_track_selection();
                 self.timeline_ui.show_clip_menu = false;
             }
         }
@@ -1914,7 +1969,7 @@ impl YadawApp {
         }
     }
 
-    pub fn select_track(&mut self, track_id: u64) {
+    fn focus_track(&mut self, track_id: u64) {
         self.selected_track = track_id;
 
         let is_midi = {
@@ -1966,6 +2021,104 @@ impl YadawApp {
                 drop(state);
                 self.piano_roll_view.selected_clip = None;
             }
+        }
+    }
+
+    pub fn select_track(&mut self, track_id: u64) {
+        self.selected_tracks = vec![track_id];
+        self.focus_track(track_id);
+    }
+
+    pub fn click_select_track(&mut self, track_id: u64, modifiers: egui::Modifiers) {
+        if modifiers.shift {
+            let anchor = self.selected_track;
+            let range = {
+                let state = self.state.lock_sync();
+                let order = &state.track_order;
+                match (
+                    order.iter().position(|&id| id == anchor),
+                    order.iter().position(|&id| id == track_id),
+                ) {
+                    (Some(a), Some(b)) => {
+                        let (lo, hi) = (a.min(b), a.max(b));
+                        order[lo..=hi].to_vec()
+                    }
+                    _ => vec![track_id],
+                }
+            };
+            self.selected_tracks = range;
+            self.focus_track(track_id);
+        } else if modifiers.command || modifiers.ctrl {
+            if let Some(pos) = self.selected_tracks.iter().position(|&id| id == track_id) {
+                self.selected_tracks.remove(pos);
+            } else {
+                self.selected_tracks.push(track_id);
+            }
+            self.focus_track(track_id);
+        } else {
+            self.select_track(track_id);
+        }
+    }
+
+    pub fn is_track_selected(&self, track_id: u64) -> bool {
+        self.selected_tracks.contains(&track_id)
+    }
+
+    pub fn select_all_tracks(&mut self) {
+        self.selected_tracks = {
+            let state = self.state.lock_sync();
+            state.track_order.clone()
+        };
+    }
+
+    pub fn select_group(&mut self, group_id: u64) {
+        self.selected_group = Some(group_id);
+    }
+
+    pub fn select_group_tracks(&mut self, group_id: u64) {
+        let tracks = {
+            let state = self.state.lock_sync();
+            state.get_group_subtree_tracks(group_id)
+        };
+        if let Some(&last) = tracks.last() {
+            self.selected_track = last;
+        }
+        self.selected_tracks = tracks;
+        self.selected_group = Some(group_id);
+    }
+
+    pub fn create_group_from_selection(&mut self) {
+        let tracks = self.selected_tracks.clone();
+        self.create_group_named("New Group".to_string(), tracks, None);
+    }
+
+    pub fn create_group_named(
+        &mut self,
+        name: String,
+        track_ids: Vec<u64>,
+        parent_id: Option<u64>,
+    ) {
+        if track_ids.is_empty() && parent_id.is_none() {
+            return;
+        }
+        self.push_undo();
+        let _ = self.command_tx.send(AudioCommand::CreateGroup {
+            name,
+            track_ids,
+            parent_id,
+        });
+    }
+
+    pub fn ungroup_selected_tracks(&mut self) {
+        let tracks = self.selected_tracks.clone();
+        if tracks.is_empty() {
+            return;
+        }
+        self.push_undo();
+        for tid in tracks {
+            let _ = self
+                .command_tx
+                .send(AudioCommand::RemoveTrackFromGroup(tid));
         }
     }
 

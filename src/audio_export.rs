@@ -1,5 +1,5 @@
 use crate::audio::AudioEngine;
-use crate::audio_state::AudioState;
+use crate::audio_state::{AudioGraphSnapshot, AudioState};
 use crate::messages::{ExportConfig, ExportFormat, ExportState, UIUpdate, UiTx};
 use crate::project::AppState;
 use crate::time_utils::TimeConverter;
@@ -154,9 +154,13 @@ fn run_export(
         bail!("Export range is zero length.");
     }
 
-    let snapshots = crate::audio_snapshot::build_track_snapshots(&app_state);
+    let snapshot = AudioGraphSnapshot {
+        tracks: crate::audio_snapshot::build_track_snapshots(&app_state),
+        track_order: app_state.track_order.clone(),
+        groups: crate::audio_snapshot::build_group_snapshots(&app_state),
+    };
     let mut engine =
-        AudioEngine::new_for_offline_render(&snapshots, &audio_state, config.sample_rate)?;
+        AudioEngine::new_for_offline_render(&snapshot, &audio_state, config.sample_rate)?;
     let missing = engine.take_offline_missing();
     if !missing.is_empty() {
         bail!(
@@ -465,9 +469,13 @@ async fn run_export_wasm(
         bail!("Export range is zero length.");
     }
 
-    let snapshots = crate::audio_snapshot::build_track_snapshots(&app_state);
+    let snapshot = AudioGraphSnapshot {
+        tracks: crate::audio_snapshot::build_track_snapshots(&app_state),
+        track_order: app_state.track_order.clone(),
+        groups: crate::audio_snapshot::build_group_snapshots(&app_state),
+    };
     let mut engine =
-        AudioEngine::new_for_offline_render(&snapshots, &audio_state, config.sample_rate)?;
+        AudioEngine::new_for_offline_render(&snapshot, &audio_state, config.sample_rate)?;
     let missing = engine.take_offline_missing();
     if !missing.is_empty() {
         bail!(

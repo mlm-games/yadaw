@@ -236,24 +236,25 @@ impl Ctx<'_> {
         let mut written: Vec<u64> = Vec::new();
         let mut orphaned: Vec<u64> = Vec::new();
         for track in self.project.tracks.clone() {
-            match track.group_id {
+            match track.group_id.map(|id| self.root_group_of(id)) {
                 Some(id) if self.group_track_ids.contains_key(&id) => {
                     if !written.contains(&id) {
                         written.push(id);
                         self.write_group(id, &master_channel_id);
                     }
                 }
-                Some(id) => {
-                    orphaned.push(id);
+                Some(_) => {
+                    orphaned.push(track.group_id.unwrap_or(0));
                     self.write_track(&track, &master_channel_id);
                 }
                 None => self.write_track(&track, &master_channel_id),
             }
         }
         for group in self.project.groups.clone() {
-            if !written.contains(&group.id) {
-                written.push(group.id);
-                self.write_group(group.id, &master_channel_id);
+            let root = self.root_group_of(group.id);
+            if !written.contains(&root) {
+                written.push(root);
+                self.write_group(root, &master_channel_id);
             }
         }
 
@@ -289,7 +290,7 @@ impl Ctx<'_> {
             ));
         }
         self.report.count(
-            "group(s) lost their collapsed state and VCA-style control links, which DAWproject cannot express",
+            "group(s) lost their collapsed state, which DAWproject cannot express",
             self.project.groups.len(),
         );
         if self.project.loop_enabled {
@@ -316,10 +317,28 @@ impl Ctx<'_> {
         );
     }
 
-    /// DAWproject represents a group or folder as a `contentType="tracks"` Track
-    /// holding the member Tracks as children.
+    fn root_group_of(&self, group_id: u64) -> u64 {
+        let mut current = group_id;
+        for _ in 0..=crate::model::group::GROUP_CHAIN_LIMIT {
+            match self
+                .project
+                .groups
+                .iter()
+                .find(|g| g.id == current)
+                .and_then(|g| g.parent_id)
+            {
+                Some(parent) if self.project.groups.iter().any(|g| g.id == parent) => {
+                    current = parent
+                }
+                _ => return current,
+            }
+        }
+        current
+    }
+
+    /// A folder is a `contentType="tracks"` Track holding members and subgroups.
     fn write_group(&mut self, group_id: u64, master_channel_id: &str) {
-        let Some(group) = self.project.groups.iter().find(|g| g.id == group_id) else {
+        let Some(group) = self.project.groups.iter().find(|g| g.id == group_id).cloned() else {
             return;
         };
         let name = sanitize_name(&group.name);
@@ -329,6 +348,13 @@ impl Ctx<'_> {
             .tracks
             .iter()
             .filter(|t| t.group_id == Some(group_id))
+            .cloned()
+            .collect();
+        let children: Vec<crate::model::TrackGroup> = self
+            .project
+            .groups
+            .iter()
+            .filter(|g| g.parent_id == Some(group_id))
             .cloned()
             .collect();
 
@@ -342,9 +368,53 @@ impl Ctx<'_> {
                 ("loaded", "true".to_string()),
             ]),
         );
+        // A folder Track may carry a Channel; role="vca" means "controls
+        // other channels" rather than "audio passes through here".
+        self.write_group_channel(&group, master_channel_id);
         for track in members {
             self.write_track(&track, master_channel_id);
         }
+        for child in children {
+            self.write_group(child.id, master_channel_id);
+        }
+        self.xml.close();
+    }
+
+    fn write_group_channel(&mut self, group: &crate::model::TrackGroup, master_channel_id: &str) {
+        let channel_id = self.ids.next();
+        self.xml.open(
+            "Channel",
+            attrs([
+                ("id", channel_id),
+                ("audioChannels", "2".to_string()),
+                ("destination", master_channel_id.to_string()),
+                ("role", "vca".to_string()),
+                ("solo", group.solo.to_string()),
+            ]),
+        );
+        self.write_mute(None, group.muted);
+        self.xml.leaf(
+            "Pan",
+            attrs([
+                ("max", "1".to_string()),
+                ("min", "0".to_string()),
+                ("unit", "normalized".to_string()),
+                ("value", "0.5".to_string()),
+                ("id", self.ids.next()),
+                ("name", "Pan".to_string()),
+            ]),
+        );
+        self.xml.leaf(
+            "Volume",
+            attrs([
+                ("max", "2".to_string()),
+                ("min", "0".to_string()),
+                ("unit", "linear".to_string()),
+                ("value", f64::from(group.volume).to_string()),
+                ("id", self.ids.next()),
+                ("name", "Volume".to_string()),
+            ]),
+        );
         self.xml.close();
     }
 

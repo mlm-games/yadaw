@@ -7,6 +7,7 @@ pub const DEFAULT_SAMPLE_RATE: f64 = 44100.0;
 pub const DEFAULT_BPM: f32 = 120.0;
 pub const DEFAULT_MASTER_VOLUME: f32 = 0.8;
 pub const DEFAULT_TRACK_VOLUME: f32 = 0.7;
+pub const DEFAULT_GROUP_VOLUME: f32 = 1.0;
 
 // UI Layout Constants
 pub const PIANO_KEY_WIDTH: f32 = 60.0;

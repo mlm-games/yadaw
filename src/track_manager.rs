@@ -7,7 +7,6 @@ use crate::constants::{
 use crate::messages::AudioCommand;
 use crate::model::clip::{MidiClip, MidiNote};
 use crate::model::track::{Track, TrackType};
-use eframe::egui;
 use flume::Sender;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -16,14 +15,6 @@ pub enum UITrackType {
     Midi,
     Bus,
     Master,
-}
-
-#[derive(Debug, Clone)]
-pub struct TrackGroup {
-    pub name: String,
-    pub track_ids: Vec<usize>,
-    pub color: egui::Color32,
-    pub collapsed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -195,7 +186,6 @@ impl TrackBuilder {
 
 pub struct TrackManager {
     next_track_id: usize,
-    groups: Vec<TrackGroup>,
 }
 
 impl Default for TrackManager {
@@ -208,7 +198,6 @@ impl TrackManager {
     pub fn new() -> Self {
         Self {
             next_track_id: 0,
-            groups: Vec::new(),
         }
     }
 
@@ -273,49 +262,6 @@ impl TrackManager {
             p.id = 0;
         }
         t
-    }
-
-    pub fn create_group(&mut self, name: String, track_ids: Vec<usize>) -> usize {
-        let group = TrackGroup {
-            name,
-            track_ids,
-            color: egui::Color32::from_rgb(100, 150, 200),
-            collapsed: false,
-        };
-        self.groups.push(group);
-        self.groups.len() - 1
-    }
-
-    pub fn add_to_group(&mut self, group_id: usize, track_id: usize) {
-        if let Some(group) = self.groups.get_mut(group_id)
-            && !group.track_ids.contains(&track_id)
-        {
-            group.track_ids.push(track_id);
-        }
-    }
-
-    pub fn remove_from_group(&mut self, group_id: usize, track_id: usize) {
-        if let Some(group) = self.groups.get_mut(group_id) {
-            group.track_ids.retain(|&id| id != track_id);
-        }
-    }
-
-    pub fn get_groups(&self) -> &[TrackGroup] {
-        &self.groups
-    }
-
-    pub fn toggle_group(&mut self, group_id: usize) {
-        if let Some(group) = self.groups.get_mut(group_id) {
-            group.collapsed = !group.collapsed;
-        }
-    }
-
-    pub fn sanitize(&mut self, tracks_len: usize) {
-        for g in &mut self.groups {
-            g.track_ids.retain(|&i| i < tracks_len);
-            g.track_ids.sort_unstable();
-            g.track_ids.dedup();
-        }
     }
 }
 

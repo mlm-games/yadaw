@@ -172,6 +172,33 @@ impl MixerWindow {
             let strip_width = self.strip_width;
 
             for (track_id, track) in &track_data {
+
+                let group_label = {
+                    let state = app.state.lock_sync();
+                    track.group_id.and_then(|gid| {
+                        state
+                            .groups
+                            .get(&gid)
+                            .map(|g| (g.name.clone(), g.color))
+                    })
+                };
+                if let Some((gname, (r, g, b))) = &group_label {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(strip_width, 18.0), egui::Sense::hover());
+                    ui.painter().rect_filled(
+                        rect,
+                        3.0,
+                        egui::Color32::from_rgba_unmultiplied(*r, *g, *b, 60),
+                    );
+                    ui.painter().text(
+                        rect.left_center(),
+                        egui::Align2::LEFT_CENTER,
+                        gname,
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::from_rgb(*r, *g, *b),
+                    );
+                }
+
                 let strip = self
                     .channel_strips
                     .entry(*track_id)

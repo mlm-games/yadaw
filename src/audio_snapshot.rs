@@ -7,7 +7,7 @@ use crate::{
     audio_state::{
         AudioClipSnapshot, MidiClipSnapshot, MidiNoteSnapshot, PluginDescriptorSnapshot,
         RtAutomationLaneSnapshot, RtAutomationPoint, RtAutomationTarget, RtCurveType,
-        TrackSnapshot,
+        GroupSnapshot, TrackSnapshot,
     },
     model::{
         clip::{AudioClip, MidiClip, MidiNote},
@@ -51,7 +51,23 @@ fn track_to_snapshot(t: &Track, state: &AppState) -> TrackSnapshot {
             .map(automation_lane_to_snapshot)
             .collect(),
         sends: t.sends.clone(),
+        group_id: t.group_id,
     }
+}
+
+pub fn build_group_snapshots(state: &AppState) -> Vec<GroupSnapshot> {
+    state
+        .ordered_group_ids()
+        .into_iter()
+        .filter_map(|id| state.groups.get(&id))
+        .map(|g| GroupSnapshot {
+            group_id: g.id,
+            parent_id: g.parent_id,
+            volume: g.volume,
+            muted: g.muted,
+            solo: g.solo,
+        })
+        .collect()
 }
 
 fn audio_clip_to_snapshot(c: &AudioClip) -> AudioClipSnapshot {

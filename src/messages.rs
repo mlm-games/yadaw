@@ -197,10 +197,15 @@ pub enum AudioCommand {
     RemoveSend(u64, usize),
     SetSendAmount(u64, usize, f32),
     SetSendPreFader(u64, usize, bool),
-    CreateGroup(String, Vec<u64>),
+    CreateGroup {
+        name: String,
+        track_ids: Vec<u64>,
+        parent_id: Option<u64>,
+    },
     RemoveGroup(u64),
     AddTrackToGroup(u64, u64),
     RemoveTrackFromGroup(u64),
+    MoveGroup(u64, Option<u64>),
 
     AddMarker {
         beat: f64,
@@ -316,10 +321,11 @@ pub enum AudioCommand {
     },
     RenameGroup(u64, String),
     SetGroupColor(u64, u8, u8, u8),
-    SetGroupLinkVolume(u64, bool),
-    SetGroupLinkMute(u64, bool),
-    SetGroupLinkSolo(u64, bool),
-    ToggleGroupCollapsed(u64),
+    SetGroupVolume(u64, f32),
+    SetGroupMute(u64, bool),
+    SetGroupSolo(u64, bool),
+    SetGroupCollapsed(u64, bool),
+    MoveGroupInOrder(u64, usize),
     SetTrackColor(u64, u8, u8, u8),
 }
 
@@ -327,6 +333,7 @@ pub enum AudioCommand {
 pub enum UIUpdate {
     Position(f64),
     TrackLevels(HashMap<u64, (f32, f32)>), // indexed for meters
+    GroupLevels(HashMap<u64, (f32, f32)>), // indexed for group meters
     RecordingFinished(u64, AudioClip),     // Track ID
     /// Recording clip data assembled off the audio thread (raw samples moved
     /// out of the engine without copying.

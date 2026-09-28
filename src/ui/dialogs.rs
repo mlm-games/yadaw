@@ -3033,8 +3033,8 @@ impl Default for DialogManager {
 pub struct TrackGroupingDialog {
     closed: bool,
     new_group_name: String,
+    parent_id: Option<u64>,
     selected_tracks: Vec<u64>,
-    selected_group: Option<u64>,
     editing_group: Option<u64>,
     edit_name: String,
 }
@@ -3044,8 +3044,8 @@ impl TrackGroupingDialog {
         Self {
             closed: false,
             new_group_name: String::from("New Group"),
+            parent_id: None,
             selected_tracks: Vec::new(),
-            selected_group: None,
             editing_group: None,
             edit_name: String::new(),
         }
@@ -3057,17 +3057,17 @@ impl TrackGroupingDialog {
         egui::Window::new("Track Grouping")
             .open(&mut open)
             .resizable(true)
-            .default_size(egui::vec2(500.0, 500.0))
+            .default_size(egui::vec2(560.0, 560.0))
             .show(ctx, |ui| {
-                let (groups, _order, track_info): (
-                    Vec<crate::model::group::TrackGroup>,
-                    Vec<u64>,
-                    Vec<(u64, String, Option<u64>)>,
-                ) = {
+                let (rows, depths, groups) = {
                     let st = app.state.lock_sync();
-                    let groups: Vec<_> = st.groups.values().cloned().collect();
-                    let order = st.track_order.clone();
-                    let info = order
+                    let groups: Vec<crate::model::group::TrackGroup> = st
+                        .ordered_group_ids()
+                        .into_iter()
+                        .filter_map(|id| st.groups.get(&id).cloned())
+                        .collect();
+                    let rows: Vec<(u64, String, Option<u64>)> = st
+                        .track_order
                         .iter()
                         .filter_map(|&tid| {
                             st.tracks
@@ -3075,199 +3075,242 @@ impl TrackGroupingDialog {
                                 .map(|t| (tid, t.name.clone(), t.group_id))
                         })
                         .collect();
-                    (groups, order, info)
+                    let mut depths: std::collections::HashMap<u64, usize> =
+                        std::collections::HashMap::new();
+                    for (gid, g) in st.groups.iter() {
+                        let mut depth = 0;
+                        let mut cursor = g.parent_id;
+                        while let Some(pid) = cursor {
+                            if depth > 32 {
+                                break;
+                            }
+                            depth += 1;
+                            cursor = st.groups.get(&pid).and_then(|p| p.parent_id);
+                        }
+                        depths.insert(*gid, depth);
+                    }
+                    (rows, depths, groups)
                 };
 
                 ui.heading("Groups");
+                ui.separator();
 
-                ui.group(|ui| {
-                    ui.label("Existing Groups:");
-                    if groups.is_empty() {
-                        ui.label(egui::RichText::new("(none)").weak());
-                    } else {
-                        for group in &groups {
-                            let selected = self.selected_group == Some(group.id);
+                if groups.is_empty() {
+                    ui.label(egui::RichText::new("(none)").weak());
+                }
 
-                            ui.horizontal(|ui| {
-                                let (rect, _) = ui.allocate_exact_size(
-                                    egui::vec2(16.0, 16.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().rect_filled(
-                                    rect,
-                                    3.0,
-                                    egui::Color32::from_rgb(
-                                        group.color.0,
-                                        group.color.1,
-                                        group.color.2,
-                                    ),
-                                );
-
-                                if self.editing_group == Some(group.id) {
-                                    let response = ui.text_edit_singleline(&mut self.edit_name);
-                                    if response.lost_focus()
-                                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                    {
-                                        let _ = app.command_tx.send(AudioCommand::RenameGroup(
-                                            group.id,
-                                            self.edit_name.clone(),
-                                        ));
-                                        self.editing_group = None;
-                                    }
-                                } else if ui.selectable_label(selected, &group.name).clicked() {
-                                    self.selected_group = Some(group.id);
-                                }
-
-                                let member_count = track_info
-                                    .iter()
-                                    .filter(|(_, _, gid)| *gid == Some(group.id))
-                                    .count();
-                                ui.weak(format!("({} tracks)", member_count));
-
-                                if ui.small_button("✏").on_hover_text("Rename").clicked() {
-                                    self.editing_group = Some(group.id);
-                                    self.edit_name = group.name.clone();
-                                }
-
-                                ui.menu_button("🎨", |ui| {
-                                    if let Some((r, g, b)) =
-                                        super::color_picker::ColorPicker::palette_grid(
-                                            ui,
-                                            group.color,
-                                        )
-                                    {
-                                        let _ = app
-                                            .command_tx
-                                            .send(AudioCommand::SetGroupColor(group.id, r, g, b));
-                                        ui.close();
-                                    }
-                                });
-                            });
-
-                            if selected {
-                                ui.indent("group_links", |ui| {
-                                    ui.horizontal(|ui| {
-                                        let mut link_vol = group.link_volume;
-                                        let mut link_mute = group.link_mute;
-                                        let mut link_solo = group.link_solo;
-
-                                        if ui.checkbox(&mut link_vol, "Link Volume").changed() {
-                                            let _ = app.command_tx.send(
-                                                AudioCommand::SetGroupLinkVolume(
-                                                    group.id, link_vol,
-                                                ),
-                                            );
-                                        }
-                                        if ui.checkbox(&mut link_mute, "Link Mute").changed() {
-                                            let _ = app.command_tx.send(
-                                                AudioCommand::SetGroupLinkMute(group.id, link_mute),
-                                            );
-                                        }
-                                        if ui.checkbox(&mut link_solo, "Link Solo").changed() {
-                                            let _ = app.command_tx.send(
-                                                AudioCommand::SetGroupLinkSolo(group.id, link_solo),
-                                            );
-                                        }
-                                    });
-                                });
-                            }
-                        }
-                    }
+                for group in groups.iter() {
+                    let depth = depths.get(&group.id).copied().unwrap_or(0);
+                    let member_count = rows.iter().filter(|(_, _, g)| *g == Some(group.id)).count();
+                    let is_parent = self.parent_id == Some(group.id);
 
                     ui.horizontal(|ui| {
+                        ui.add_space(depth as f32 * 14.0);
+
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(16.0, 16.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().rect_filled(
+                            rect,
+                            3.0,
+                            egui::Color32::from_rgb(
+                                group.color.0,
+                                group.color.1,
+                                group.color.2,
+                            ),
+                        );
+
+                        if self.editing_group == Some(group.id) {
+                            let response = ui.text_edit_singleline(&mut self.edit_name);
+                            if response.lost_focus()
+                                || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                let _ = app.command_tx.send(AudioCommand::RenameGroup(
+                                    group.id,
+                                    self.edit_name.clone(),
+                                ));
+                                self.editing_group = None;
+                            }
+                        } else if ui.selectable_label(is_parent, &group.name).clicked() {
+                            self.parent_id = (!is_parent).then_some(group.id);
+                        }
+
+                        ui.weak(format!("({member_count} tracks)"));
+                        ui.weak(format!("{:.1} dB", crate::audio_utils::linear_to_db(group.volume)));
+                        if group.muted {
+                            ui.colored_label(egui::Color32::from_gray(140), "M");
+                        }
+                        if group.solo {
+                            ui.colored_label(egui::Color32::from_rgb(240, 200, 80), "S");
+                        }
+
+                        if ui.small_button("✏").on_hover_text("Rename").clicked() {
+                            self.editing_group = Some(group.id);
+                            self.edit_name = group.name.clone();
+                        }
+
+                        let mut vol = group.volume;
                         if ui
-                            .add_enabled(
-                                self.selected_group.is_some(),
-                                egui::Button::new("Delete Group"),
-                            )
+                            .add_sized([90.0, 16.0], egui::Slider::new(&mut vol, 0.0..=1.2))
+                            .changed()
+                        {
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::SetGroupVolume(group.id, vol));
+                        }
+
+                        if ui
+                            .selectable_label(group.muted, if group.muted { "M" } else { "m" })
+                            .on_hover_text("Mute group")
                             .clicked()
                         {
-                            if let Some(gid) = self.selected_group {
-                                let _ = app.command_tx.send(AudioCommand::RemoveGroup(gid));
-                                self.selected_group = None;
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::SetGroupMute(group.id, !group.muted));
+                        }
+                        if ui
+                            .selectable_label(group.solo, if group.solo { "S" } else { "s" })
+                            .on_hover_text("Solo group")
+                            .clicked()
+                        {
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::SetGroupSolo(group.id, !group.solo));
+                        }
+
+                        ui.menu_button("🎨", |ui| {
+                            if let Some((r, g, b)) =
+                                super::color_picker::ColorPicker::palette_grid(ui, group.color)
+                            {
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::SetGroupColor(group.id, r, g, b));
+                                ui.close();
+                            }
+                        });
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.add_space(depth as f32 * 14.0);
+                        if ui
+                            .selectable_label(is_parent, "new subgroup here")
+                            .on_hover_text("Create the next group inside this one")
+                            .clicked()
+                        {
+                            self.parent_id = (!is_parent).then_some(group.id);
+                        }
+                        if ui.small_button("⇧ move out").clicked() {
+                            let parent = group.parent_id;
+                            let _ = app.command_tx.send(AudioCommand::MoveGroup(group.id, parent));
+                        }
+                        if ui.small_button("✕ delete").clicked() {
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::RemoveGroup(group.id));
+                            if self.parent_id == Some(group.id) {
+                                self.parent_id = None;
                             }
                         }
                     });
+
+                }
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("New group inside:");
+                    let parent_name = self
+                        .parent_id
+                        .and_then(|pid| groups.iter().find(|g| g.id == pid).map(|g| g.name.clone()));
+                    match parent_name {
+                        Some(name) => {
+                            ui.label(egui::RichText::new(name).strong());
+                            if ui.small_button("✕").clicked() {
+                                self.parent_id = None;
+                            }
+                        }
+                        None => {
+                            ui.label(egui::RichText::new("(top level)").weak());
+                        }
+                    }
                 });
 
                 ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("New Group Name:");
+                    ui.text_edit_singleline(&mut self.new_group_name);
+                    if ui.button("Create Empty Group").clicked() {
+                        let parent = self.parent_id;
+                        let name = self.new_group_name.clone();
+                        app.create_group_named(name, Vec::new(), parent);
+                    }
+                });
 
-                ui.group(|ui| {
-                    ui.label("Create / Modify Groups");
+                ui.separator();
+                ui.label("Select tracks:");
 
-                    ui.horizontal(|ui| {
-                        ui.label("New Group Name:");
-                        ui.text_edit_singleline(&mut self.new_group_name);
-                    });
-
-                    ui.label("Select tracks:");
-
-                    for (tid, name, current_group) in &track_info {
-                        let mut checked = self.selected_tracks.contains(tid);
-                        let group_label = current_group
-                            .and_then(|gid| groups.iter().find(|g| g.id == gid))
-                            .map(|g| format!(" [{}]", g.name))
-                            .unwrap_or_default();
-
-                        if ui
-                            .checkbox(&mut checked, format!("{}{}", name, group_label))
-                            .changed()
-                        {
-                            if checked {
-                                self.selected_tracks.push(*tid);
-                            } else {
-                                self.selected_tracks.retain(|&id| id != *tid);
-                            }
+                let mut group_labels: std::collections::HashMap<u64, String> =
+                    std::collections::HashMap::new();
+                for g in &groups {
+                    let mut label = g.name.clone();
+                    let mut cursor = g.parent_id;
+                    while let Some(pid) = cursor {
+                        if let Some(p) = groups.iter().find(|x| x.id == pid) {
+                            label = format!("{}/{label}", p.name);
+                            cursor = p.parent_id;
+                        } else {
+                            break;
                         }
                     }
+                    group_labels.insert(g.id, label);
+                }
 
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                !self.selected_tracks.is_empty(),
-                                egui::Button::new("Create Group"),
-                            )
-                            .clicked()
-                        {
-                            let _ = app.command_tx.send(AudioCommand::CreateGroup(
-                                self.new_group_name.clone(),
-                                self.selected_tracks.clone(),
-                            ));
-                            self.selected_tracks.clear();
-                        }
+                for (tid, name, current_group) in &rows {
+                    let mut checked = self.selected_tracks.contains(tid);
+                    let suffix = current_group
+                        .and_then(|gid| group_labels.get(&gid))
+                        .map(|g| format!(" [{g}]"))
+                        .unwrap_or_default();
 
-                        if ui
-                            .add_enabled(
-                                self.selected_group.is_some() && !self.selected_tracks.is_empty(),
-                                egui::Button::new("Add to Selected Group"),
-                            )
-                            .clicked()
-                        {
-                            if let Some(gid) = self.selected_group {
-                                for tid in &self.selected_tracks {
-                                    let _ = app
-                                        .command_tx
-                                        .send(AudioCommand::AddTrackToGroup(*tid, gid));
-                                }
-                            }
-                            self.selected_tracks.clear();
+                    if ui
+                        .checkbox(&mut checked, format!("{}{suffix}", name))
+                        .changed()
+                    {
+                        if checked {
+                            self.selected_tracks.push(*tid);
+                        } else {
+                            self.selected_tracks.retain(|&id| id != *tid);
                         }
+                    }
+                }
 
-                        if ui
-                            .add_enabled(
-                                !self.selected_tracks.is_empty(),
-                                egui::Button::new("Remove from Group"),
-                            )
-                            .clicked()
-                        {
-                            for tid in &self.selected_tracks {
-                                let _ = app
-                                    .command_tx
-                                    .send(AudioCommand::RemoveTrackFromGroup(*tid));
-                            }
-                            self.selected_tracks.clear();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.selected_tracks.is_empty(),
+                            egui::Button::new("Group Selected Tracks"),
+                        )
+                        .clicked()
+                    {
+                        let parent = self.parent_id;
+                        let name = self.new_group_name.clone();
+                        let tracks = std::mem::take(&mut self.selected_tracks);
+                        app.create_group_named(name, tracks, parent);
+                    }
+
+                    if ui
+                        .add_enabled(
+                            !self.selected_tracks.is_empty(),
+                            egui::Button::new("Remove from Group"),
+                        )
+                        .clicked()
+                    {
+                        for tid in std::mem::take(&mut self.selected_tracks) {
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::RemoveTrackFromGroup(tid));
                         }
-                    });
+                    }
                 });
 
                 ui.separator();

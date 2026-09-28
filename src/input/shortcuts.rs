@@ -665,6 +665,12 @@ impl ShortcutRegistry {
         reg.bind(HumanizeDialog, Keybind::none(H));
         reg.bind(HumanizeDialog, Keybind::cmd(H));
 
+        reg.bind(GroupSelectedTracks, Keybind::cmd(G));
+        reg.bind(UngroupSelectedTracks, Keybind::cmd_shift(G));
+        reg.bind(UngroupAndDiscardGroup, Keybind::cmd_shift(U));
+        reg.bind(SelectGroupMembers, Keybind::cmd_shift(A));
+        reg.bind(ToggleGroupDialog, Keybind::cmd_shift(L));
+
         reg.bind(AppAction::Escape, Keybind::none(KeyCode::Escape));
 
         reg

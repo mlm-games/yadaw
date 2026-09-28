@@ -9,35 +9,85 @@ use crate::messages::{AudioCommand, PluginParamInfo};
 use crate::model::PluginDescriptor;
 use crate::model::automation::AutomationTarget;
 use crate::model::track::TrackType;
+use crate::project::ArrangementRow;
 
 use yadaw_plugin_api::{BackendKind, ParamKind};
 
 pub struct TracksPanel {
     track_meters: HashMap<u64, LevelMeter>,
+    group_meters: HashMap<u64, LevelMeter>,
     show_mixer_strip: bool,
     show_automation_buttons: bool,
     show_inputs: bool,
     cached_plugin_chains: HashMap<u64, (u64, Vec<PluginDescriptor>)>,
 
-    dnd_dragging_track: Option<u64>,
-    dnd_dragging_from_idx: Option<usize>,
-    dnd_drop_target_idx: Option<usize>,
-    dnd_row_rects: Vec<(u64, egui::Rect, usize)>,
+    dnd_dragging: Option<DndPayload>,
+    dnd_row_rects: Vec<DndRow>,
     dnd_pointer_offset: egui::Vec2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DndPayload {
+    Track(u64),
+    Group(u64),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DropTarget {
+
+    InsertAt(usize),
+
+    IntoGroup(u64),
+}
+
+struct DndRow {
+    id: u64,
+    rect: egui::Rect,
+    is_group: bool,
+}
+
+/// Top 60% of a group header drops into it; below that means "insert here".
+fn pointer_in_group_header(rect: &egui::Rect, pointer: egui::Pos2) -> bool {
+    let zone = egui::Rect::from_min_max(
+        rect.left_top(),
+        egui::pos2(rect.right(), rect.top() + rect.height() * 0.6),
+    );
+    zone.contains(pointer)
+}
+
+fn track_order_index_for_insert(
+    shown: &[u64],
+    target_idx: usize,
+    dragged: u64,
+    track_order: &[u64],
+) -> usize {
+    let anchor = shown
+        .iter()
+        .enumerate()
+        .skip(target_idx)
+        .map(|(_, &id)| id)
+        .find(|&id| id != dragged);
+
+    match anchor {
+        Some(id) => track_order
+            .iter()
+            .position(|&t| t == id)
+            .unwrap_or(track_order.len()),
+        None => track_order.len(),
+    }
 }
 
 impl TracksPanel {
     pub fn new() -> Self {
         Self {
             track_meters: HashMap::new(),
+            group_meters: HashMap::new(),
             show_mixer_strip: true,
             show_automation_buttons: true,
             show_inputs: true,
             cached_plugin_chains: HashMap::new(),
 
-            dnd_dragging_track: None,
-            dnd_dragging_from_idx: None,
-            dnd_drop_target_idx: None,
+            dnd_dragging: None,
             dnd_row_rects: Vec::new(),
             dnd_pointer_offset: egui::Vec2::ZERO,
         }
@@ -46,6 +96,14 @@ impl TracksPanel {
     pub fn update_levels(&mut self, levels: HashMap<u64, (f32, f32)>) {
         for (track_id, (left, right)) in levels {
             let meter = self.track_meters.entry(track_id).or_default();
+            let samples = [left.max(right)];
+            meter.update(&samples, 1.0 / 60.0);
+        }
+    }
+
+    pub fn update_group_levels(&mut self, levels: HashMap<u64, (f32, f32)>) {
+        for (group_id, (left, right)) in levels {
+            let meter = self.group_meters.entry(group_id).or_default();
             let samples = [left.max(right)];
             meter.update(&samples, 1.0 / 60.0);
         }
@@ -92,21 +150,69 @@ impl TracksPanel {
     fn draw_track_list(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         let mut track_actions = Vec::new();
         let mut automation_actions = Vec::new();
+        self.dnd_row_rects.clear();
 
-        // Get ordered track IDs and clone them to avoid holding the lock
-        let track_ids = {
+        // A collapsed group hides only its own subtree, never its siblings.
+        let visible_rows: Vec<(ArrangementRow, usize)> = {
             let state = app.state.lock_sync();
-            state.track_order.clone()
+            let mut out = Vec::new();
+            let mut depth = 0usize;
+            let mut hidden_by: Option<u64> = None;
+            for row in state.arrangement_rows() {
+                match row {
+                    ArrangementRow::Group(gid) => {
+                        if hidden_by.is_some_and(|h| h == gid) {
+                            continue; // this group is itself inside a collapsed one
+                        }
+                        let nested = hidden_by.is_some();
+                        if !nested {
+                            hidden_by = None;
+                            out.push((ArrangementRow::Group(gid), depth));
+                        }
+                        if state.groups.get(&gid).is_some_and(|g| g.collapsed) {
+                            hidden_by = Some(gid);
+                        }
+                        depth += 1;
+                    }
+                    ArrangementRow::Track(tid) => {
+                        if hidden_by.is_none() {
+                            out.push((ArrangementRow::Track(tid), depth));
+                        }
+                    }
+                }
+            }
+            out
         };
 
-        for &track_id in track_ids.iter() {
-            let is_selected = track_id == app.selected_track;
+        for (row, depth) in visible_rows {
+            let (id, is_group) = match row {
+                ArrangementRow::Group(gid) => (gid, true),
+                ArrangementRow::Track(tid) => (tid, false),
+            };
 
-            // Build the whole track UI inside a group and return the header response
+            if is_group {
+                let resp = self.draw_group_header(ui, id, depth, app);
+                if resp.clicked() {
+                    app.select_group(id);
+                }
+                self.dnd_row_rects.push(DndRow {
+                    id,
+                    rect: resp.rect,
+                    is_group: true,
+                });
+                if resp.drag_started() && self.dnd_dragging.is_none() {
+                    self.begin_drag(DndPayload::Group(id), &resp);
+                }
+                continue;
+            }
+
+            let track_id = id;
+            let is_selected = app.is_track_selected(track_id);
+
             let header_resp = ui
-                .group(|ui| {
+                .indent(("track_indent", track_id), |ui| {
                     let header_resp =
-                        self.draw_track_header(ui, track_id, is_selected, app, |action| {
+                        self.draw_track_header(ui, track_id, is_selected, depth, app, |action| {
                             track_actions.push((action, track_id))
                         });
 
@@ -114,10 +220,10 @@ impl TracksPanel {
                         self.draw_mixer_strip(ui, track_id, app);
                     }
 
-                    if self.show_automation_buttons {
-                        if let Some(action) = self.draw_automation_controls(ui, track_id, app) {
-                            automation_actions.push(action);
-                        }
+                    if self.show_automation_buttons
+                        && let Some(action) = self.draw_automation_controls(ui, track_id, app)
+                    {
+                        automation_actions.push(action);
                     }
 
                     self.draw_plugin_chain(ui, track_id, app);
@@ -130,31 +236,18 @@ impl TracksPanel {
                 })
                 .inner;
 
-            // Select the track when the header is clicked
             if header_resp.clicked() {
-                app.select_track(track_id);
+                app.click_select_track(track_id, ui.input(|i| i.modifiers));
             }
 
-            // record the header rect and logical index for DnD
-            let idx_in_order = {
-                let st = app.state.lock_sync();
-                st.track_order
-                    .iter()
-                    .position(|&id| id == track_id)
-                    .unwrap_or(0)
-            };
-            self.dnd_row_rects
-                .push((track_id, header_resp.rect, idx_in_order));
+            self.dnd_row_rects.push(DndRow {
+                id: track_id,
+                rect: header_resp.rect,
+                is_group: false,
+            });
 
-            // start dragging from header
-            if header_resp.drag_started() && self.dnd_dragging_track.is_none() {
-                self.dnd_dragging_track = Some(track_id);
-                self.dnd_dragging_from_idx = Some(idx_in_order);
-                if let Some(pointer) = header_resp.interact_pointer_pos() {
-                    self.dnd_pointer_offset = pointer - header_resp.rect.left_top();
-                } else {
-                    self.dnd_pointer_offset = egui::Vec2::ZERO;
-                }
+            if header_resp.drag_started() && self.dnd_dragging.is_none() {
+                self.begin_drag(DndPayload::Track(track_id), &header_resp);
             }
         }
 
@@ -169,20 +262,26 @@ impl TracksPanel {
         }
     }
 
+    fn begin_drag(&mut self, payload: DndPayload, resp: &egui::Response) {
+        self.dnd_dragging = Some(payload);
+        self.dnd_pointer_offset = resp
+            .interact_pointer_pos()
+            .map(|p| p - resp.rect.left_top())
+            .unwrap_or(egui::Vec2::ZERO);
+    }
+
     fn draw_track_header<'a>(
         &self,
         ui: &mut egui::Ui,
         track_id: u64,
         is_selected: bool,
+        depth: usize,
         app: &super::app::YadawApp,
         mut on_action: impl FnMut(&'a str),
     ) -> egui::Response {
-        let (name, is_midi, is_frozen, track_color, group_info) = {
+        let (name, is_midi, is_frozen, track_color, group_options) = {
             let state = app.state.lock_sync();
             let track = state.tracks.get(&track_id);
-            let group = track
-                .and_then(|t| t.group_id)
-                .and_then(|gid| state.groups.get(&gid));
 
             (
                 track
@@ -193,7 +292,14 @@ impl TracksPanel {
                     .unwrap_or(false),
                 track.map(|t| t.frozen).unwrap_or(false),
                 track.and_then(|t| t.color),
-                group.map(|g| (g.name.clone(), g.color)),
+                state
+                    .ordered_group_ids()
+                    .into_iter()
+                    .map(|gid| {
+                        let g = &state.groups[&gid];
+                        (g.id, g.name.clone())
+                    })
+                    .collect::<Vec<_>>(),
             )
         };
 
@@ -246,18 +352,15 @@ impl TracksPanel {
                         });
                     }
 
-                    // Group badge
-                    if let Some((group_name, (gr, gg, gb))) = &group_info {
-                        let badge_color = egui::Color32::from_rgb(*gr, *gg, *gb);
-                        ui.label(
-                            egui::RichText::new(format!("[{}]", group_name))
-                                .small()
-                                .color(badge_color),
-                        );
-                    }
-
                     ui.label(name);
                     ui.label(if is_midi { "🎹" } else { "♪" });
+                    if depth > 0 {
+                        ui.label(
+                            egui::RichText::new(format!("·{} deep", depth))
+                                .small()
+                                .weak(),
+                        );
+                    }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.menu_button("⚙", |ui| {
@@ -302,6 +405,29 @@ impl TracksPanel {
                                     ui.close();
                                 }
                             });
+
+                            ui.separator();
+
+                            if ui.button("Remove from Group").clicked() {
+                                on_action("ungroup_track");
+                                ui.close();
+                            }
+                            ui.menu_button("Add to Group", |ui| {
+                                for (gid, gname) in &group_options {
+                                    if ui.button(gname).clicked() {
+                                        on_action("group_new_here");
+                                        let _ = app.command_tx.send(AudioCommand::AddTrackToGroup(
+                                            track_id, *gid,
+                                        ));
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("New Group from Selection").clicked() {
+                                    on_action("group_new_here");
+                                    ui.close();
+                                }
+                            });
                         });
                     });
                 });
@@ -328,6 +454,188 @@ impl TracksPanel {
         }
 
         drag_resp.union(inner.response)
+    }
+
+    fn draw_group_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        group_id: u64,
+        depth: usize,
+        app: &mut super::app::YadawApp,
+    ) -> egui::Response {
+        let (name, color, collapsed, volume, muted, solo, member_count, child_count) = {
+            let state = app.state.lock_sync();
+            let g = state.groups.get(&group_id);
+            (
+                g.map(|g| g.name.clone()).unwrap_or_default(),
+                g.map(|g| g.color).unwrap_or((120, 120, 120)),
+                g.is_some_and(|g| g.collapsed),
+                g.map(|g| g.volume).unwrap_or(1.0),
+                g.is_some_and(|g| g.muted),
+                g.is_some_and(|g| g.solo),
+                state.get_group_subtree_tracks(group_id).len(),
+                state.child_groups(group_id).len(),
+            )
+        };
+
+        let fill = egui::Color32::from_rgba_unmultiplied(color.0, color.1, color.2, 38);
+        let is_selected = app.selected_group == Some(group_id);
+
+        let frame = egui::Frame::group(ui.style())
+            .fill(fill)
+            .inner_margin(egui::Margin::symmetric(6, 3))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.add_space(depth as f32 * 12.0);
+
+                    if ui
+                        .small_button(if collapsed { "▶" } else { "▼" })
+                        .on_hover_text(if collapsed { "Expand" } else { "Collapse" })
+                        .clicked()
+                    {
+                        let _ = app.command_tx.send(AudioCommand::SetGroupCollapsed(
+                            group_id,
+                            !collapsed,
+                        ));
+                    }
+
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(4.0, 16.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(rect, 0.0, egui::Color32::from_rgb(color.0, color.1, color.2));
+
+                    if is_selected {
+                        ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "⏵");
+                    }
+
+                    if ui
+                        .selectable_label(is_selected, egui::RichText::new(&name).strong())
+                        .clicked()
+                    {
+                        app.select_group(group_id);
+                    }
+                    ui.weak(format!(
+                        "{member_count} track{}",
+                        if member_count == 1 { "" } else { "s" }
+                    ));
+                    if child_count > 0 {
+                        ui.weak(format!("· {child_count} subgroup(s)"));
+                    }
+
+                    if let Some(meter) = self.group_meters.get(&group_id) {
+                        let (resp, painter) =
+                            ui.allocate_painter(egui::vec2(60.0, 10.0), egui::Sense::hover());
+                        let peak = meter.clone().data.peak_normalized();
+                        let w = (resp.rect.width() * peak).clamp(0.0, resp.rect.width());
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                resp.rect.left_top(),
+                                egui::vec2(w, resp.rect.height()),
+                            ),
+                            1.0,
+                            egui::Color32::from_rgb(90, 180, 90),
+                        );
+                        painter.rect_stroke(
+                            resp.rect,
+                            1.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("⚙", |ui| {
+                            if ui.button("Select All Tracks").clicked() {
+                                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                                app.select_group_tracks(group_id);
+                                ui.close();
+                            }
+                            if ui.button("Ungroup All Tracks").clicked() {
+                                let tracks = {
+                                    let st = app.state.lock_sync();
+                                    st.get_group_subtree_tracks(group_id)
+                                };
+                                for tid in tracks {
+                                    let _ = app
+                                        .command_tx
+                                        .send(AudioCommand::RemoveTrackFromGroup(tid));
+                                }
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("New Subgroup…").clicked() {
+                                app.create_group_named(
+                                    "New Group".to_string(),
+                                    Vec::new(),
+                                    Some(group_id),
+                                );
+                                ui.close();
+                            }
+                            ui.separator();
+                            ui.menu_button("Set Color", |ui| {
+                                if let Some((r, g, b)) =
+                                    super::color_picker::ColorPicker::palette_grid(ui, color)
+                                {
+                                    let _ = app
+                                        .command_tx
+                                        .send(AudioCommand::SetGroupColor(group_id, r, g, b));
+                                    ui.close();
+                                }
+                            });
+                            ui.separator();
+                            if ui.button("Delete Group").clicked() {
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::RemoveGroup(group_id));
+                                ui.close();
+                            }
+                        });
+
+                        if ui
+                            .selectable_label(solo, if solo { "S" } else { "s" })
+                            .on_hover_text("Solo group")
+                            .clicked()
+                        {
+                            let _ = app.command_tx.send(AudioCommand::SetGroupSolo(
+                                group_id, !solo,
+                            ));
+                        }
+                        if ui
+                            .selectable_label(muted, if muted { "M" } else { "m" })
+                            .on_hover_text("Mute group")
+                            .clicked()
+                        {
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::SetGroupMute(group_id, !muted));
+                        }
+
+                        let mut vol = volume;
+                        let changed = ui
+                            .add_sized(
+                                [90.0, 16.0],
+                                egui::Slider::new(&mut vol, 0.0..=1.2).show_value(false),
+                            )
+                            .changed();
+                        if changed {
+                            let _ = app
+                                .command_tx
+                                .send(AudioCommand::SetGroupVolume(group_id, vol));
+                        }
+                        ui.label(format!("{:.1}", linear_to_db(vol)));
+                    });
+                });
+            });
+
+        let rect = frame.response.rect;
+        let id = ui.id().with(("group_header", group_id));
+        // Right side holds the fader, mute, solo and menu; it must not drag.
+        let drag_rect = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2((rect.right() - 210.0).max(rect.left()), rect.bottom()),
+        );
+        let drag_resp = ui.interact(drag_rect, id, egui::Sense::click_and_drag());
+        drag_resp.union(frame.response)
     }
 
     fn draw_mixer_strip(&mut self, ui: &mut egui::Ui, track_id: u64, app: &super::app::YadawApp) {
@@ -988,7 +1296,7 @@ impl TracksPanel {
     }
 
     fn handle_track_dnd(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
-        let Some(drag_id) = self.dnd_dragging_track else {
+        let Some(payload) = self.dnd_dragging else {
             return;
         };
 
@@ -998,40 +1306,54 @@ impl TracksPanel {
             None => return,
         };
 
-        // Sort rows by index to get visual order
-        let mut rows = self.dnd_row_rects.clone();
-        rows.sort_by_key(|(_, _, idx)| *idx);
-
-        let mut target_idx = rows.len();
-        for (i, (_tid, rect, _idx)) in rows.iter().enumerate() {
-            let center_y = rect.center().y;
-            if pointer.y < center_y {
-                target_idx = i;
-                break;
-            }
-        }
-        self.dnd_drop_target_idx = Some(target_idx);
+        let target = match self
+            .dnd_row_rects
+            .iter()
+            .find(|r| r.is_group && pointer_in_group_header(&r.rect, pointer))
+            .map(|r| r.id)
+        {
+            Some(gid) => DropTarget::IntoGroup(gid),
+            None => DropTarget::InsertAt(self.insert_index_at(pointer)),
+        };
 
         // Paint insertion line and ghost
         let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tracks_dnd_layer"));
         let painter = ui.ctx().layer_painter(layer);
 
         // draw insertion line spanning header width
-        if let Some((_tid, any_rect, _)) = rows.first() {
-            let x0 = any_rect.left();
-            let x1 = any_rect.right();
-            let y = if target_idx == rows.len() {
-                rows.last().unwrap().1.bottom()
-            } else {
-                rows[target_idx].1.top()
-            };
-            painter.line_segment(
-                [egui::pos2(x0, y), egui::pos2(x1, y)],
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)),
-            );
+        if let Some(first) = self.dnd_row_rects.first().map(|r| r.rect) {
+            match target {
+                DropTarget::IntoGroup(gid) => {
+                    if let Some(row) = self.dnd_row_rects.iter().find(|r| r.id == gid) {
+                        painter.rect_stroke(
+                            row.rect,
+                            3.0,
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                }
+                DropTarget::InsertAt(idx) => {
+                    let y = if idx >= self.dnd_row_rects.len() {
+                        self.dnd_row_rects
+                            .last()
+                            .map_or(first.bottom(), |r| r.rect.bottom())
+                    } else {
+                        self.dnd_row_rects[idx].rect.top()
+                    };
+                    painter.line_segment(
+                        [egui::pos2(first.left(), y), egui::pos2(first.right(), y)],
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)),
+                    );
+                }
+            }
         }
 
-        if let Some((_, src_rect, _)) = rows.iter().find(|(tid, _, _)| *tid == drag_id) {
+        let drag_id = match payload {
+            DndPayload::Track(id) | DndPayload::Group(id) => id,
+        };
+        if let Some(src_rect) = self.dnd_row_rects.iter().find(|r| r.id == drag_id).map(|r| r.rect)
+        {
             let pos = pointer - self.dnd_pointer_offset;
             let ghost_rect = egui::Rect::from_min_size(pos, src_rect.size());
             painter.rect_filled(
@@ -1047,41 +1369,122 @@ impl TracksPanel {
             );
         }
 
-        // Drop
         let released = ui.ctx().input(|i| i.pointer.any_released());
         if released {
-            let from = self.dnd_dragging_from_idx.unwrap_or(0);
-            let to = self.dnd_drop_target_idx.unwrap_or(from);
-
-            // Resolve track ids by order
-            let (_ids, len) = {
-                let st = app.state.lock_sync();
-                (st.track_order.clone(), st.track_order.len())
-            };
-
-            if len >= 2 && from < len {
-                let new_to = to.min(len.saturating_sub(1));
-                if new_to != from && new_to < len {
-                    use crate::track_manager::move_track;
-                    {
-                        let mut st = app.state.lock_sync();
-                        move_track(&mut st.track_order, from, new_to);
+            match target {
+                DropTarget::IntoGroup(gid) => {
+                    if !matches!(payload, DndPayload::Group(g) if g == gid) {
+                        let moving = self.moving_track_ids(app, payload);
+                        if !moving.is_empty() {
+                            app.push_undo();
+                            for tid in moving {
+                                let _ = app
+                                    .command_tx
+                                    .send(AudioCommand::AddTrackToGroup(tid, gid));
+                            }
+                        }
                     }
                 }
-
-                app.select_track(drag_id);
-                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+                DropTarget::InsertAt(idx) => self.commit_reorder(app, payload, idx),
             }
 
-            self.dnd_dragging_track = None;
-            self.dnd_dragging_from_idx = None;
-            self.dnd_drop_target_idx = None;
+            self.dnd_dragging = None;
             self.dnd_pointer_offset = egui::Vec2::ZERO;
+        }
+    }
+
+    fn insert_index_at(&self, pointer: egui::Pos2) -> usize {
+        for (i, row) in self.dnd_row_rects.iter().enumerate() {
+            if pointer.y < row.rect.center().y {
+                return i;
+            }
+        }
+        self.dnd_row_rects.len()
+    }
+
+    fn moving_track_ids(&self, app: &super::app::YadawApp, payload: DndPayload) -> Vec<u64> {
+        let st = app.state.lock_sync();
+        match payload {
+            DndPayload::Track(tid) => vec![tid],
+            DndPayload::Group(gid) => st.get_group_subtree_tracks(gid),
+        }
+    }
+
+    /// Group order goes through a command so undo and the audio see it.
+    fn commit_reorder(
+        &self,
+        app: &mut super::app::YadawApp,
+        payload: DndPayload,
+        target_idx: usize,
+    ) {
+        match payload {
+            DndPayload::Track(tid) => {
+                let (from, to) = {
+                    let st = app.state.lock_sync();
+                    let Some(from) = st.track_order.iter().position(|&id| id == tid) else {
+                        return;
+                    };
+                    // Resolve against the drawn order, then map to flat order.
+                    let shown: Vec<u64> = st
+                        .arrangement_rows()
+                        .into_iter()
+                        .filter_map(|r| match r {
+                            ArrangementRow::Track(id) => Some(id),
+                            ArrangementRow::Group(_) => None,
+                        })
+                        .collect();
+                    let to = track_order_index_for_insert(&shown, target_idx, tid, &st.track_order);
+                    (from, to)
+                };
+                if to == from || to >= app.state.lock_sync().track_order.len() {
+                    return;
+                }
+                app.push_undo();
+                let mut st = app.state.lock_sync();
+                crate::track_manager::move_track(&mut st.track_order, from, to);
+                drop(st);
+                let _ = app.command_tx.send(AudioCommand::UpdateTracks);
+            }
+            DndPayload::Group(gid) => {
+                let to = {
+                    let st = app.state.lock_sync();
+                    let Some(from) = st.group_order.iter().position(|&id| id == gid) else {
+                        return;
+                    };
+                    // Just above the group under the pointer, in post-removal slots.
+                    let anchor = self
+                        .dnd_row_rects
+                        .get(target_idx)
+                        .and_then(|r| st.group_order.iter().position(|&g| g == r.id));
+                    let to = match anchor {
+                        Some(pos) if pos > from => pos - 1,
+                        Some(pos) => pos,
+                        None => st.group_order.len().saturating_sub(1),
+                    };
+                    if to == from {
+                        return;
+                    }
+                    to
+                };
+                app.push_undo();
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::MoveGroupInOrder(gid, to));
+            }
         }
     }
 
     fn apply_track_action(&mut self, app: &mut super::app::YadawApp, action: &str, track_id: u64) {
         match action {
+            "ungroup_track" => {
+                app.push_undo();
+                let _ = app
+                    .command_tx
+                    .send(AudioCommand::RemoveTrackFromGroup(track_id));
+            }
+            "group_new_here" => {
+                app.create_group_from_selection();
+            }
             "rename" => {
                 let current_name = {
                     let state = app.state.lock_sync();
