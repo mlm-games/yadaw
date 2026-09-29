@@ -10,7 +10,9 @@ use yadaw::model::group::{GroupLinkMode, TrackGroup};
 use yadaw::model::marker::Marker;
 use yadaw::model::tempo::{TempoCurve, TempoPoint, TempoRamp};
 use yadaw::model::track::{Send, Track, TrackType};
-use yadaw::project::{AppState, ArrangementRow, PROJECT_VERSION, Project, tempo_map_base_bpm};
+use yadaw::project::{
+    AppState, ArrangementRow, PROJECT_VERSION, Project, tempo_map_at_bpm, tempo_map_base_bpm,
+};
 use yadaw::time_utils::TimeConverter;
 
 fn note(id: u64, pitch: u8, start: f64) -> MidiNote {
@@ -1131,5 +1133,133 @@ fn a_tempo_point_keeps_its_ramp_across_a_project_round_trip() {
     assert!(
         old.iter().all(|p| p.ramp == TempoRamp::Beats),
         "a map written before ramps existed loads as beat-linear"
+    );
+}
+
+/// A scalar tempo change moves the whole curve by the same ratio, so a tempo
+/// map and the scalar can never disagree about what the project tempo is.
+#[test]
+fn a_tempo_change_scales_every_point_of_the_map() {
+    let map = vec![
+        TempoPoint::held(0.0, 120.0),
+        TempoPoint::held(16.0, 100.0),
+        TempoPoint::new(32.0, 80.0),
+    ];
+    let scaled = tempo_map_at_bpm(&map, 60.0);
+    assert_eq!(scaled.len(), 3);
+    for (want, got) in map.iter().zip(&scaled) {
+        assert!(
+            (got.bpm - want.bpm / 2.0).abs() < 1e-4,
+            "{} vs {}",
+            got.bpm,
+            want.bpm
+        );
+        assert_eq!(got.beat, want.beat, "beats do not move with the tempo");
+        assert_eq!(got.ramp, want.ramp);
+    }
+    assert_eq!(tempo_map_base_bpm(&scaled, 120.0), 60.0);
+}
+
+#[test]
+fn a_constant_project_stays_the_scalar_it_always_was() {
+    assert!(
+        tempo_map_at_bpm(&[TempoPoint::new(0.0, 120.0)], 60.0).is_empty(),
+        "a lone point is the constant tempo in disguise, so it collapses to none"
+    );
+    let map = vec![TempoPoint::held(0.0, 120.0), TempoPoint::held(16.0, 90.0)];
+    assert_eq!(
+        tempo_map_at_bpm(&map, 120.0),
+        map,
+        "setting the tempo it already has changes nothing"
+    );
+}
+
+/// The engine's rule: a clip's beat length is its identity and a tempo change
+/// never moves it. This is the guarantee the old clip rescale used to break.
+#[test]
+fn a_tempo_change_leaves_clip_beats_alone() {
+    let mut state = AppState::default();
+    let project = Project {
+        bpm: 120.0,
+        tempo_map: vec![TempoPoint::held(0.0, 120.0), TempoPoint::new(16.0, 90.0)],
+        tracks: vec![Track {
+            id: 1,
+            name: "Audio".to_string(),
+            track_type: TrackType::Audio,
+            audio_clips: vec![AudioClip {
+                id: 1,
+                name: "c".to_string(),
+                start_beat: 4.0,
+                length_beats: 8.0,
+                offset_beats: 1.5,
+                fade_in: Some(0.5),
+                fade_out: Some(0.25),
+                sample_rate: 44100.0,
+                samples: std::sync::Arc::new(vec![0.0f32; 1024]),
+                ..Default::default()
+            }],
+            ..Track::default()
+        }],
+        ..serde_json::from_str("{}").expect("a project needs only its defaults")
+    };
+    state.load_project(project);
+
+    let before = state.tracks[&1].audio_clips[0].clone();
+    let seconds_before = state.tempo_curve().beats_to_seconds(12.0);
+
+    // Halving the tempo doubles the real time of every beat.
+    let map = tempo_map_at_bpm(&state.tempo_map, 60.0);
+    state.tempo_map = map;
+    state.bpm = tempo_map_base_bpm(&state.tempo_map, 60.0);
+
+    let after = &state.tracks[&1].audio_clips[0];
+    assert_eq!(after.length_beats, before.length_beats);
+    assert_eq!(after.start_beat, before.start_beat);
+    assert_eq!(after.offset_beats, before.offset_beats);
+    assert_eq!(after.fade_in, before.fade_in);
+    assert_eq!(after.fade_out, before.fade_out);
+    assert!(
+        (state.tempo_curve().beats_to_seconds(12.0) - seconds_before * 2.0).abs() < 1e-9,
+        "the same 12 beats now take twice as long"
+    );
+}
+
+/// Every playhead conversion has to read the tempo map, or a project with a
+/// ramp shows the playhead, the position display and pasted notes in the wrong
+/// place. The UI sites now all go through these two helpers.
+#[test]
+fn playhead_conversions_follow_a_tempo_map() {
+    let mut state = AppState::default();
+    state.load_project(Project {
+        bpm: 120.0,
+        sample_rate: 48000.0,
+        tempo_map: vec![
+            TempoPoint::held(0.0, 120.0),
+            TempoPoint::new(4.0, 60.0),
+            TempoPoint::new(8.0, 60.0),
+        ],
+        ..serde_json::from_str(r#"{"tracks":[]}"#).expect("defaults")
+    });
+
+    assert_eq!(state.position_to_beats(0.0), 0.0);
+    assert!(
+        (state.position_to_beats(48000.0) - 2.0).abs() < 1e-9,
+        "1s at 120 BPM"
+    );
+    assert!(
+        (state.beats_to_samples(2.0) - 48000.0).abs() < 1e-6,
+        "and the round trip returns the same samples"
+    );
+
+    let ramp_start = state.tempo_curve().beats_to_seconds(4.0);
+    let half = state.tempo_curve().beats_to_seconds(6.0);
+    assert!(
+        half - ramp_start > 1.0,
+        "the two beats after the ramp start must take longer than a second, took {}",
+        half - ramp_start
+    );
+    assert!(
+        (state.position_to_beats(state.beats_to_samples(6.0)) - 6.0).abs() < 1e-6,
+        "a position in the ramp round trips back to its own beat"
     );
 }

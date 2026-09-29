@@ -6,6 +6,7 @@ mod menu_bar;
 mod mixer;
 mod piano_roll;
 mod piano_roll_view;
+mod tempo_track;
 mod theme;
 mod timeline;
 mod touch_gesture;
@@ -15,4 +16,5 @@ mod waveform;
 
 pub use app::YadawApp;
 pub use color_picker::ColorPicker;
+pub use tempo_track::TempoAction;
 pub use theme::{Theme, ThemeManager};

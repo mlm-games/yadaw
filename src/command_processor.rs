@@ -85,40 +85,18 @@ fn process_command(
                 return;
             }
             let mut state = app_state.lock_sync();
-            let old_bpm = state.bpm;
-
-            if bpm.is_finite() && bpm > 0.0 && old_bpm.is_finite() && old_bpm > 0.0 {
-                let ratio = bpm as f64 / old_bpm as f64;
-
-                if (ratio - 1.0).abs() > f64::EPSILON {
-                    for track in state.tracks.values_mut() {
-                        for clip in &mut track.audio_clips {
-                            if clip.warp_mode {
-                                continue;
-                            }
-
-                            clip.length_beats = (clip.length_beats * ratio).max(0.0);
-                            clip.offset_beats = (clip.offset_beats * ratio).max(0.0);
-
-                            if let Some(v) = clip.fade_in.as_mut() {
-                                *v = (*v * ratio).max(0.0);
-                            }
-                            if let Some(v) = clip.fade_out.as_mut() {
-                                *v = (*v * ratio).max(0.0);
-                            }
-                            if let Some(v) = clip.crossfade_in.as_mut() {
-                                *v = (*v * ratio).max(0.0);
-                            }
-                            if let Some(v) = clip.crossfade_out.as_mut() {
-                                *v = (*v * ratio).max(0.0);
-                            }
-                        }
-                    }
-                }
-            }
-
             state.bpm = bpm;
-            audio_state.set_bpm(bpm);
+            // A tempo map owns the mapping, so a scalar change moves the whole
+            // curve rather than rescaling clips against it.
+            state.tempo_map = crate::project::tempo_map_at_bpm(&state.tempo_map, bpm);
+            crate::project::publish_tempo(&state, audio_state);
+            send_graph_snapshot(&state, snapshot_tx);
+        }
+        AudioCommand::SetTempoMap(map) => {
+            let mut state = app_state.lock_sync();
+            state.tempo_map = crate::project::sanitise_tempo_map(map);
+            state.bpm = crate::project::tempo_map_base_bpm(&state.tempo_map, state.bpm);
+            crate::project::publish_tempo(&state, audio_state);
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::SetMasterVolume(volume) => {

@@ -83,10 +83,8 @@ impl PianoRollView {
 
                     // Draw playhead
                     let position = app.audio_state.get_position();
-                    let sample_rate = app.audio_state.sample_rate.load();
-                    let bpm = app.audio_state.bpm.load();
-                    if sample_rate > 0.0 && bpm > 0.0 {
-                        let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
+                    let current_beat = app.state.lock_sync().position_to_beats(position);
+                    if current_beat.is_finite() {
                         let x = grid_left_roll
                             + (current_beat as f32 * self.piano_roll.zoom_x
                                 - self.piano_roll.scroll_x);
@@ -748,6 +746,7 @@ impl PianoRollView {
     pub fn paste_notes(
         &self,
         audio_state: &Arc<AudioState>,
+        state: &Arc<Mutex<AppState>>,
         command_tx: &Sender<AudioCommand>,
         clipboard: &[MidiNote],
     ) {
@@ -759,10 +758,9 @@ impl PianoRollView {
             return;
         }
 
-        let target_beat = audio_state.get_position();
-        let sample_rate = audio_state.sample_rate.load() as f64;
-        let bpm = audio_state.bpm.load() as f64;
-        let target = (target_beat / sample_rate) * (bpm / 60.0);
+        let target = state
+            .lock_sync()
+            .position_to_beats(audio_state.get_position());
 
         let snap = self.piano_roll.grid_snap as f64;
         let snapped_target = if snap > 0.0 {

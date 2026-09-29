@@ -1135,13 +1135,7 @@ impl TracksPanel {
                             .clicked()
                         {
                             let position = app.audio_state.get_position();
-                            let sample_rate = app.audio_state.sample_rate.load();
-                            let bpm = app.audio_state.bpm.load();
-                            let current_beat = if sample_rate > 0.0 && bpm > 0.0 {
-                                (position / sample_rate as f64) * (bpm as f64 / 60.0)
-                            } else {
-                                0.0
-                            };
+                            let current_beat = app.state.lock_sync().position_to_beats(position);
                             let target = AutomationTarget::PluginParam {
                                 plugin_id,
                                 param_name: pinfo.name.clone(),

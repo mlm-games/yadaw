@@ -123,9 +123,7 @@ impl TransportUI {
                         // Position display
                         if let Some(transport) = &self.transport {
                             let position = transport.get_position();
-                            let sample_rate = app.audio_state.sample_rate.load();
-                            let bpm = transport.get_bpm();
-                            let beats = (position / sample_rate as f64) * (bpm as f64 / 60.0);
+                            let beats = app.state.lock_sync().position_to_beats(position);
                             let bar = (beats / 4.0) as u32 + 1;
                             let beat = (beats % 4.0) as u32 + 1;
                             let tick = ((beats % 1.0) * 480.0) as u32; // 480 ticks per beat
@@ -284,14 +282,27 @@ impl TransportUI {
 
                         self.show_markers(ui, app);
                     });
+                    ui.separator();
+                    self.show_tempo_track(ui, app);
                 });
         });
     }
 
+    fn show_tempo_track(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
+        let action = {
+            let state = app.state.lock_sync();
+            app.tempo_track_ui.show(ui, &state)
+        };
+        if let Some(crate::ui::tempo_track::TempoAction::Set { points, undo }) = action {
+            if undo {
+                app.push_undo();
+            }
+            let _ = app.command_tx.send(AudioCommand::SetTempoMap(points));
+        }
+    }
+
     fn show_markers(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         let markers = app.state.lock_sync().markers.clone();
-        let bpm = f64::from(app.audio_state.bpm.load());
-        let sample_rate = f64::from(app.audio_state.sample_rate.load());
 
         // Resolved up front so a marker deleted this frame drops its controls
         // instead of leaving a Jump that would seek to zero.
@@ -334,7 +345,7 @@ impl TransportUI {
                 let _ = app.command_tx.send(AudioCommand::RenameMarker(id, name));
             }
             if ui.button("» Jump").clicked() {
-                let samples = (beat * 60.0 / bpm) * sample_rate;
+                let samples = app.state.lock_sync().beats_to_samples(beat);
                 if let Some(transport) = &self.transport {
                     transport.set_position(samples);
                 } else {
@@ -349,7 +360,7 @@ impl TransportUI {
                 .as_ref()
                 .map(|t| t.get_position())
                 .unwrap_or(0.0);
-            let beat = (((position / sample_rate) * (bpm / 60.0)) * 4.0).round() / 4.0;
+            let beat = (app.state.lock_sync().position_to_beats(position) * 4.0).round() / 4.0;
             let name = format!("Marker {}", markers.len() + 1);
             app.push_undo();
             let _ = app.command_tx.send(AudioCommand::AddMarker { beat, name });

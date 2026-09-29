@@ -225,6 +225,30 @@ pub fn tempo_map_base_bpm(map: &[TempoPoint], bpm: f32) -> f32 {
         .map_or(bpm, |p| p.bpm as f32)
 }
 
+/// A tempo map with every point moved to a new starting tempo. A map that is a
+/// lone constant becomes empty, so the project keeps one representation of a
+/// constant tempo rather than two.
+pub fn tempo_map_at_bpm(map: &[TempoPoint], bpm: f32) -> Vec<TempoPoint> {
+    if map.len() <= 1 {
+        return Vec::new();
+    }
+    let base = crate::model::tempo::sanitise_bpm(f64::from(bpm));
+    let current = tempo_map_base_bpm(map, bpm);
+    if !(current.is_finite() && current > 0.0)
+        || (f64::from(bpm) - f64::from(current)).abs() <= f64::EPSILON
+    {
+        return map.to_vec();
+    }
+    let ratio = base / f64::from(current);
+    map.iter()
+        .map(|p| TempoPoint {
+            beat: p.beat,
+            bpm: (p.bpm * ratio).max(0.0),
+            ramp: p.ramp,
+        })
+        .collect()
+}
+
 /// Publish the project's tempo to the audio thread. Every write to `bpm` or
 /// `tempo_map` must go through here, or the audio thread keeps rendering with
 /// a stale curve.

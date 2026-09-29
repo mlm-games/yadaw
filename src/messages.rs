@@ -7,6 +7,7 @@ use crate::{
         MidiNote,
         automation::{AutomationMode, AutomationTarget},
         clip::{AudioClip, MidiClip},
+        tempo::TempoPoint,
     },
     project::AppStateSnapshot,
 };
@@ -213,6 +214,8 @@ pub enum AudioCommand {
     },
     RemoveMarker(u64),
     RenameMarker(u64, String),
+
+    SetTempoMap(Vec<TempoPoint>),
 
     ToggleClipLoop {
         clip_id: u64,

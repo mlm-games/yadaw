@@ -57,6 +57,7 @@ pub struct YadawApp {
     pub(super) mixer_ui: super::mixer::MixerWindow,
     pub(super) menu_bar: super::menu_bar::MenuBar,
     pub(super) piano_roll_view: super::piano_roll_view::PianoRollView,
+    pub(super) tempo_track_ui: super::tempo_track::TempoTrackUI,
 
     // Dialogs
     pub(super) dialogs: super::dialogs::DialogManager,
@@ -199,6 +200,7 @@ impl YadawApp {
             mixer_ui: super::mixer::MixerWindow::new(),
             menu_bar: super::menu_bar::MenuBar::new(),
             piano_roll_view: super::piano_roll_view::PianoRollView::new(),
+            tempo_track_ui: super::tempo_track::TempoTrackUI::default(),
             dialogs: super::dialogs::DialogManager::new(),
             theme_manager,
 
@@ -491,9 +493,7 @@ impl YadawApp {
     pub fn paste_at_playhead(&mut self) {
         let beat = {
             let position = self.audio_state.get_position();
-            let sample_rate = self.audio_state.sample_rate.load();
-            let bpm = self.audio_state.bpm.load();
-            (position / sample_rate as f64) * (bpm as f64 / 60.0)
+            self.state.lock_sync().position_to_beats(position)
         };
         self.paste_at_beat(self.selected_track, beat);
     }
@@ -998,9 +998,7 @@ impl YadawApp {
 
         let current_beat = {
             let position = self.audio_state.get_position();
-            let sample_rate = self.audio_state.sample_rate.load();
-            let bpm = self.audio_state.bpm.load();
-            (position / sample_rate as f64) * (bpm as f64 / 60.0)
+            self.state.lock_sync().position_to_beats(position)
         };
 
         let selected_clips = self.selected_clips.clone();
@@ -1654,6 +1652,7 @@ impl YadawApp {
                         self.push_undo();
                         self.piano_roll_view.paste_notes(
                             &self.audio_state,
+                            &self.state,
                             &self.command_tx,
                             clipboard,
                         );

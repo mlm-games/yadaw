@@ -419,10 +419,8 @@ impl TimelineView {
 
         // Draw playhead
         let position = app.audio_state.get_position();
-        let sample_rate = app.audio_state.sample_rate.load();
-        let bpm = app.audio_state.bpm.load();
-        if sample_rate > 0.0 && bpm > 0.0 {
-            let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
+        let current_beat = app.state.lock_sync().position_to_beats(position);
+        if current_beat.is_finite() {
             let x = rect.left() + (current_beat as f32 * self.zoom_x - self.scroll_x);
             if x >= rect.left() && x <= rect.right() {
                 ui.ctx().debug_painter().line_segment(
@@ -597,6 +595,7 @@ impl TimelineView {
 
         if lane_resp.secondary_clicked() {
             let pos = lane_resp.interact_pointer_pos().unwrap_or_default();
+            let curve = app.state.lock_sync().tempo_curve();
             let on_clip = match track.track_type {
                 TrackType::Midi => track.midi_clips.iter().any(|c| {
                     let clip_x = c.start_beat as f32 * self.zoom_x - self.scroll_x;
@@ -611,9 +610,8 @@ impl TimelineView {
                 }),
                 _ => track.audio_clips.iter().any(|c| {
                     let clip_x = c.start_beat as f32 * self.zoom_x - self.scroll_x;
-                    let bpm = app.audio_state.bpm.load();
                     let audio_duration_seconds = c.samples.len() as f64 / c.sample_rate as f64;
-                    let audio_length_beats = audio_duration_seconds * (bpm as f64 / 60.0);
+                    let audio_length_beats = curve.seconds_to_beats(audio_duration_seconds);
                     let effective_length_beats = if c.warp_mode {
                         c.length_beats as f32
                     } else {
@@ -667,9 +665,12 @@ impl TimelineView {
     ) {
         let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
 
-        let bpm = app.audio_state.bpm.load();
         let audio_duration_seconds = clip.samples.len() as f64 / clip.sample_rate as f64;
-        let audio_length_beats = audio_duration_seconds * (bpm as f64 / 60.0);
+        let audio_length_beats = app
+            .state
+            .lock_sync()
+            .tempo_curve()
+            .seconds_to_beats(audio_duration_seconds);
 
         let effective_length_beats = if clip.warp_mode {
             clip.length_beats as f32
@@ -720,8 +721,12 @@ impl TimelineView {
 
         // Audio Looping Indicators (Visual only)
         if clip.loop_enabled {
-            let src_len_beats =
-                (clip.samples.len() as f64 / clip.sample_rate as f64) * (bpm as f64 / 60.0);
+            let seconds = clip.samples.len() as f64 / clip.sample_rate as f64;
+            let src_len_beats = app
+                .state
+                .lock_sync()
+                .tempo_curve()
+                .seconds_to_beats(seconds);
             if src_len_beats > 0.0 && src_len_beats < clip.length_beats {
                 let reps = (clip.length_beats / src_len_beats).ceil() as i32;
                 for k in 1..reps {
@@ -1648,11 +1653,11 @@ impl TimelineView {
                                 };
                                 let _ = app.command_tx.send(cmd);
 
-                                let bpm = app.audio_state.bpm.load();
-
                                 if !is_midi && self.auto_crossfade_on_overlap {
-                                    // ~20ms in beats (at current BPM). You can tune this.
-                                    let fade_beats = 0.02f64 * (bpm as f64 / 60.0);
+                                    // ~20ms in beats (at the tempo there). You can tune this.
+                                    let seconds_per_beat =
+                                        app.state.lock_sync().tempo_curve().beats_to_seconds(1.0);
+                                    let fade_beats = 0.02f64 / seconds_per_beat;
                                     let _ = app.command_tx.send(AudioCommand::SetAudioClipFadeIn(
                                         clip_id,
                                         Some(fade_beats),
@@ -1833,10 +1838,8 @@ impl TimelineView {
                     beat
                 }
                 .max(0.0);
-                let sr = app.audio_state.sample_rate.load() as f64;
-                let bpm = app.audio_state.bpm.load() as f64;
-                if bpm > 0.0 && sr > 0.0 {
-                    let samples = beat * (60.0 / bpm) * sr;
+                let samples = app.state.lock_sync().beats_to_samples(beat);
+                if samples.is_finite() {
                     let _ = app.command_tx.send(AudioCommand::SetPosition(samples));
                 }
                 return;
@@ -2058,13 +2061,11 @@ impl TimelineView {
 
     fn update_auto_scroll(&mut self, app: &super::app::YadawApp) {
         let position = app.audio_state.get_position();
-        let sample_rate = app.audio_state.sample_rate.load();
-        let bpm = app.audio_state.bpm.load();
-        if sample_rate <= 0.0 || bpm <= 0.0 {
+        let current_beat = app.state.lock_sync().position_to_beats(position);
+        if !current_beat.is_finite() {
             return;
         }
 
-        let current_beat = (position / sample_rate as f64) * (bpm as f64 / 60.0);
         let playhead_x = current_beat as f32 * self.zoom_x;
 
         let view_w = self.last_view_width.max(200.0);

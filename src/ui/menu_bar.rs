@@ -401,10 +401,8 @@ impl MenuBar {
                     max_beat
                 };
                 // convert beats->samples
-                let sr = app.audio_state.sample_rate.load() as f64;
-                let bpm = app.audio_state.bpm.load() as f64;
-                if bpm > 0.0 && sr > 0.0 {
-                    let samples = end_beats * (60.0 / bpm) * sr;
+                let samples = app.state.lock_sync().beats_to_samples(end_beats);
+                if samples.is_finite() {
                     let _ = app.command_tx.send(AudioCommand::SetPosition(samples));
                 }
                 ui.close();
