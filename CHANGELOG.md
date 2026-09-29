@@ -1,3 +1,8 @@
+## v0.11.1
+
+- add dawproject format-like group links
+
+
 ## v0.11.0
 
 - DAWproject 1.0 support for Import/Export (#16)
