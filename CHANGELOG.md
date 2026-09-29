@@ -1,3 +1,8 @@
+## v0.11.2
+
+- No user-facing changes were mentioned since previous release
+
+
 ## v0.11.1
 
 - add dawproject format-like group links

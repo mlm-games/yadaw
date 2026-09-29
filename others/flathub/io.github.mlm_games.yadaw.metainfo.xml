@@ -52,6 +52,13 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.11.2" date="2026-09-29" type="stable">
+      <description>
+        <ul>
+          <li>No user-facing changes were mentioned since previous release</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.1" date="2026-09-29" type="stable">
       <description>
         <ul>

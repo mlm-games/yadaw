@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/yadaw-plugin-api", "crates/yadaw-plugin-host"]
 
 [workspace.package]
-version = "0.11.1"
+version = "0.11.2"
 edition = "2024"
 license = "AGPL-3.0"
 repository = "https://github.com/mlm-games/yadaw"
@@ -62,8 +62,8 @@ waw = { git = "https://github.com/mlm-games/waw-rs" }
 ropfs = "0.4"
 wasm-bindgen-rayon = { git = "https://github.com/mlm-games/wasm-bindgen-rayon.git" }
 
-yadaw-plugin-api = { path = "crates/yadaw-plugin-api", version = "0.11.1" }
-yadaw-plugin-host = { path = "crates/yadaw-plugin-host", version = "0.11.1" }
+yadaw-plugin-api = { path = "crates/yadaw-plugin-api", version = "0.11.2" }
+yadaw-plugin-host = { path = "crates/yadaw-plugin-host", version = "0.11.2" }
 
 [package]
 name = "yadaw"
@@ -182,7 +182,7 @@ actions = ["android.intent.action.MAIN"]
 categories = ["android.intent.category.LAUNCHER"]
 
 [package.metadata.android.sdk]
-version_code = 16779824
+version_code = 16779834
 min_sdk_version = 29
 target_sdk_version = 37
 
