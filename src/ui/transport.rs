@@ -172,7 +172,7 @@ impl TransportUI {
                                 if let Some(t) = &self.transport {
                                     t.set_bpm(bpm);
                                 } else {
-                                    app.audio_state.bpm.store(bpm);
+                                    app.audio_state.set_bpm(bpm);
                                     let _ = app.command_tx.send(AudioCommand::SetBPM(bpm));
                                 }
                                 self.bpm_input = format!("{:.1}", bpm);

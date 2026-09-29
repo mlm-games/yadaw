@@ -3,22 +3,33 @@ use serde::{Deserialize, Serialize};
 use crate::constants::DEFAULT_BPM;
 
 /// One anchor of the project's tempo curve. `beat` is a project beat and `bpm`
-/// is the tempo in force from that beat until the next point.
+/// is the tempo in force from that beat until the next point. With `hold` the
+/// tempo stays put and jumps at the next point, which is DAWproject's second
+/// interpolation mode; the default ramps linearly.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct TempoPoint {
     pub beat: f64,
     pub bpm: f64,
+    #[serde(default)]
+    pub hold: bool,
 }
 
 impl TempoPoint {
     pub fn new(beat: f64, bpm: f64) -> Self {
-        Self { beat, bpm }
+        Self {
+            beat,
+            bpm,
+            hold: false,
+        }
     }
-}
 
-#[inline]
-fn default_bpm() -> f64 {
-    f64::from(DEFAULT_BPM)
+    pub fn held(beat: f64, bpm: f64) -> Self {
+        Self {
+            beat,
+            bpm,
+            hold: true,
+        }
+    }
 }
 
 /// One span of the tempo curve with the time at its start already accumulated,
@@ -28,14 +39,26 @@ pub struct TempoSegment {
     pub beat: f64,
     pub bpm: f64,
     pub seconds_at_beat: f64,
+    /// The tempo holds at `bpm` for this whole span instead of ramping.
+    pub hold: bool,
 }
 
 /// The project's beat <-> time mapping. Between two points the tempo ramps
 /// linearly and the elapsed time is the exact integral of that ramp, so a map
-/// with a single point reproduces a constant tempo exactly.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct TempoCurve {
-    segments: Vec<TempoSegment>,
+/// with a single point reproduces a constant tempo exactly. The constant case
+/// is its own variant so the audio thread can build one without allocating.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TempoCurve {
+    Constant { bpm: f64 },
+    Mapped { segments: Vec<TempoSegment> },
+}
+
+impl Default for TempoCurve {
+    fn default() -> Self {
+        Self::Constant {
+            bpm: f64::from(DEFAULT_BPM),
+        }
+    }
 }
 
 impl TempoCurve {
@@ -53,6 +76,9 @@ impl TempoCurve {
         }
         points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
         points.dedup_by(|a, b| a.beat == b.beat);
+        if points.len() == 1 && points[0].beat.abs() <= f64::EPSILON {
+            return Self::constant(points[0].bpm);
+        }
         if points[0].beat > 0.0 {
             points.insert(0, TempoPoint::new(0.0, bpm));
         }
@@ -63,139 +89,187 @@ impl TempoCurve {
             beat: points[0].beat,
             bpm: points[0].bpm,
             seconds_at_beat: 0.0,
+            hold: points[0].hold,
         });
         for pair in points.windows(2) {
             let (a, b) = (pair[0], pair[1]);
-            let span = b.beat - a.beat;
-            seconds += ramp_seconds(ramp_slope(a.bpm, b.bpm, span), a.bpm, span);
+            seconds += span_seconds(a, b);
             segments.push(TempoSegment {
                 beat: b.beat,
                 bpm: b.bpm,
                 seconds_at_beat: seconds,
+                hold: b.hold,
             });
         }
-        Self { segments }
+        Self::Mapped { segments }
     }
 
     pub fn constant(bpm: f64) -> Self {
-        let bpm = sanitise_bpm(bpm);
-        Self {
-            segments: vec![TempoSegment {
-                beat: 0.0,
-                bpm,
-                seconds_at_beat: 0.0,
-            }],
+        Self::Constant {
+            bpm: sanitise_bpm(bpm),
         }
     }
 
     pub fn is_constant(&self) -> bool {
-        self.segments.len() < 2
+        matches!(self, Self::Constant { .. })
     }
 
     pub fn constant_bpm(&self) -> f64 {
-        self.segments
-            .first()
-            .map_or(f64::from(DEFAULT_BPM), |s| s.bpm)
+        match self {
+            Self::Constant { bpm } => *bpm,
+            Self::Mapped { segments } => segments.first().map_or(f64::from(DEFAULT_BPM), |s| s.bpm),
+        }
     }
 
     pub fn beats_to_seconds(&self, beats: f64) -> f64 {
-        if !beats.is_finite() || self.segments.is_empty() {
-            return 0.0;
+        match self {
+            Self::Constant { bpm } => {
+                if beats.is_finite() {
+                    beats * 60.0 / bpm
+                } else {
+                    0.0
+                }
+            }
+            Self::Mapped { segments } => map_beats_to_seconds(segments, beats),
         }
-        if self.segments.len() == 1 {
-            return beats * 60.0 / self.segments[0].bpm;
-        }
-        let first = self.segments[0];
-        if beats <= first.beat {
-            return first.seconds_at_beat + (beats - first.beat) * 60.0 / first.bpm;
-        }
-        let last = self.segments[self.segments.len() - 1];
-        if beats >= last.beat {
-            return last.seconds_at_beat + (beats - last.beat) * 60.0 / last.bpm;
-        }
-        let index = self.segment_for(beats);
-        let segment = &self.segments[index];
-        let next = &self.segments[index + 1];
-        let k = ramp_slope(segment.bpm, next.bpm, next.beat - segment.beat);
-        segment.seconds_at_beat + ramp_seconds(k, segment.bpm, beats - segment.beat)
     }
 
     pub fn seconds_to_beats(&self, seconds: f64) -> f64 {
-        if !seconds.is_finite() || self.segments.is_empty() {
-            return 0.0;
+        match self {
+            Self::Constant { bpm } => {
+                // Divided first, then multiplied, which is the association the
+                // engine used before tempo maps existed. Keeping it means a
+                // constant-tempo project converts bit for bit as it did.
+                if seconds.is_finite() {
+                    seconds * (bpm / 60.0)
+                } else {
+                    0.0
+                }
+            }
+            Self::Mapped { segments } => map_seconds_to_beats(segments, seconds),
         }
-        if self.segments.len() == 1 {
-            return seconds * self.segments[0].bpm / 60.0;
-        }
-        let first = self.segments[0];
-        if seconds <= first.seconds_at_beat {
-            return first.beat + (seconds - first.seconds_at_beat) * first.bpm / 60.0;
-        }
-        let last = self.segments[self.segments.len() - 1];
-        if seconds >= last.seconds_at_beat {
-            return last.beat + (seconds - last.seconds_at_beat) * last.bpm / 60.0;
-        }
-        let mut index = 0usize;
-        while self.segments[index + 1].seconds_at_beat <= seconds {
-            index += 1;
-        }
-        let segment = &self.segments[index];
-        let next = &self.segments[index + 1];
-        let span = next.beat - segment.beat;
-        let k = ramp_slope(segment.bpm, next.bpm, span);
-        segment.beat + ramp_beats(k, segment.bpm, span, seconds - segment.seconds_at_beat)
     }
 
     /// Tempo in force at a beat, needed for tempo-synced plugin hosts.
     pub fn bpm_at(&self, beats: f64) -> f64 {
-        if self.segments.is_empty() {
-            return f64::from(DEFAULT_BPM);
-        }
-        if !beats.is_finite() || self.segments.len() == 1 {
-            return self.segments[0].bpm;
-        }
-        let first = self.segments[0];
-        if beats <= first.beat {
-            return first.bpm;
-        }
-        let last = self.segments[self.segments.len() - 1];
-        if beats >= last.beat {
-            return last.bpm;
-        }
-        let index = self.segment_for(beats);
-        let segment = &self.segments[index];
-        let next = &self.segments[index + 1];
-        if (next.beat - segment.beat).abs() <= f64::EPSILON {
-            return next.bpm;
-        }
-        let t = (beats - segment.beat) / (next.beat - segment.beat);
-        segment.bpm + (next.bpm - segment.bpm) * t
-    }
-
-    /// Index of the segment whose span contains `beats`; never the last entry,
-    /// so the caller can always look at `index + 1`.
-    fn segment_for(&self, beats: f64) -> usize {
-        let last = self.segments.len() - 1;
-        let mut lo = 0usize;
-        let mut hi = last;
-        while lo + 1 < hi {
-            let mid = (lo + hi) / 2;
-            if self.segments[mid].beat <= beats {
-                lo = mid;
-            } else {
-                hi = mid;
+        match self {
+            Self::Constant { bpm } => *bpm,
+            Self::Mapped { segments } => {
+                if !beats.is_finite() || segments.is_empty() {
+                    return segments.first().map_or(f64::from(DEFAULT_BPM), |s| s.bpm);
+                }
+                map_bpm_at(segments, beats)
             }
         }
-        lo
     }
+}
+
+fn map_beats_to_seconds(segments: &[TempoSegment], beats: f64) -> f64 {
+    if !beats.is_finite() || segments.is_empty() {
+        return 0.0;
+    }
+    let first = segments[0];
+    if beats <= first.beat {
+        return first.seconds_at_beat + (beats - first.beat) * 60.0 / first.bpm;
+    }
+    let last = segments[segments.len() - 1];
+    if beats >= last.beat {
+        return last.seconds_at_beat + (beats - last.beat) * 60.0 / last.bpm;
+    }
+    let index = segment_for(segments, beats);
+    let segment = &segments[index];
+    if segment.hold {
+        return segment.seconds_at_beat + (beats - segment.beat) * 60.0 / segment.bpm;
+    }
+    let next = &segments[index + 1];
+    let k = ramp_slope(segment.bpm, next.bpm, next.beat - segment.beat);
+    segment.seconds_at_beat + ramp_seconds(k, segment.bpm, beats - segment.beat)
+}
+
+fn map_seconds_to_beats(segments: &[TempoSegment], seconds: f64) -> f64 {
+    if !seconds.is_finite() || segments.is_empty() {
+        return 0.0;
+    }
+    let first = segments[0];
+    if seconds <= first.seconds_at_beat {
+        return first.beat + (seconds - first.seconds_at_beat) * first.bpm / 60.0;
+    }
+    let last = segments[segments.len() - 1];
+    if seconds >= last.seconds_at_beat {
+        return last.beat + (seconds - last.seconds_at_beat) * last.bpm / 60.0;
+    }
+    let mut index = 0usize;
+    while segments[index + 1].seconds_at_beat <= seconds {
+        index += 1;
+    }
+    let segment = &segments[index];
+    let next = &segments[index + 1];
+    let span = next.beat - segment.beat;
+    let elapsed = seconds - segment.seconds_at_beat;
+    if segment.hold {
+        return segment.beat + elapsed * segment.bpm / 60.0;
+    }
+    let k = ramp_slope(segment.bpm, next.bpm, span);
+    segment.beat + ramp_beats(k, segment.bpm, span, elapsed)
+}
+
+fn map_bpm_at(segments: &[TempoSegment], beats: f64) -> f64 {
+    let first = segments[0];
+    if beats <= first.beat {
+        return first.bpm;
+    }
+    let last = segments[segments.len() - 1];
+    if beats >= last.beat {
+        return last.bpm;
+    }
+    let index = segment_for(segments, beats);
+    let segment = &segments[index];
+    if segment.hold {
+        return segment.bpm;
+    }
+    let next = &segments[index + 1];
+    if (next.beat - segment.beat).abs() <= f64::EPSILON {
+        return next.bpm;
+    }
+    let t = (beats - segment.beat) / (next.beat - segment.beat);
+    segment.bpm + (next.bpm - segment.bpm) * t
+}
+
+/// Index of the segment whose span contains `beats`; never the last entry, so
+/// the caller can always look at `index + 1`.
+fn segment_for(segments: &[TempoSegment], beats: f64) -> usize {
+    let last = segments.len() - 1;
+    let mut lo = 0usize;
+    let mut hi = last;
+    while lo + 1 < hi {
+        let mid = (lo + hi) / 2;
+        if segments[mid].beat <= beats {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 pub fn sanitise_bpm(bpm: f64) -> f64 {
     if bpm.is_finite() && bpm > 0.0 {
         bpm
     } else {
-        default_bpm()
+        f64::from(DEFAULT_BPM)
     }
+}
+
+/// Seconds to cross the span between two points, honouring whether it ramps or holds.
+fn span_seconds(from: TempoPoint, to: TempoPoint) -> f64 {
+    let span = to.beat - from.beat;
+    if span <= 0.0 {
+        return 0.0;
+    }
+    if from.hold {
+        return span * 60.0 / from.bpm;
+    }
+    ramp_seconds(ramp_slope(from.bpm, to.bpm, span), from.bpm, span)
 }
 
 /// Tempo ramp slope in BPM per beat, taken over the segment's whole span.

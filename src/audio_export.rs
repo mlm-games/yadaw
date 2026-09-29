@@ -145,7 +145,8 @@ fn run_export(
     let channels = layout.count() as usize;
     let format = config.resolved_format();
 
-    let converter = TimeConverter::new(config.sample_rate, app_state.bpm);
+    let converter =
+        TimeConverter::with_curve(config.sample_rate, Arc::new(app_state.tempo_curve()));
     let start_sample = converter.beats_to_samples(config.start_beat).round() as u64;
     let end_sample = converter.beats_to_samples(config.end_beat).round() as u64;
     let total_frames = end_sample.saturating_sub(start_sample);
@@ -460,7 +461,8 @@ async fn run_export_wasm(
     let layout = config.channel_layout();
     let channels = layout.count() as usize;
 
-    let converter = TimeConverter::new(config.sample_rate, app_state.bpm);
+    let converter =
+        TimeConverter::with_curve(config.sample_rate, Arc::new(app_state.tempo_curve()));
     let start_sample = converter.beats_to_samples(config.start_beat).round() as u64;
     let end_sample = converter.beats_to_samples(config.end_beat).round() as u64;
     let total_frames = end_sample.saturating_sub(start_sample);

@@ -4,9 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::clip::{AudioClip, MidiPattern, WarpPoint};
-use crate::model::tempo::TempoPoint;
+use crate::model::tempo::{TempoCurve, TempoPoint};
 use crate::model::{GroupLinkMode, Marker, Track, TrackGroup};
-use crate::time_utils::TimeConverter;
 
 /// Current on-disk project schema version.
 pub const PROJECT_VERSION: &str = "1.4.0";
@@ -224,6 +223,14 @@ pub fn tempo_map_base_bpm(map: &[TempoPoint], bpm: f32) -> f32 {
     map.iter()
         .find(|p| p.beat.abs() <= f64::EPSILON)
         .map_or(bpm, |p| p.bpm as f32)
+}
+
+/// Publish the project's tempo to the audio thread. Every write to `bpm` or
+/// `tempo_map` must go through here, or the audio thread keeps rendering with
+/// a stale curve.
+pub fn publish_tempo(state: &AppState, audio_state: &crate::audio_state::AudioState) {
+    audio_state.bpm.store(state.bpm);
+    audio_state.set_tempo_curve(state.tempo_curve());
 }
 
 /// Puts a clip's warp map back into the shape the audio thread assumes: sorted
@@ -463,13 +470,17 @@ impl AppState {
     }
 
     pub fn position_to_beats(&self, position: f64) -> f64 {
-        let converter = TimeConverter::new(self.sample_rate, self.bpm);
-        converter.samples_to_beats(position)
+        self.tempo_curve()
+            .seconds_to_beats(position / f64::from(self.sample_rate))
     }
 
     pub fn beats_to_samples(&self, beats: f64) -> f64 {
-        let converter = TimeConverter::new(self.sample_rate, self.bpm);
-        converter.beats_to_samples(beats)
+        self.tempo_curve().beats_to_seconds(beats) * f64::from(self.sample_rate)
+    }
+
+    /// The project's beat/time mapping, honouring the tempo map when it has one.
+    pub fn tempo_curve(&self) -> TempoCurve {
+        TempoCurve::from_map(&self.tempo_map, f64::from(self.bpm))
     }
 
     pub fn validate_before_save(&self) -> Result<()> {

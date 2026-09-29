@@ -736,7 +736,7 @@ impl OpenDialog {
                                     state.loop_end = live_loop_end;
                                     state.loop_enabled = live_loop_enabled;
 
-                                    app.audio_state.bpm.store(state.bpm);
+                                    crate::project::publish_tempo(&state, &app.audio_state);
                                     app.audio_state.loop_start.store(state.loop_start);
                                     app.audio_state.loop_end.store(state.loop_end);
                                     app.audio_state.loop_enabled.store(
@@ -1365,7 +1365,7 @@ impl ProjectSettingsDialog {
 
                 ui.horizontal(|ui| {
                     if ui.button("Apply").clicked() {
-                        app.audio_state.bpm.store(self.bpm);
+                        app.audio_state.set_bpm(self.bpm);
                         let _ = app.command_tx.send(AudioCommand::SetBPM(self.bpm));
 
                         let selected_rate = self.sample_rate.round() as u32;

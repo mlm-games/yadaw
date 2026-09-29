@@ -1,10 +1,12 @@
 use dashmap::DashMap;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::constants::DEFAULT_LOOP_LEN;
+use crate::constants::{DEFAULT_BPM, DEFAULT_LOOP_LEN};
 use crate::model::clip::{WarpCurve, WarpPoint, resolve_warp};
+use crate::model::tempo::TempoCurve;
 use crate::model::track::TrackType;
 use yadaw_plugin_api::{BackendKind, PluginInstance as UnifiedInstance};
 
@@ -50,6 +52,10 @@ pub struct AudioState {
     pub recording: Arc<AtomicBool>,
     pub position: Arc<AtomicF64>,
     pub bpm: Arc<AtomicF32>,
+    /// The project's beat/time mapping. The audio thread reads it with
+    /// `try_tempo_curve` and never blocks, so no bespoke atomic-swap scheme is
+    /// needed. Private so the curve cannot fall out of step with `bpm`.
+    tempo_curve: Arc<RwLock<Arc<TempoCurve>>>,
     pub sample_rate: Arc<AtomicF32>,
     pub master_volume: Arc<AtomicF32>,
     pub loop_enabled: Arc<AtomicBool>,
@@ -72,6 +78,9 @@ impl AudioState {
             recording: Arc::new(AtomicBool::new(false)),
             position: Arc::new(AtomicF64::new(0.0)),
             bpm: Arc::new(AtomicF32::new(120.0)),
+            tempo_curve: Arc::new(RwLock::new(Arc::new(TempoCurve::constant(f64::from(
+                DEFAULT_BPM,
+            ))))),
             sample_rate: Arc::new(AtomicF32::new(44100.0)),
             master_volume: Arc::new(AtomicF32::new(0.8)),
             loop_enabled: Arc::new(AtomicBool::new(true)),
@@ -87,6 +96,29 @@ impl AudioState {
     }
     pub fn set_position(&self, pos: f64) {
         self.position.store(pos);
+    }
+
+    /// Set the project tempo. The published curve is kept in step so a scalar
+    /// BPM edit cannot leave the audio thread rendering at the old tempo. A real
+    /// tempo map is left alone; it is published by `set_tempo_curve`.
+    pub fn set_bpm(&self, bpm: f32) {
+        self.bpm.store(bpm);
+        let mut guard = self.tempo_curve.write();
+        if guard.is_constant() {
+            *guard = Arc::new(TempoCurve::constant(f64::from(bpm)));
+        }
+    }
+
+    /// Publish a new tempo curve for the audio thread to pick up.
+    pub fn set_tempo_curve(&self, curve: TempoCurve) {
+        *self.tempo_curve.write() = Arc::new(curve);
+    }
+
+    /// The current curve, or `None` if the UI thread is mid-write. The audio
+    /// thread must never block on the lock, and must not substitute a different
+    /// curve when it cannot read one, so callers keep their previous value.
+    pub fn try_tempo_curve(&self) -> Option<Arc<TempoCurve>> {
+        self.tempo_curve.try_read().map(|guard| Arc::clone(&guard))
     }
 }
 

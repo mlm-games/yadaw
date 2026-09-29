@@ -1,46 +1,61 @@
-/// Time conversion utilities for the DAW
+use std::sync::Arc;
+
+use crate::model::tempo::TempoCurve;
+
+/// Time conversion utilities for the DAW. Beat and time are related by a
+/// [`TempoCurve`], so a project with a tempo map converts correctly while a
+/// project without one still takes the single-scale-factor path.
 pub struct TimeConverter {
     sample_rate: f32,
-    bpm: f32,
+    curve: Arc<TempoCurve>,
 }
 
 impl TimeConverter {
+    /// A converter at a constant tempo. Allocates nothing, so it is safe to
+    /// build per track per audio block.
     pub fn new(sample_rate: f32, bpm: f32) -> Self {
-        let sample_rate = if sample_rate.is_finite() && sample_rate > 0.0 {
-            sample_rate
-        } else {
-            44100.0
-        };
-        let bpm = if bpm.is_finite() && bpm > 0.0 {
-            bpm
-        } else {
-            120.0
-        };
-        Self { sample_rate, bpm }
+        Self {
+            sample_rate: sanitise_sample_rate(sample_rate),
+            curve: Arc::new(TempoCurve::constant(f64::from(bpm))),
+        }
+    }
+
+    /// A converter driven by a shared tempo curve. Holds the `Arc` rather than
+    /// a copy so a tempo map is never cloned on the audio thread.
+    pub fn with_curve(sample_rate: f32, curve: Arc<TempoCurve>) -> Self {
+        Self {
+            sample_rate: sanitise_sample_rate(sample_rate),
+            curve,
+        }
+    }
+
+    pub fn curve(&self) -> &TempoCurve {
+        &self.curve
     }
 
     /// Convert sample position to beats
     #[inline]
     pub fn samples_to_beats(&self, samples: f64) -> f64 {
-        (samples / self.sample_rate as f64) * (self.bpm as f64 / 60.0)
+        self.curve
+            .seconds_to_beats(samples / self.sample_rate as f64)
     }
 
     /// Convert beats to sample position
     #[inline]
     pub fn beats_to_samples(&self, beats: f64) -> f64 {
-        (beats * 60.0 / self.bpm as f64) * self.sample_rate as f64
+        self.curve.beats_to_seconds(beats) * self.sample_rate as f64
     }
 
     /// Convert seconds to beats
     #[inline]
     pub fn seconds_to_beats(&self, seconds: f64) -> f64 {
-        seconds * (self.bpm as f64 / 60.0)
+        self.curve.seconds_to_beats(seconds)
     }
 
     /// Convert beats to seconds
     #[inline]
     pub fn beats_to_seconds(&self, beats: f64) -> f64 {
-        beats * 60.0 / self.bpm as f64
+        self.curve.beats_to_seconds(beats)
     }
 
     /// Convert samples to seconds
@@ -62,14 +77,18 @@ impl TimeConverter {
         self.seconds_to_beats(seconds)
     }
 
-    /// Update BPM (for tempo changes)
-    pub fn set_bpm(&mut self, bpm: f32) {
-        self.bpm = bpm;
-    }
-
     /// Update sample rate (rarely needed)
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
-        self.sample_rate = sample_rate;
+        self.sample_rate = sanitise_sample_rate(sample_rate);
+    }
+}
+
+#[inline]
+fn sanitise_sample_rate(sample_rate: f32) -> f32 {
+    if sample_rate.is_finite() && sample_rate > 0.0 {
+        sample_rate
+    } else {
+        44100.0
     }
 }
 

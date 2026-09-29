@@ -6,13 +6,14 @@ use crate::audio_state::{
 use crate::audio_utils::{calculate_stereo_gains, soft_clip};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::constants::RECORDING_BUFFER_SIZE;
-use crate::constants::{DEBUG_PLUGIN_AUDIO, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION};
+use crate::constants::{DEBUG_PLUGIN_AUDIO, DEFAULT_BPM, MAX_BUFFER_SIZE, PREVIEW_NOTE_DURATION};
 use crate::messages::{UIUpdate, UiTx};
 use crate::midi_utils::generate_sine_for_note;
 use crate::mixer::ChannelStrip;
 use crate::model::group::{
     GroupNode, GroupResolution, any_group_soloed, group_index, resolve_track_groups,
 };
+use crate::model::tempo::TempoCurve;
 use crate::model::track::TrackType;
 use crate::time_utils::TimeConverter;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -114,6 +115,11 @@ pub struct AudioEngine {
     last_ui_meter_update: f64,
 
     free_running_samples: f64,
+    /// Last tempo curve successfully read from `AudioState`. The read lock is
+    /// never taken on the audio thread; if the UI thread happens to be writing
+    /// a new curve we keep using the one already in force rather than
+    /// substituting a different one mid-block.
+    tempo_curve: Arc<TempoCurve>,
     /// Plugins that failed to install before an offline render. Surfaced
     /// by the exporter as an error instead of silent tracks.
     offline_missing_plugins: HashSet<(u64, u64)>,
@@ -540,6 +546,7 @@ pub fn run_audio_thread(
         paused_last: false,
         last_ui_meter_update: now_secs(),
         free_running_samples: 0.0,
+        tempo_curve: Arc::new(TempoCurve::constant(f64::from(DEFAULT_BPM))),
         offline_missing_plugins: HashSet::new(),
     };
 
@@ -711,6 +718,7 @@ pub fn run_audio_wasm(
         paused_last: false,
         last_ui_meter_update: now_secs(),
         free_running_samples: 0.0,
+        tempo_curve: Arc::new(TempoCurve::constant(f64::from(DEFAULT_BPM))),
         offline_missing_plugins: HashSet::new(),
     };
 
@@ -790,6 +798,9 @@ impl AudioEngine {
 
         // Copy BPM from the main project state
         offline_audio_state.bpm.store(audio_state.bpm.load());
+        if let Some(curve) = audio_state.try_tempo_curve() {
+            offline_audio_state.set_tempo_curve(curve.as_ref().clone());
+        }
         // Keep export loudness in sync with the live master volume
         offline_audio_state
             .master_volume
@@ -829,6 +840,7 @@ impl AudioEngine {
             paused_last: false,
             last_ui_meter_update: now_secs(),
             free_running_samples: 0.0,
+            tempo_curve: Arc::new(TempoCurve::constant(f64::from(DEFAULT_BPM))),
             offline_missing_plugins: HashSet::new(),
         };
 
@@ -1416,14 +1428,17 @@ impl AudioEngine {
         mut current_position: f64,
         plugin_time_ms_accum: &mut f32,
     ) -> f64 {
-        let bpm = self.audio_state.bpm.load();
         let master_volume = self.audio_state.master_volume.load();
 
         let loop_enabled = self.audio_state.loop_enabled.load(Ordering::Relaxed);
         let loop_start_beats = self.audio_state.loop_start.load();
         let loop_end_beats = self.audio_state.loop_end.load();
 
-        let converter = TimeConverter::new(self.sample_rate as f32, bpm);
+        if let Some(curve) = self.audio_state.try_tempo_curve() {
+            self.tempo_curve = curve;
+        }
+        let converter =
+            TimeConverter::with_curve(self.sample_rate as f32, Arc::clone(&self.tempo_curve));
         let loop_start_samp = converter.beats_to_samples(loop_start_beats);
         let loop_end_samp = converter.beats_to_samples(loop_end_beats);
 
@@ -1579,7 +1594,7 @@ impl AudioEngine {
                                 processor,
                                 frames_to_process,
                                 block_start_samples,
-                                bpm,
+                                &converter,
                                 self.sample_rate,
                                 loop_active,
                                 loop_start_beats,
@@ -1591,7 +1606,7 @@ impl AudioEngine {
                                 processor,
                                 frames_to_process,
                                 block_start_samples,
-                                bpm,
+                                &converter,
                                 self.sample_rate,
                             );
                         }
@@ -1626,8 +1641,7 @@ impl AudioEngine {
                     track_id,
                     frames_to_process,
                     block_start_samples,
-                    bpm,
-                    self.sample_rate,
+                    &converter,
                     loop_active,
                     loop_start_beats,
                     loop_end_beats,
@@ -1794,8 +1808,7 @@ impl AudioEngine {
                     bus_id,
                     frames_to_process,
                     block_start_samples,
-                    bpm,
-                    self.sample_rate,
+                    &converter,
                     loop_active,
                     loop_start_beats,
                     loop_end_beats,
@@ -2053,8 +2066,7 @@ impl AudioEngine {
         track_id: u64,
         num_frames: usize,
         block_start_samples: f64,
-        bpm: f32,
-        sample_rate: f64,
+        converter: &TimeConverter,
         loop_active: bool,
         loop_start_beats: f64,
         loop_end_beats: f64,
@@ -2083,7 +2095,7 @@ impl AudioEngine {
             // Only include clip-driven events when playing
             if include_clip_events {
                 // Handle pending note-offs from previous blocks
-                let conv = TimeConverter::new(sample_rate as f32, bpm);
+                let conv = converter;
                 let block_start_beat = conv.samples_to_beats(block_start_samples);
                 let block_end_beat = conv.samples_to_beats(block_start_samples + num_frames as f64);
 
@@ -2091,8 +2103,10 @@ impl AudioEngine {
                 if let Some(proc) = self.track_processors.get(&track_id) {
                     for &(ch, key, abs_beat) in &proc.pending_note_offs {
                         if abs_beat >= block_start_beat && abs_beat < block_end_beat {
-                            let tf =
-                                conv.beats_to_samples(abs_beat - block_start_beat).round() as i64;
+                            // Absolute minus absolute, not a beat delta: a delta
+                            // only converts correctly at a constant tempo.
+                            let tf = (conv.beats_to_samples(abs_beat) - block_start_samples).round()
+                                as i64;
                             all_midi_events.push(RtMidiEvent {
                                 status: 0x80 | ch,
                                 data1: key,
@@ -2116,8 +2130,7 @@ impl AudioEngine {
                             clip,
                             block_start_samples,
                             num_frames,
-                            sample_rate,
-                            bpm,
+                            converter,
                             loop_active,
                             loop_start_beats,
                             loop_end_beats,
@@ -2247,7 +2260,10 @@ impl AudioEngine {
 
             let ctx = ProcessCtx {
                 frames: num_frames,
-                bpm,
+                bpm: converter
+                    .curve()
+                    .bpm_at(converter.samples_to_beats(block_start_samples))
+                    as f32,
                 time_samples: block_start_samples,
                 loop_active,
             };
@@ -2347,7 +2363,7 @@ fn process_midi_track(
     processor: &mut TrackProcessor,
     num_frames: usize,
     current_position: f64,
-    bpm: f32,
+    converter: &TimeConverter,
     sample_rate: f64,
     loop_enabled: bool,
     loop_start: f64,
@@ -2355,7 +2371,6 @@ fn process_midi_track(
 ) {
     use std::collections::HashSet;
 
-    let converter = TimeConverter::new(sample_rate as f32, bpm);
     let block_start = current_position;
     let block_end = current_position + num_frames as f64;
 
@@ -2510,14 +2525,12 @@ fn process_audio_track(
     processor: &mut TrackProcessor,
     num_frames: usize,
     current_position: f64,
-    bpm: f32,
+    converter: &TimeConverter,
     sample_rate: f64,
 ) {
     // Zero
     processor.input_buffers[0][..num_frames].fill(0.0);
     processor.input_buffers[1][..num_frames].fill(0.0);
-
-    let converter = TimeConverter::new(sample_rate as f32, bpm);
 
     let buffer_start = current_position;
     let buffer_end = current_position + num_frames as f64;
@@ -2554,12 +2567,22 @@ fn process_audio_track(
             .min(num_frames.saturating_sub((overlap_start - buffer_start).round() as usize));
         let start_in_buffer = (overlap_start - buffer_start).round() as usize;
 
-        let warp = clip.warp_curve(bpm as f64);
+        let warp = clip.warp_curve(converter.curve().bpm_at(clip.start_beat));
         let clip_rate = clip.sample_rate as f64;
         let clip_offset_beat = clip.offset_beats;
         let clip_length_beats = clip.length_beats;
         let fade_in_beats = clip.fade_in.unwrap_or(0.0).max(0.0);
         let fade_out_beats = clip.fade_out.unwrap_or(0.0).max(0.0);
+        let fade_in_end = if fade_in_beats > 0.0 {
+            converter.beats_to_samples(fade_in_beats)
+        } else {
+            -1.0
+        };
+        let fade_out_start = if fade_out_beats > 0.0 {
+            converter.beats_to_samples((clip_length_beats - fade_out_beats).max(0.0))
+        } else {
+            f64::INFINITY
+        };
 
         for i in 0..frames {
             let buf_idx = start_in_buffer + i;
@@ -2587,18 +2610,23 @@ fn process_audio_track(
             // Apply clip gain
             s *= clip.gain;
 
-            // Apply fades (in beats, relative to clip start)
-            let clip_pos_beats = converter.samples_to_beats(proj_off);
-            // Fade in
-            if fade_in_beats > 0.0 && clip_pos_beats < fade_in_beats {
-                let f = (clip_pos_beats / fade_in_beats) as f32;
-                s *= f.clamp(0.0, 1.0);
-            }
-            // Fade out
-            if fade_out_beats > 0.0 && clip_pos_beats > (clip_length_beats - fade_out_beats) {
-                let rem = (clip_length_beats - clip_pos_beats).max(0.0);
-                let f = (rem / fade_out_beats) as f32;
-                s *= f.clamp(0.0, 1.0);
+            // Fades are stored in beats, so the curve has to be consulted to
+            // find where their ends fall. Both ends are resolved once per clip
+            // above, which keeps the per-sample conversion to the samples that
+            // are actually inside a fade.
+            if proj_off <= fade_in_end || proj_off >= fade_out_start {
+                let clip_pos_beats = converter.samples_to_beats(proj_off);
+                // Fade in
+                if fade_in_beats > 0.0 && clip_pos_beats < fade_in_beats {
+                    let f = (clip_pos_beats / fade_in_beats) as f32;
+                    s *= f.clamp(0.0, 1.0);
+                }
+                // Fade out
+                if fade_out_beats > 0.0 && clip_pos_beats > (clip_length_beats - fade_out_beats) {
+                    let rem = (clip_length_beats - clip_pos_beats).max(0.0);
+                    let f = (rem / fade_out_beats) as f32;
+                    s *= f.clamp(0.0, 1.0);
+                }
             }
 
             processor.input_buffers[0][buf_idx] += s;
@@ -2635,8 +2663,7 @@ fn build_block_midi_events(
     clip: &MidiClipSnapshot,
     block_start_samples: f64,
     frames: usize,
-    sample_rate: f64,
-    bpm: f32,
+    conv: &TimeConverter,
     _loop_enabled: bool,
     _loop_start: f64,
     _loop_end: f64,
@@ -2644,8 +2671,6 @@ fn build_block_midi_events(
     plugin_active_notes: &mut Vec<(u8, u8)>,
     pending_note_offs: &mut Vec<(u8, u8, f64)>,
 ) -> Vec<(u8, u8, u8, i64)> {
-    let conv = TimeConverter::new(sample_rate as f32, bpm);
-
     let block_start_beat = conv.samples_to_beats(block_start_samples);
     let block_end_beat = conv.samples_to_beats(block_start_samples + frames as f64);
 
@@ -2705,7 +2730,9 @@ fn build_block_midi_events(
                 let e_q_full = quantize_beat(e_raw_full, clip).max(s_q + 1e-6);
                 let e_q = quantize_beat(e_raw_clamped, clip).max(s_q + 1e-6);
 
-                let start_frame = conv.beats_to_samples(s_q - block_start_beat).round() as i64;
+                // Absolute minus absolute, not a beat delta: a delta only
+                // converts correctly at a constant tempo.
+                let start_frame = (conv.beats_to_samples(s_q) - block_start_samples).round() as i64;
                 if (0..frames as i64).contains(&start_frame) {
                     events.push((0x90, pitch, vel, start_frame));
                     if e_q >= block_end_beat
@@ -2716,7 +2743,7 @@ fn build_block_midi_events(
                         pending_note_offs.push((0 /*ch*/, pitch, e_q));
                     }
                 }
-                let end_frame = conv.beats_to_samples(e_q - block_start_beat).round() as i64;
+                let end_frame = (conv.beats_to_samples(e_q) - block_start_samples).round() as i64;
                 if (0..frames as i64).contains(&end_frame) {
                     events.push((0x80, pitch, 0, end_frame));
                 } else if end_frame == frames as i64 {

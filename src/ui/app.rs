@@ -688,7 +688,7 @@ impl YadawApp {
                 let mut state = self.state.lock_sync();
                 state.load_project(project);
 
-                self.audio_state.bpm.store(state.bpm);
+                crate::project::publish_tempo(&state, &self.audio_state);
                 self.audio_state.loop_start.store(state.loop_start);
                 self.audio_state.loop_end.store(state.loop_end);
                 self.audio_state
@@ -765,7 +765,7 @@ impl YadawApp {
         {
             let mut state = self.state.lock_sync();
             state.load_project(project);
-            self.audio_state.bpm.store(state.bpm);
+            crate::project::publish_tempo(&state, &self.audio_state);
             self.transport_ui.bpm_input = format!("{:.1}", state.bpm);
             state.ensure_ids();
         }
@@ -1215,7 +1215,7 @@ impl YadawApp {
                 if let Some(transport) = &self.transport_ui.transport {
                     transport.set_bpm(bpm);
                 } else {
-                    self.audio_state.bpm.store(bpm);
+                    self.audio_state.set_bpm(bpm);
                     let _ = self.command_tx.send(AudioCommand::SetBPM(bpm));
                 }
             }
@@ -1518,7 +1518,7 @@ impl YadawApp {
                             state.loop_enabled = live_loop_enabled;
                             drop(state);
 
-                            self.audio_state.bpm.store(live_bpm);
+                            self.audio_state.set_bpm(live_bpm);
                             self.audio_state.loop_start.store(live_loop_start);
                             self.audio_state.loop_end.store(live_loop_end);
 

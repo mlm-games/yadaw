@@ -118,7 +118,7 @@ fn process_command(
             }
 
             state.bpm = bpm;
-            audio_state.bpm.store(bpm);
+            audio_state.set_bpm(bpm);
             send_graph_snapshot(&state, snapshot_tx);
         }
         AudioCommand::SetMasterVolume(volume) => {

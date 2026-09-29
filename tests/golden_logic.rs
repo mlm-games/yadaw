@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use yadaw::edit_actions::EditProcessor;
 use yadaw::input::actions::AppAction;
@@ -10,6 +11,7 @@ use yadaw::model::marker::Marker;
 use yadaw::model::tempo::{TempoCurve, TempoPoint};
 use yadaw::model::track::{Send, Track, TrackType};
 use yadaw::project::{AppState, ArrangementRow, PROJECT_VERSION, Project, tempo_map_base_bpm};
+use yadaw::time_utils::TimeConverter;
 
 fn note(id: u64, pitch: u8, start: f64) -> MidiNote {
     MidiNote {
@@ -783,4 +785,250 @@ fn a_project_without_a_tempo_map_reads_as_a_constant_tempo() {
     let curve = TempoCurve::from_map(&state.tempo_map, f64::from(state.bpm));
     assert!(curve.is_constant());
     assert_eq!(curve.beats_to_seconds(4.0), 2.5);
+}
+
+fn old_beats_to_samples(beats: f64, bpm: f32, sr: f32) -> f64 {
+    (beats * 60.0 / bpm as f64) * sr as f64
+}
+fn old_samples_to_beats(samples: f64, bpm: f32, sr: f32) -> f64 {
+    (samples / sr as f64) * (bpm as f64 / 60.0)
+}
+
+#[test]
+fn a_constant_project_converts_exactly_as_before() {
+    let mut worst = 0.0_f64;
+    for sr in [44_100.0_f32, 48_000.0, 96_000.0] {
+        for bpm in [40.0_f32, 60.0, 120.0, 128.5, 174.0, 240.0] {
+            let conv = TimeConverter::new(sr, bpm);
+            for x in [0.0_f64, 0.25, 1.0, 4.0, 128.0, 44100.0, 1e6] {
+                let a = old_beats_to_samples(x, bpm, sr);
+                let b = conv.beats_to_samples(x);
+                worst = worst.max((a - b).abs() / a.abs().max(1.0));
+
+                let c = old_samples_to_beats(x, bpm, sr);
+                let d = conv.samples_to_beats(x);
+                worst = worst.max((c - d).abs() / c.abs().max(1.0));
+            }
+        }
+    }
+    assert_eq!(
+        worst, 0.0,
+        "constant tempo must be bit identical, worst {worst}"
+    );
+}
+
+#[test]
+fn a_tempo_map_actually_changes_the_timing() {
+    let map = [TempoPoint::new(0.0, 120.0), TempoPoint::new(8.0, 60.0)];
+    let conv = TimeConverter::with_curve(48_000.0, Arc::new(TempoCurve::from_map(&map, 120.0)));
+
+    let at_zero = conv.beats_to_samples(0.0);
+    let at_eight = conv.beats_to_samples(8.0);
+    assert_eq!(at_zero, 0.0);
+    // Beats 0..8 cross a 120 -> 60 ramp, so it takes more than the 4 s that a
+    // flat 120 BPM would give and less than the 8 s a flat 60 BPM would.
+    assert!(
+        at_eight > 4.0 * 48_000.0 && at_eight < 8.0 * 48_000.0,
+        "beat 8 is {} samples",
+        at_eight
+    );
+    assert!(
+        (conv.samples_to_beats(at_eight) - 8.0).abs() < 1.0e-9,
+        "and the inverse lands back on beat 8"
+    );
+    assert!(conv.curve().bpm_at(4.0) > 85.0 && conv.curve().bpm_at(4.0) < 95.0);
+}
+
+#[test]
+fn a_beat_delta_conversion_is_wrong_under_a_map_but_absolute_is_not() {
+    let map = [TempoPoint::new(0.0, 120.0), TempoPoint::new(16.0, 40.0)];
+    let conv = TimeConverter::with_curve(48_000.0, Arc::new(TempoCurve::from_map(&map, 120.0)));
+    let block_start_samples = conv.beats_to_samples(4.0);
+    let block_start_beat = conv.samples_to_beats(block_start_samples);
+
+    let mut differed = 0;
+    for abs_beat in [5.0_f64, 8.0, 12.0, 15.0] {
+        let absolute = conv.beats_to_samples(abs_beat) - block_start_samples;
+        // A beat delta silently assumes a constant tempo, so on a map it
+        // drifts away from the tempo-correct absolute form.
+        let delta = conv.beats_to_samples(abs_beat - block_start_beat);
+        if (delta - absolute).abs() > 1.0 {
+            differed += 1;
+        }
+    }
+    assert!(
+        differed > 0,
+        "the delta form should disagree somewhere across this ramp"
+    );
+}
+
+#[test]
+fn a_warp_map_is_never_cloned_into_the_converter() {
+    // `with_curve` must hold the Arc, not copy the segments, or every audio
+    // block would allocate. Cloning the Arc keeps one strong count per holder.
+    let map: Vec<TempoPoint> = (0..64)
+        .map(|i| TempoPoint::new(i as f64 * 4.0, 90.0 + i as f64))
+        .collect();
+    let curve = Arc::new(TempoCurve::from_map(&map, 120.0));
+    let before = Arc::strong_count(&curve);
+    let conv = TimeConverter::with_curve(48_000.0, Arc::clone(&curve));
+    assert_eq!(
+        Arc::strong_count(&curve),
+        before + 1,
+        "the converter shares the curve instead of copying it"
+    );
+    assert!(!conv.curve().is_constant());
+}
+
+/// DAWproject's `interpolation` enum is exactly `hold` or `linear`, and real
+/// Cubase/Cubasis exports use both. A held span must sit at the earlier tempo
+/// for its whole length and jump only at the next point.
+#[test]
+fn a_held_span_sits_at_one_tempo_and_jumps_at_the_next_point() {
+    let map = [
+        TempoPoint::new(0.0, 120.0),
+        TempoPoint::held(4.0, 120.0),
+        TempoPoint::held(8.0, 60.0),
+        TempoPoint::new(12.0, 60.0),
+    ];
+    let curve = TempoCurve::from_map(&map, 120.0);
+    assert!(!curve.is_constant());
+
+    // The held 0..8 span runs entirely at 120 BPM: 8 beats is 4 seconds.
+    assert!((curve.beats_to_seconds(4.0) - 2.0).abs() < 1e-12);
+    assert!((curve.beats_to_seconds(8.0) - 4.0).abs() < 1e-12);
+    for beat in [0.0, 1.0, 3.9, 4.0, 7.9] {
+        assert!(
+            (curve.bpm_at(beat) - 120.0).abs() < 1e-12,
+            "beat {beat} should still be 120 BPM, got {}",
+            curve.bpm_at(beat)
+        );
+    }
+
+    // The tempo is already 60 from beat 8 onwards, where it holds to beat 12.
+    assert!((curve.bpm_at(8.0) - 60.0).abs() < 1e-12);
+    assert!((curve.bpm_at(11.9) - 60.0).abs() < 1e-12);
+    // 8..12 at 60 BPM is another 4 seconds.
+    assert!((curve.beats_to_seconds(12.0) - 8.0).abs() < 1e-12);
+}
+
+#[test]
+fn a_held_map_round_trips_and_stays_monotonic() {
+    let map = [
+        TempoPoint::new(0.0, 140.0),
+        TempoPoint::held(2.0, 100.0),
+        TempoPoint::new(6.0, 100.0),
+        TempoPoint::held(9.0, 175.0),
+    ];
+    let curve = TempoCurve::from_map(&map, 140.0);
+
+    let mut beat = -4.0;
+    let mut last_seconds = f64::NEG_INFINITY;
+    while beat <= 13.0 {
+        let seconds = curve.beats_to_seconds(beat);
+        assert!(
+            seconds >= last_seconds,
+            "time went backwards at beat {beat}: {seconds} after {last_seconds}"
+        );
+        last_seconds = seconds;
+        assert!(
+            (curve.seconds_to_beats(seconds) - beat).abs() < 1e-9,
+            "beat {beat} round tripped to {}",
+            curve.seconds_to_beats(seconds)
+        );
+        beat += 0.125;
+    }
+}
+
+#[test]
+fn holding_and_ramping_differ_measurably() {
+    // The flag describes the span starting at its own point, so holding 120 BPM
+    // across beats 0..8 means the *first* point holds.
+    let held = TempoCurve::from_map(
+        &[TempoPoint::held(0.0, 120.0), TempoPoint::held(8.0, 60.0)],
+        120.0,
+    );
+    let ramped = TempoCurve::from_map(
+        &[TempoPoint::new(0.0, 120.0), TempoPoint::new(8.0, 60.0)],
+        120.0,
+    );
+    let held_at_eight = held.beats_to_seconds(8.0);
+    let ramped_at_eight = ramped.beats_to_seconds(8.0);
+    assert!(
+        (held_at_eight - ramped_at_eight).abs() > 1.0,
+        "hold took {held_at_eight} s and the ramp took {ramped_at_eight} s, so the \
+         interpolation mode is actually being honoured"
+    );
+    assert!(
+        (held_at_eight - 4.0).abs() < 1e-12,
+        "hold is 8 beats at 120 BPM"
+    );
+}
+
+#[test]
+fn the_hold_flag_survives_a_project_round_trip() {
+    let map = vec![TempoPoint::new(0.0, 120.0), TempoPoint::held(8.0, 60.0)];
+    let json = serde_json::to_string(&map).expect("a tempo map serializes");
+    let back: Vec<TempoPoint> = serde_json::from_str(&json).expect("and reads back");
+    assert_eq!(back, map, "the hold flag is part of the saved map");
+    assert!(back[1].hold, "and it is the second point that holds");
+
+    // A map written before the flag existed still loads as a linear ramp.
+    let legacy = r#"[{"beat":0.0,"bpm":120.0},{"beat":8.0,"bpm":60.0}]"#;
+    let old: Vec<TempoPoint> = serde_json::from_str(legacy).expect("an older map loads");
+    assert!(old.iter().all(|p| !p.hold), "and defaults to ramping");
+}
+
+/// Brute-force reference: integrate 60/bpm over the segment with many steps.
+fn numeric_seconds(from_beat: f64, to_beat: f64, from_bpm: f64, to_bpm: f64) -> f64 {
+    let n = 2_000_000;
+    let mut total = 0.0;
+    for i in 0..n {
+        let b0 = from_beat + (to_beat - from_beat) * (i as f64 / n as f64);
+        let b1 = from_beat + (to_beat - from_beat) * ((i + 1) as f64 / n as f64);
+        let mid = 0.5 * (b0 + b1);
+        let bpm = from_bpm + (to_bpm - from_bpm) * ((mid - from_beat) / (to_beat - from_beat));
+        total += (b1 - b0) * 60.0 / bpm;
+    }
+    total
+}
+
+#[test]
+fn the_closed_form_matches_numerical_integration() {
+    for (b0, b1, p0, p1) in [
+        (0.0, 8.0, 120.0, 60.0),
+        (0.0, 4.0, 90.0, 200.0),
+        (4.0, 5.0, 200.0, 40.0),
+        (0.0, 16.0, 120.0, 40.0),
+        (0.0, 3.0, 300.0, 30.0),
+        (0.0, 8.0, 100.0, 100.0),
+    ] {
+        let map = [TempoPoint::new(b0, p0), TempoPoint::new(b1, p1)];
+        let curve = TempoCurve::from_map(&map, p0);
+        let got = curve.beats_to_seconds(b1) - curve.beats_to_seconds(b0);
+        let want = numeric_seconds(b0, b1, p0, p1);
+        let rel = (got - want).abs() / want.abs();
+        assert!(
+            rel < 1e-9,
+            "{p0} to {p1} over {} beats: got {got}, want {want}",
+            b1 - b0
+        );
+    }
+}
+
+#[test]
+fn the_tempo_reported_at_a_beat_agrees_with_the_time_integral() {
+    // bpm_at must be the derivative of beats_to_seconds, i.e. 60 / (dt/db).
+    let map = [TempoPoint::new(0.0, 120.0), TempoPoint::new(8.0, 60.0)];
+    let curve = TempoCurve::from_map(&map, 120.0);
+    for beat in [0.5, 2.0, 3.7, 4.0, 6.25, 7.9] {
+        let h = 1e-6;
+        let dt = curve.beats_to_seconds(beat + h) - curve.beats_to_seconds(beat - h);
+        let implied = 2.0 * h * 60.0 / dt;
+        let reported = curve.bpm_at(beat);
+        assert!(
+            (implied - reported).abs() < 1e-3,
+            "beat {beat}: bpm_at {reported} but the integral implies {implied}"
+        );
+    }
 }

@@ -76,7 +76,7 @@ impl Transport {
         if !(bpm.is_finite() && bpm > 0.0) {
             return;
         }
-        self.audio_state.bpm.store(bpm);
+        self.audio_state.set_bpm(bpm);
         let _ = self.command_tx.send(AudioCommand::SetBPM(bpm));
     }
 
