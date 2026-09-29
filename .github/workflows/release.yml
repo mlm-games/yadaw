@@ -66,8 +66,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.commit_sha || github.ref_name }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-universal*
           merge-multiple: true
@@ -76,17 +78,26 @@ jobs:
       # upload-google-play wants whatsnew-<LOCALE> files, while the release
       # notes are stored fastlane-style as changelogs/<version_code>.txt.
       - name: Stage release notes for Play
+        id: stage
         shell: bash
         run: |
           set -euo pipefail
-          SRC="fastlane/metadata/android/en-US/changelogs/${{ needs.release.outputs.version_code }}.txt"
-          if [[ ! -f "$SRC" ]]; then
+          DIR=""
+          VC=$(grep -m1 -E '^\s*version_code\s*=' Cargo.toml | grep -oE '[0-9]+' || true)
+          SRC="fastlane/metadata/android/en-US/changelogs/${VC}.txt"
+          if [[ -n "$VC" && -f "$SRC" ]]; then
+            mkdir -p dist-play/whatsnew
+            NOTES=$(<"$SRC")
+            export LC_ALL=C.UTF-8
+            if (( ${#NOTES} > 500 )); then
+              echo "::warning::Release notes for version_code $VC exceed 500 chars; truncating for Play" >&2
+            fi
+            printf '%s' "${NOTES:0:500}" > dist-play/whatsnew/whatsnew-en-US
+            DIR="dist-play/whatsnew"
+          else
             echo "::warning::No changelog at $SRC; uploading without release notes" >&2
-            exit 0
           fi
-          mkdir -p dist-play/whatsnew
-          cp "$SRC" dist-play/whatsnew/whatsnew-en-US
-          echo "Staged release notes from $SRC"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
       - name: Upload to Play Store (production)
         uses: r0adkll/upload-google-play@v1
@@ -95,4 +106,4 @@ jobs:
           packageName: org.mlm.yadaw
           releaseFiles: dist/*.aab
           tracks: production
-          whatsNewDirectory: dist-play/whatsnew
+          whatsNewDirectory: ${{ steps.stage.outputs.dir }}
