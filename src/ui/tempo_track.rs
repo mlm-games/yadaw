@@ -183,16 +183,15 @@ impl TempoTrackUI {
                 && let Some(pointer) = handle_response.interact_pointer_pos()
             {
                 dragging = true;
-                let beat = if index == 0 {
+                let lo = if index == 0 {
                     0.0
                 } else {
-                    let lo = next[index - 1].beat + MIN_GAP;
-                    let hi = next
-                        .get(index + 1)
-                        .map_or(span, |p| (p.beat - MIN_GAP).max(lo));
-                    to_beat(pointer.x).clamp(lo, hi)
+                    next[index - 1].beat + MIN_GAP
                 };
-                next[index].beat = beat;
+                let hi = next
+                    .get(index + 1)
+                    .map_or(span, |p| (p.beat - MIN_GAP).max(lo));
+                next[index].beat = to_beat(pointer.x).clamp(lo, hi);
                 next[index].bpm = to_bpm(pointer.y);
             }
         }
@@ -220,7 +219,9 @@ impl TempoTrackUI {
 
         if response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
-            && map.iter().all(|p| (x_of(p.beat) - pos.x).abs() > HANDLE)
+            && map
+                .iter()
+                .all(|p| pos.distance(egui::pos2(x_of(p.beat), y_of(p.bpm))) > HANDLE)
         {
             let clicked = to_beat(pos.x);
             let mut lo = 0.0;
