@@ -15,8 +15,9 @@ use super::{
 use crate::model::automation::{AutomationPoint, AutomationTarget};
 use crate::model::clip::{AudioClip, MidiClip, MidiNote};
 use crate::model::plugin::PluginDescriptor;
+use crate::model::tempo::{TempoCurve, TempoRamp};
 use crate::model::track::{Send, Track, TrackType};
-use crate::project::Project;
+use crate::project::{Project, sanitise_tempo_map};
 
 const MIN_BPM: f64 = 20.0;
 const MAX_BPM: f64 = 666.0;
@@ -638,9 +639,86 @@ impl Ctx<'_> {
         self.xml.close();
     }
 
-    fn write_arrangement(&mut self) {
-        self.xml
-            .open("Arrangement", attrs([("id", self.ids.next())]));
+    fn write_tempo_automation(&mut self) {
+        let map = sanitise_tempo_map(self.project.tempo_map.clone());
+        if map.len() < 2 {
+            return;
+        }
+        // `linear` ramps against the track's time unit, and a ramp linear in
+        // beats is not linear in seconds, so a map using both domains has no
+        // faithful encoding. Writing a constant beats track beats writing a
+        // tempo curve the reader would resolve differently.
+        let domains = map
+            .iter()
+            .filter(|p| p.ramp != TempoRamp::Hold)
+            .map(|p| p.ramp)
+            .collect::<std::collections::BTreeSet<_>>();
+        if domains.len() > 1 {
+            self.report.note(
+                "The tempo map mixes beats- and seconds-ramps, which DAWproject cannot express in one track; it was not written",
+            );
+            return;
+        }
+        let in_seconds = domains.contains(&TempoRamp::Seconds);
+        let curve = TempoCurve::from_map(&map, self.bpm);
+        self.xml.open(
+            "TempoAutomation",
+            attrs([
+                (
+                    "timeUnit",
+                    if in_seconds { "seconds" } else { "beats" }.to_string(),
+                ),
+                ("id", self.ids.next()),
+            ]),
+        );
+        self.xml.leaf("Target", attrs([]));
+        for point in &map {
+            let time = if in_seconds {
+                curve.beats_to_seconds(point.beat)
+            } else {
+                point.beat
+            };
+            self.xml.leaf(
+                "RealPoint",
+                attrs([
+                    ("time", num(time)),
+                    ("value", num(point.bpm)),
+                    ("interpolation", point.ramp.dawproject().to_string()),
+                ]),
+            );
+        }
+        self.xml.close();
+    }
+
+    fn write_lanes(&mut self) {
+        self.write_track_lanes();
+
+        let mut markers = self.project.markers.clone();
+        markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        if markers.is_empty() {
+            return;
+        }
+        self.xml.open(
+            "Markers",
+            attrs([("timeUnit", "beats".to_string()), ("id", self.ids.next())]),
+        );
+        for marker in &markers {
+            let mut a = attrs([
+                ("time", num(marker.beat)),
+                ("name", sanitize_name(&marker.name)),
+            ]);
+            if let Some(color) = marker.color {
+                a.push(("color", rgb_to_hex(color)));
+            }
+            if let Some(comment) = marker.comment.as_ref().filter(|c| !c.is_empty()) {
+                a.push(("comment", sanitize_name(comment)));
+            }
+            self.xml.leaf("Marker", a);
+        }
+        self.xml.close();
+    }
+
+    fn write_track_lanes(&mut self) {
         self.xml.open(
             "Lanes",
             attrs([("timeUnit", "beats".to_string()), ("id", self.ids.next())]),
@@ -696,30 +774,13 @@ impl Ctx<'_> {
         }
 
         self.xml.close();
+    }
 
-        let mut markers = self.project.markers.clone();
-        markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
-        if !markers.is_empty() {
-            self.xml.open(
-                "Markers",
-                attrs([("timeUnit", "beats".to_string()), ("id", self.ids.next())]),
-            );
-            for marker in &markers {
-                let mut a = attrs([
-                    ("time", num(marker.beat)),
-                    ("name", sanitize_name(&marker.name)),
-                ]);
-                if let Some(color) = marker.color {
-                    a.push(("color", rgb_to_hex(color)));
-                }
-                if let Some(comment) = marker.comment.as_ref().filter(|c| !c.is_empty()) {
-                    a.push(("comment", sanitize_name(comment)));
-                }
-                self.xml.leaf("Marker", a);
-            }
-            self.xml.close();
-        }
-
+    fn write_arrangement(&mut self) {
+        self.xml
+            .open("Arrangement", attrs([("id", self.ids.next())]));
+        self.write_lanes();
+        self.write_tempo_automation();
         self.xml.close();
     }
 
@@ -731,6 +792,7 @@ impl Ctx<'_> {
         let (start, end) = source_range(clip, self.bpm);
         let region = &clip.samples[start..end];
         let region_seconds = region.len() as f64 / f64::from(clip.sample_rate);
+        let content_offset = start as f64 / f64::from(clip.sample_rate);
 
         let path = format!("{AUDIO_DIR}/clip_{:04}.wav", self.media.len());
         self.media
@@ -789,17 +851,12 @@ impl Ctx<'_> {
         self.xml.open("Audio", audio);
         self.xml.leaf("File", attrs([("path", path)]));
         self.xml.close();
-        self.xml.leaf(
-            "Warp",
-            attrs([("time", "0".to_string()), ("contentTime", "0".to_string())]),
-        );
-        self.xml.leaf(
-            "Warp",
-            attrs([
-                ("time", num(pass_beats)),
-                ("contentTime", num(region_seconds)),
-            ]),
-        );
+        for (beat, content) in warp_points(clip, pass_beats, region_seconds, content_offset) {
+            self.xml.leaf(
+                "Warp",
+                attrs([("time", num(beat)), ("contentTime", num(content))]),
+            );
+        }
         self.xml.close();
         self.xml.close();
         Ok(())
@@ -932,6 +989,34 @@ fn source_range(clip: &AudioClip, bpm: f64) -> (usize, usize) {
         .max(0.0)
         .min(total as f64) as usize;
     (start, total)
+}
+
+fn warp_points(
+    clip: &AudioClip,
+    pass_beats: f64,
+    region_seconds: f64,
+    content_offset: f64,
+) -> Vec<(f64, f64)> {
+    let stored: Vec<(f64, f64)> = if clip.warp_mode {
+        clip.warps
+            .iter()
+            .filter(|p| p.beat >= -1.0e-9 && p.beat <= pass_beats + 1.0e-9)
+            .map(|p| (p.beat, (p.content_seconds - content_offset).max(0.0)))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut points = stored
+        .into_iter()
+        .filter(|(_, content)| *content <= region_seconds + 1.0e-9)
+        .collect::<Vec<_>>();
+    points.push((pass_beats, region_seconds));
+    points.sort_by(|a, b| a.0.total_cmp(&b.0));
+    points.dedup_by(|a, b| (a.0 - b.0).abs() <= 1.0e-12);
+    if points.len() < 2 {
+        points.insert(0, (0.0, 0.0));
+    }
+    points
 }
 
 fn wav_bytes(samples: &[f32], sample_rate: f32) -> Result<Vec<u8>> {

@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use yadaw::dawproject;
 use yadaw::model::automation::{AutomationLane, AutomationMode, AutomationPoint, AutomationTarget};
-use yadaw::model::clip::{AudioClip, MidiClip, MidiNote};
+use yadaw::model::clip::{AudioClip, MidiClip, MidiNote, WarpPoint};
 use yadaw::model::group::TrackGroup;
 use yadaw::model::marker::Marker;
 use yadaw::model::plugin::PluginDescriptor;
+use yadaw::model::tempo::{TempoPoint, TempoRamp};
 use yadaw::model::track::{Send, Track, TrackType};
 use yadaw::project::{PROJECT_VERSION, Project};
 use yadaw_plugin_api::BackendKind;
@@ -843,6 +844,330 @@ fn dawproject_reads_a_bare_master_channel() {
     assert_eq!(project.tracks[0].group_id, None);
 }
 
+#[test]
+fn dawproject_reads_a_tempo_track_when_transport_is_silent() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Studio One" version="6.5"/>
+  <Transport>
+    <TimeSignature denominator="4" numerator="4" id="id1"/>
+  </Transport>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad">
+      <Channel audioChannels="2" role="regular" solo="false" id="id3"/>
+    </Track>
+  </Structure>
+  <Arrangement id="id5">
+    <TempoAutomation timeUnit="beats" id="id10">
+        <RealPoint time="0" value="100" interpolation="hold"/>
+        <RealPoint time="8" value="150" interpolation="hold"/>
+    </TempoAutomation>
+    <Lanes timeUnit="beats" id="id6">
+      <Lanes track="id2" id="id7">
+        <Clips id="id8">
+          <Clip time="0.0" duration="4.0" contentTimeUnit="seconds" name="pad">
+            <Notes id="id9">
+              <Note key="60" time="0.0" duration="0.5" vel="0.8"/>
+            </Notes>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+
+    assert_eq!(
+        project.bpm, 100.0,
+        "the track's first point is the tempo the project opens at"
+    );
+    let clip = &project.tracks[0].midi_clips[0];
+    assert_eq!(clip.length_beats, 4.0);
+    let note = &clip.notes[0];
+    assert_eq!(
+        note.duration,
+        0.5 * 100.0 / 60.0,
+        "the note is timed at the track's tempo, not at 120"
+    );
+    assert_eq!(
+        project.tempo_map.len(),
+        2,
+        "both points of the track are kept, not just its first tempo"
+    );
+    assert_eq!(project.tempo_map[1].beat, 8.0);
+}
+
+#[test]
+fn dawproject_falls_through_an_unconvertible_transport_tempo() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Transport>
+    <Tempo unit="smpte" value="25" id="id0" name="Tempo"/>
+  </Transport>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad"/>
+  </Structure>
+  <Arrangement id="id5">
+    <TempoAutomation timeUnit="beats" id="id10">
+        <RealPoint time="0" value="132" interpolation="hold"/>
+    </TempoAutomation>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+    assert_eq!(project.bpm, 132.0, "the tempo track beats an unusable unit");
+}
+
+#[test]
+fn dawproject_prefers_an_explicit_transport_tempo_over_the_track() {
+    let with_points = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Transport>
+    <Tempo unit="bpm" value="140" id="id0" name="Tempo"/>
+  </Transport>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad"/>
+  </Structure>
+  <Arrangement id="id5">
+    <TempoAutomation timeUnit="beats" id="id10">
+        <RealPoint time="0" value="100" interpolation="hold"/>
+    </TempoAutomation>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+    let empty_points = with_points.replace(
+        r#"<RealPoint time="0" value="100" interpolation="hold"/>"#,
+        "",
+    );
+
+    for (label, xml) in [("populated", with_points), ("empty", &empty_points)] {
+        let (bytes, _) = zip_fixture(xml);
+        let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+        assert_eq!(
+            project.bpm, 140.0,
+            "an explicit {label} transport tempo wins"
+        );
+    }
+}
+
+#[test]
+fn dawproject_falls_back_to_120_when_no_tempo_exists_at_all() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad"/>
+  </Structure>
+  <Arrangement id="id5"/>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+    assert_eq!(project.bpm, 120.0);
+}
+
+#[test]
+fn dawproject_ignores_unusable_tempo_track_values() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad"/>
+  </Structure>
+  <Arrangement id="id5">
+    <TempoAutomation timeUnit="beats" id="id10">
+        <RealPoint time="0" value="0" interpolation="hold"/>
+        <RealPoint time="4" value="-80" interpolation="hold"/>
+    </TempoAutomation>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+    assert_eq!(
+        project.bpm, 120.0,
+        "no usable tempo means the 120 BPM default"
+    );
+}
+
+#[test]
+fn dawproject_takes_the_earliest_tempo_track_point() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad"/>
+  </Structure>
+  <Arrangement id="id5">
+    <TempoAutomation timeUnit="seconds" id="id10">
+        <RealPoint time="8" value="150" interpolation="hold"/>
+        <RealPoint time="0" value="90" interpolation="hold"/>
+    </TempoAutomation>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+    assert_eq!(
+        project.bpm, 90.0,
+        "time 0 is the tempo the project opens at"
+    );
+}
+
+#[test]
+fn dawproject_round_trips_a_multi_point_warp() {
+    let clip = AudioClip {
+        id: 1,
+        name: "ramp".to_string(),
+        start_beat: 0.0,
+        length_beats: 8.0,
+        sample_rate: 44_100.0,
+        samples: tone(4 * 44_100),
+        warp_mode: true,
+        warps: vec![
+            WarpPoint {
+                beat: 0.0,
+                content_seconds: 0.0,
+            },
+            WarpPoint {
+                beat: 4.0,
+                content_seconds: 1.0,
+            },
+            WarpPoint {
+                beat: 8.0,
+                content_seconds: 4.0,
+            },
+        ],
+        ..Default::default()
+    };
+    let project = Project {
+        bpm: 120.0,
+        tracks: vec![Track {
+            id: 1,
+            name: "Audio".to_string(),
+            track_type: TrackType::Audio,
+            audio_clips: vec![clip],
+            ..Track::default()
+        }],
+        ..fixture()
+    };
+
+    let (bytes, _) = dawproject::export(&project).expect("export succeeds");
+    let xml = project_xml(&bytes);
+    let count = xml.matches("<Warp ").count();
+    assert!(
+        count >= 3,
+        "the middle warp point survives export, found {count} <Warp> elements"
+    );
+
+    let (reimported, _) = dawproject::import(&bytes, &no_plugins).expect("re-import succeeds");
+    let clip = &reimported.tracks[0].audio_clips[0];
+    assert!(clip.warp_mode);
+    assert_eq!(clip.warps.len(), 3, "all three points come back");
+    for (want, got) in clip.warps.iter().zip([
+        WarpPoint {
+            beat: 0.0,
+            content_seconds: 0.0,
+        },
+        WarpPoint {
+            beat: 4.0,
+            content_seconds: 1.0,
+        },
+        WarpPoint {
+            beat: 8.0,
+            content_seconds: 4.0,
+        },
+    ]) {
+        assert!(
+            (got.beat - want.beat).abs() < 1e-6,
+            "beat {} vs {}",
+            got.beat,
+            want.beat
+        );
+        assert!(
+            (got.content_seconds - want.content_seconds).abs() < 1e-6,
+            "content {} vs {}",
+            got.content_seconds,
+            want.content_seconds
+        );
+    }
+}
+
+#[test]
+fn dawproject_keeps_a_loop_only_when_the_warp_fits_inside_the_clip() {
+    let warped = |beat_len: f64, last_beat: f64| {
+        let xml = format!(
+            r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Transport>
+    <Tempo max="666" min="20" unit="bpm" value="120" id="id0" name="Tempo"/>
+  </Transport>
+  <Structure>
+    <Track contentType="audio" loaded="true" id="id2" name="Audio">
+      <Channel audioChannels="2" role="regular" solo="false" id="id3"/>
+    </Track>
+  </Structure>
+  <Arrangement id="id5">
+    <Lanes timeUnit="beats" id="id6">
+      <Lanes track="id2" id="id7">
+        <Clips id="id8">
+          <Clip time="0.0" duration="{beat_len}" contentTimeUnit="seconds" loopStart="0.0" loopEnd="1.0" name="riser.wav">
+            <Audio channels="1" duration="4.0" sampleRate="44100" id="id9">
+              <File path="Audio/riser.wav" id="id10"/>
+            </Audio>
+            <Warps contentTimeUnit="seconds" timeUnit="beats" id="id11">
+              <Warp time="0" contentTime="0"/>
+              <Warp time="{last_beat}" contentTime="1.0"/>
+            </Warps>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##
+        );
+        let media = wav(&tone(176_400));
+        let (bytes, _) = zip_fixture_with_media(&xml, &[("Audio/riser.wav", media)]);
+        dawproject::import(&bytes, &no_plugins).expect("import succeeds")
+    };
+
+    let (fits, _) = warped(16.0, 2.0);
+    let clip = &fits.tracks[0].audio_clips[0];
+    assert!(clip.warp_mode, "the clip is time-warped");
+    assert!(clip.loop_enabled, "a warp that fits inside the clip loops");
+
+    let (stretched, report) = warped(4.0, 40.0);
+    let clip = &stretched.tracks[0].audio_clips[0];
+    assert!(
+        !clip.loop_enabled,
+        "a warp that outruns the clip drops the loop"
+    );
+    assert!(
+        report.notes.iter().any(|n| n.contains("warp needs")),
+        "and the reason is reported, got {:?}",
+        report.notes
+    );
+}
+
 fn project_xml(bytes: &[u8]) -> String {
     use std::io::Read;
     let mut archive =
@@ -893,4 +1218,219 @@ fn wav(samples: &[f32]) -> Vec<u8> {
         writer.finalize().unwrap();
     }
     cursor.into_inner()
+}
+
+/// Cubase and Cubasis write the tempo track in seconds, where a linear ramp runs
+/// against time rather than against beats. Both domains have to survive import.
+#[test]
+fn dawproject_imports_a_tempo_track_in_seconds() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Cubase" version="14.0"/>
+  <Transport>
+    <TimeSignature denominator="4" numerator="4" id="id1"/>
+  </Transport>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad">
+      <Channel audioChannels="2" role="regular" solo="false" id="id3"/>
+    </Track>
+  </Structure>
+  <Arrangement id="id5">
+    <TempoAutomation timeUnit="seconds" id="id10">
+        <RealPoint time="0" value="120" interpolation="linear"/>
+        <RealPoint time="4" value="60" interpolation="hold"/>
+        <RealPoint time="8" value="60" interpolation="hold"/>
+    </TempoAutomation>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+
+    assert_eq!(project.tempo_map.len(), 3, "every point is kept");
+    assert_eq!(
+        project.tempo_map[0].ramp,
+        TempoRamp::Seconds,
+        "and knows its domain"
+    );
+    assert_eq!(project.tempo_map[1].ramp, TempoRamp::Hold);
+
+    // 4 seconds ramping 120 -> 60 averages 90 BPM, so that span is 6 beats, and
+    // the following 4 seconds at 60 BPM is 4 more.
+    assert!(
+        (project.tempo_map[1].beat - 6.0).abs() < 1e-9,
+        "{}",
+        project.tempo_map[1].beat
+    );
+    assert!(
+        (project.tempo_map[2].beat - 10.0).abs() < 1e-9,
+        "{}",
+        project.tempo_map[2].beat
+    );
+}
+
+/// A beat-unit track is already in beats and must not be integrated.
+#[test]
+fn dawproject_keeps_a_beat_tempo_track_in_beats() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Bitwig Studio" version="5.0"/>
+  <Transport>
+    <TimeSignature denominator="4" numerator="4" id="id1"/>
+  </Transport>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad">
+      <Channel audioChannels="2" role="regular" solo="false" id="id3"/>
+    </Track>
+  </Structure>
+  <Arrangement id="id5">
+    <TempoAutomation timeUnit="beats" id="id10">
+        <RealPoint time="0" value="120" interpolation="hold"/>
+        <RealPoint time="16" value="60" interpolation="hold"/>
+    </TempoAutomation>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+    assert_eq!(project.tempo_map[1].beat, 16.0, "beats are left alone");
+    assert_eq!(project.tempo_map[0].ramp, TempoRamp::Hold);
+}
+
+/// A saved tempo map has to come back out of the container, and every point has
+/// to name its interpolation, because DAWproject reads a missing one as a hold.
+#[test]
+fn dawproject_round_trips_a_tempo_map() {
+    for (ramp, unit) in [(TempoRamp::Beats, "beats"), (TempoRamp::Seconds, "seconds")] {
+        let want = vec![
+            TempoPoint::held(0.0, 120.0),
+            TempoPoint::ramped_in(16.0, 90.0, ramp),
+            TempoPoint::held(32.0, 60.0),
+        ];
+        let project = Project {
+            bpm: 120.0,
+            tempo_map: want.clone(),
+            ..fixture()
+        };
+        let (bytes, _) = dawproject::export(&project).expect("export succeeds");
+        let xml = project_xml(&bytes);
+        let track = xml
+            .split_once("<TempoAutomation")
+            .and_then(|(_, rest)| rest.split_once("</TempoAutomation>"))
+            .map(|(body, _)| body)
+            .expect("the tempo track is written");
+        assert!(
+            track.contains(&format!("timeUnit=\"{unit}\"")),
+            "a {ramp:?} ramp is written in {unit}"
+        );
+        assert_eq!(
+            track.matches("<RealPoint").count(),
+            3,
+            "one point per anchor"
+        );
+        assert_eq!(
+            track.matches("interpolation=\"hold\"").count(),
+            2,
+            "and every point names its interpolation, since a missing one means hold"
+        );
+
+        let (back, _) = dawproject::import(&bytes, &no_plugins).expect("re-import succeeds");
+        assert_eq!(back.tempo_map.len(), 3);
+        for (want, got) in want.iter().zip(&back.tempo_map) {
+            assert!(
+                (got.beat - want.beat).abs() < 1e-6,
+                "beat {} vs {}",
+                got.beat,
+                want.beat
+            );
+            assert!(
+                (got.bpm - want.bpm).abs() < 1e-4,
+                "bpm {} vs {}",
+                got.bpm,
+                want.bpm
+            );
+            assert_eq!(got.ramp, want.ramp, "ramp mode at beat {}", want.beat);
+        }
+    }
+}
+
+/// A ramp linear in beats is not linear in seconds, so a map using both domains
+/// has no faithful DAWproject encoding and is refused rather than mistranslated.
+#[test]
+fn dawproject_refuses_a_tempo_map_that_mixes_ramp_domains() {
+    let project = Project {
+        bpm: 120.0,
+        tempo_map: vec![
+            TempoPoint::held(0.0, 120.0),
+            TempoPoint::ramped_in(16.0, 90.0, TempoRamp::Beats),
+            TempoPoint::ramped_in(32.0, 60.0, TempoRamp::Seconds),
+        ],
+        ..fixture()
+    };
+    let (bytes, report) = dawproject::export(&project).expect("export succeeds");
+    assert!(
+        !project_xml(&bytes).contains("<TempoAutomation"),
+        "a mistranslatable tempo curve is not written"
+    );
+    assert!(
+        report.notes.iter().any(|n| n.contains("mixes")),
+        "and the reason is reported, got {:?}",
+        report.notes
+    );
+}
+
+/// A single-point map is a constant tempo, which `Transport/Tempo` already says.
+#[test]
+fn dawproject_writes_no_tempo_track_for_a_constant_project() {
+    let project = Project {
+        bpm: 120.0,
+        tempo_map: vec![TempoPoint::new(0.0, 120.0)],
+        ..fixture()
+    };
+    let (bytes, _) = dawproject::export(&project).expect("export succeeds");
+    assert!(
+        !project_xml(&bytes).contains("<TempoAutomation"),
+        "a constant tempo stays in Transport only"
+    );
+}
+
+/// A `TempoAutomation` element written as a wrapper around a `Points` child is
+/// what the spec's own example shows, so both shapes have to be read.
+#[test]
+fn dawproject_reads_a_tempo_track_wrapped_in_points() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Yadaw" version="0.10.9"/>
+  <Transport>
+    <TimeSignature denominator="4" numerator="4" id="id1"/>
+  </Transport>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="id2" name="Pad">
+      <Channel audioChannels="2" role="regular" solo="false" id="id3"/>
+    </Track>
+  </Structure>
+  <Arrangement id="id5">
+    <TempoAutomation timeUnit="beats" id="id10">
+      <Points id="id11">
+        <RealPoint time="0" value="128" interpolation="hold"/>
+        <RealPoint time="16" value="96" interpolation="hold"/>
+      </Points>
+    </TempoAutomation>
+  </Arrangement>
+  <Scenes/>
+</Project>
+"##;
+
+    let (bytes, _) = zip_fixture(xml);
+    let (project, _) = dawproject::import(&bytes, &no_plugins).expect("import succeeds");
+    assert_eq!(project.bpm, 128.0);
+    assert_eq!(
+        project.tempo_map.len(),
+        2,
+        "the wrapped points are still read"
+    );
 }

@@ -8,7 +8,7 @@ use yadaw::midi_utils::MidiNoteUtils;
 use yadaw::model::clip::{AudioClip, MidiClip, MidiNote, MidiPattern, WarpPoint};
 use yadaw::model::group::{GroupLinkMode, TrackGroup};
 use yadaw::model::marker::Marker;
-use yadaw::model::tempo::{TempoCurve, TempoPoint};
+use yadaw::model::tempo::{TempoCurve, TempoPoint, TempoRamp};
 use yadaw::model::track::{Send, Track, TrackType};
 use yadaw::project::{AppState, ArrangementRow, PROJECT_VERSION, Project, tempo_map_base_bpm};
 use yadaw::time_utils::TimeConverter;
@@ -966,17 +966,16 @@ fn holding_and_ramping_differ_measurably() {
 }
 
 #[test]
-fn the_hold_flag_survives_a_project_round_trip() {
+fn a_held_point_survives_a_project_round_trip() {
     let map = vec![TempoPoint::new(0.0, 120.0), TempoPoint::held(8.0, 60.0)];
     let json = serde_json::to_string(&map).expect("a tempo map serializes");
     let back: Vec<TempoPoint> = serde_json::from_str(&json).expect("and reads back");
-    assert_eq!(back, map, "the hold flag is part of the saved map");
-    assert!(back[1].hold, "and it is the second point that holds");
-
-    // A map written before the flag existed still loads as a linear ramp.
-    let legacy = r#"[{"beat":0.0,"bpm":120.0},{"beat":8.0,"bpm":60.0}]"#;
-    let old: Vec<TempoPoint> = serde_json::from_str(legacy).expect("an older map loads");
-    assert!(old.iter().all(|p| !p.hold), "and defaults to ramping");
+    assert_eq!(back, map, "the ramp mode is part of the saved map");
+    assert_eq!(
+        back[1].ramp,
+        TempoRamp::Hold,
+        "and it is the second that holds"
+    );
 }
 
 /// Brute-force reference: integrate 60/bpm over the segment with many steps.
@@ -1031,4 +1030,106 @@ fn the_tempo_reported_at_a_beat_agrees_with_the_time_integral() {
             "beat {beat}: bpm_at {reported} but the integral implies {implied}"
         );
     }
+}
+
+/// A tempo linear in seconds crosses a segment at the mean of its endpoints,
+/// while the same endpoints ramped in beats do not, so the domain is observable.
+#[test]
+fn a_seconds_ramp_crosses_at_the_mean_tempo_and_a_beats_ramp_does_not() {
+    let in_seconds = TempoCurve::from_map(
+        &[
+            TempoPoint::ramped_in(0.0, 120.0, TempoRamp::Seconds),
+            TempoPoint::held(8.0, 60.0),
+        ],
+        120.0,
+    );
+    let in_beats = TempoCurve::from_map(
+        &[TempoPoint::new(0.0, 120.0), TempoPoint::held(8.0, 60.0)],
+        120.0,
+    );
+    let by_mean = 8.0 * 60.0 / 90.0;
+    assert!(
+        (in_seconds.beats_to_seconds(8.0) - by_mean).abs() < 1e-9,
+        "seconds ramp took {} but 8 beats at the 90 mean is {by_mean}",
+        in_seconds.beats_to_seconds(8.0)
+    );
+    assert!(
+        (in_beats.beats_to_seconds(8.0) - by_mean).abs() > 0.1,
+        "a beats ramp is logarithmic, not the mean: got {} against {by_mean}",
+        in_beats.beats_to_seconds(8.0)
+    );
+}
+
+#[test]
+fn a_seconds_ramp_round_trips_and_reports_a_consistent_tempo() {
+    let map = [
+        TempoPoint::ramped_in(0.0, 60.0, TempoRamp::Seconds),
+        TempoPoint::ramped_in(16.0, 180.0, TempoRamp::Seconds),
+        TempoPoint::held(24.0, 180.0),
+    ];
+    let curve = TempoCurve::from_map(&map, 60.0);
+    assert!(!curve.is_constant());
+
+    let mut beat = 0.0;
+    while beat <= 24.0 {
+        let seconds = curve.beats_to_seconds(beat);
+        assert!(
+            (curve.seconds_to_beats(seconds) - beat).abs() < 1e-9,
+            "beat {beat} round tripped to {}",
+            curve.seconds_to_beats(seconds)
+        );
+        if beat < 16.0 {
+            assert!(
+                curve.bpm_at(beat) > 59.9 && curve.bpm_at(beat) < 180.1,
+                "tempo at beat {beat} left its segment: {}",
+                curve.bpm_at(beat)
+            );
+        }
+        beat += 0.25;
+    }
+    assert!((curve.bpm_at(16.0) - 180.0).abs() < 1e-9);
+}
+
+/// The tempo handed to a plugin must be the derivative of the rendered time, in
+/// both ramp domains, or a synced plugin drifts against the audio.
+#[test]
+fn the_reported_tempo_is_the_derivative_of_the_rendered_time_in_both_domains() {
+    for ramp in [TempoRamp::Beats, TempoRamp::Seconds] {
+        let curve = TempoCurve::from_map(
+            &[
+                TempoPoint::ramped_in(0.0, 120.0, ramp),
+                TempoPoint::ramped_in(8.0, 60.0, ramp),
+            ],
+            120.0,
+        );
+        for beat in [1.0, 2.0, 3.7, 5.5, 7.0] {
+            let h = 1e-6;
+            let dt = curve.beats_to_seconds(beat + h) - curve.beats_to_seconds(beat - h);
+            let implied = 2.0 * h * 60.0 / dt;
+            let reported = curve.bpm_at(beat);
+            assert!(
+                (implied - reported).abs() < 1e-2,
+                "{ramp:?} ramp at beat {beat}: reported {reported}, integral implies {implied}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_tempo_point_keeps_its_ramp_across_a_project_round_trip() {
+    let map = vec![
+        TempoPoint::ramped_in(0.0, 120.0, TempoRamp::Seconds),
+        TempoPoint::held(8.0, 60.0),
+        TempoPoint::new(16.0, 90.0),
+    ];
+    let json = serde_json::to_string(&map).expect("a tempo map serializes");
+    let back: Vec<TempoPoint> = serde_json::from_str(&json).expect("and reads back");
+    assert_eq!(back, map);
+
+    let legacy = r#"[{"beat":0.0,"bpm":120.0},{"beat":8.0,"bpm":60.0}]"#;
+    let old: Vec<TempoPoint> = serde_json::from_str(legacy).expect("an older map loads");
+    assert!(
+        old.iter().all(|p| p.ramp == TempoRamp::Beats),
+        "a map written before ramps existed loads as beat-linear"
+    );
 }

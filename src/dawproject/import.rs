@@ -15,10 +15,11 @@ use super::{
 use crate::audio_import::import_audio_data;
 use crate::idgen;
 use crate::model::automation::{AutomationLane, AutomationMode, AutomationPoint, AutomationTarget};
-use crate::model::clip::{MidiClip, MidiNote, MidiPattern};
+use crate::model::clip::{MidiClip, MidiNote, MidiPattern, WarpPoint};
 use crate::model::group::TrackGroup;
 use crate::model::marker::Marker;
 use crate::model::plugin::PluginDescriptor;
+use crate::model::tempo::{TempoPoint, TempoRamp};
 use crate::model::track::{Send, Track, TrackType};
 use crate::project::{AppState, PROJECT_VERSION, Project};
 
@@ -153,20 +154,23 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
 
     let transport = child(root, "Transport");
     let tempo = transport.and_then(|t| child(t, "Tempo"));
-    let bpm = match tempo {
+    let declared = match tempo {
         Some(node) => match node.attribute("unit") {
-            None | Some("bpm") => num_attr(node, "value")
-                .filter(|v| *v > 0.0)
-                .unwrap_or(DEFAULT_BPM),
+            None | Some("bpm") => num_attr(node, "value").filter(|v| *v > 0.0),
             Some(unit) => {
                 report.note(format!(
-                    "Tempo is expressed in '{unit}', which yadaw cannot represent; 120 BPM was used"
+                    "Tempo is expressed in '{unit}', which yadaw cannot represent; a tempo track was used instead"
                 ));
-                DEFAULT_BPM
+                None
             }
         },
-        None => DEFAULT_BPM,
+        None => None,
     };
+    let track = tempo_track(root);
+    let tempo_map = tempo_map_from_track(&track);
+    let bpm = declared
+        .or_else(|| tempo_map.first().map(|p| p.bpm))
+        .unwrap_or(DEFAULT_BPM);
 
     let time_signature = transport
         .and_then(|t| child(t, "TimeSignature"))
@@ -179,14 +183,16 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
         .unwrap_or((4, 4));
 
     if let Some(arrangement) = child(root, "Arrangement") {
-        for tag in ["TempoAutomation", "TimeSignatureAutomation"] {
-            if let Some(points) = child(arrangement, tag)
-                && children(points).next().is_some()
-            {
-                report.note(format!(
-                    "<{tag}> is not supported because yadaw has no tempo map; the project was imported at a constant {bpm} BPM"
-                ));
-            }
+        if let Some(points) = tempo_track_points(arrangement)
+            && points.len() > 1
+            && tempo_map.len() < 2
+        {
+            report.note(format!(
+                "The tempo track's points were not imported; the project runs at a constant {bpm} BPM"
+            ));
+        }
+        if child(arrangement, "TimeSignatureAutomation").is_some() {
+            report.note("Time signature automation was not imported");
         }
     }
 
@@ -291,7 +297,7 @@ pub fn import(bytes: &[u8], resolve: &PluginResolver<'_>) -> Result<(Project, Re
         groups,
         markers,
         bpm: bpm as f32,
-        tempo_map: Vec::new(),
+        tempo_map,
         time_signature,
         sample_rate: crate::constants::DEFAULT_SAMPLE_RATE as f32,
         master_volume,
@@ -975,16 +981,19 @@ fn read_audio_clip(
     }
 
     let natural = 60.0 / bpm;
-    match slope {
-        Some(value) if (value - natural).abs() > 1.0e-9 => {
-            clip.warp_mode = true;
-            report.note(
-                "Time-warped audio was flattened to a single fixed speed mapping, which is all yadaw can store",
-            );
-        }
-        _ => {
-            clip.warp_mode = false;
-        }
+    let warp_curve = warps
+        .map(|w| warp_curve_points(w, warps_unit, content_seconds_unit, bpm))
+        .unwrap_or_default();
+    if warp_curve.len() >= 2 {
+        clip.warp_mode = true;
+        clip.warps = warp_curve;
+    } else if slope.is_some_and(|value| (value - natural).abs() > 1.0e-9) {
+        clip.warp_mode = true;
+        report.note(
+            "Time-warped audio was flattened to a single fixed speed mapping, which is all yadaw can store",
+        );
+    } else {
+        clip.warp_mode = false;
     }
 
     let content_beats =
@@ -994,15 +1003,18 @@ fn read_audio_clip(
     } else {
         content_beats
     };
-    // Warping stretches the material across the whole clip, leaving no room to
-    // also repeat a region of it.
+
+    let cycle_beats = loop_region
+        .and_then(|(from, to)| cycle_cost(&clip.warps, from, to))
+        .unwrap_or(f64::INFINITY);
+    let cycle_fits = !clip.warp_mode || cycle_beats <= length_beats + 1.0e-9;
     let looped = loop_region.is_some() && content_beats + 1.0e-9 < length_beats;
-    if looped && clip.warp_mode {
-        report.note(
-            "Warped audio clips cannot also repeat a region of their material; that loop was dropped",
-        );
+    if looped && !cycle_fits {
+        report.note(format!(
+            "This clip's warp needs {cycle_beats:.3} beats to pass through its loop region but only has {length_beats:.3}; the loop was dropped"
+        ));
     }
-    let loop_enabled = looped && !clip.warp_mode;
+    let loop_enabled = looped && cycle_fits;
     if !loop_enabled {
         length_beats = length_beats.min(content_beats);
     }
@@ -1021,6 +1033,111 @@ fn read_audio_clip(
     clip.loop_enabled = loop_enabled;
 
     track.audio_clips.push(clip);
+}
+
+fn tempo_track_points(arrangement: El) -> Option<Vec<(f64, f64, TempoRamp, TimeUnit)>> {
+    let container = child(arrangement, "TempoAutomation")?;
+    let unit = scope_unit(container, "timeUnit", TimeUnit::Beats);
+    let scope = child(container, "Points").unwrap_or(container);
+    let mut found: Vec<(f64, f64, TempoRamp, TimeUnit)> = children(scope)
+        .filter(|n| n.has_tag_name("RealPoint"))
+        .filter_map(|p| {
+            let ramp = match attr(p, "interpolation") {
+                Some("linear") => TempoRamp::Beats,
+                Some(_) | None => TempoRamp::Hold,
+            };
+            Some((num_attr(p, "time")?, num_attr(p, "value")?, ramp, unit))
+        })
+        .filter(|(_, bpm, _, _)| bpm.is_finite() && *bpm > 0.0)
+        .collect();
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    (!found.is_empty()).then_some(found)
+}
+
+fn tempo_track(root: El) -> Vec<(f64, f64, TempoRamp, TimeUnit)> {
+    child(root, "Arrangement")
+        .and_then(tempo_track_points)
+        .unwrap_or_default()
+}
+
+/// `TempoAutomation` times are in the track's own time unit, so a track in
+/// seconds has to be integrated to beats before it can drive playback. Each
+/// point's beat is the running total of the tempo before it.
+fn tempo_map_from_track(track: &[(f64, f64, TempoRamp, TimeUnit)]) -> Vec<TempoPoint> {
+    let seconds = track
+        .first()
+        .is_some_and(|(_, _, _, unit)| *unit == TimeUnit::Seconds);
+    let mut map: Vec<TempoPoint> = Vec::with_capacity(track.len());
+    let mut beats = 0.0;
+    for (index, &(time, bpm, ramp, unit)) in track.iter().enumerate() {
+        let ramp = match (ramp, unit) {
+            (TempoRamp::Beats, TimeUnit::Seconds) => TempoRamp::Seconds,
+            (ramp, _) => ramp,
+        };
+        map.push(TempoPoint::ramped_in(beats, bpm, ramp));
+        let Some(&(next_time, next_bpm, _, _)) = track.get(index + 1) else {
+            break;
+        };
+        if unit == TimeUnit::Seconds {
+            let span = (next_time - time).max(0.0);
+            beats += match ramp {
+                TempoRamp::Hold => span * bpm / 60.0,
+                TempoRamp::Beats | TempoRamp::Seconds => span * 0.5 * (bpm + next_bpm) / 60.0,
+            };
+        } else {
+            beats = next_time;
+        }
+    }
+    if !seconds {
+        if let Some(&(time, _, _, _)) = track.first() {
+            let first = &mut map[0];
+            *first = TempoPoint::ramped_in(time, first.bpm, first.ramp);
+        }
+    }
+    map
+}
+
+fn warp_curve_points(node: El, unit: TimeUnit, content_unit: TimeUnit, bpm: f64) -> Vec<WarpPoint> {
+    let mut points: Vec<WarpPoint> = children(node)
+        .filter(|n| n.has_tag_name("Warp"))
+        .filter_map(|w| {
+            Some(WarpPoint {
+                beat: unit.to_beats(num_attr(w, "time")?, bpm),
+                content_seconds: content_unit.to_seconds(num_attr(w, "contentTime")?, bpm),
+            })
+        })
+        .collect();
+    points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    points.dedup_by(|a, b| a.beat == b.beat);
+    points
+}
+
+fn beat_at_content(warps: &[WarpPoint], seconds: f64) -> Option<f64> {
+    let first = warps.first()?;
+    let last = warps.last()?;
+    if seconds < first.content_seconds - 1.0e-9 || seconds > last.content_seconds + 1.0e-9 {
+        return None;
+    }
+    for pair in warps.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if seconds >= a.content_seconds - 1.0e-9 && seconds <= b.content_seconds + 1.0e-9 {
+            let span = b.content_seconds - a.content_seconds;
+            if span.abs() <= 1.0e-12 {
+                return Some(a.beat);
+            }
+            return Some(a.beat + (seconds - a.content_seconds) / span * (b.beat - a.beat));
+        }
+    }
+    Some(last.beat)
+}
+
+fn cycle_cost(warps: &[WarpPoint], from: f64, to: f64) -> Option<f64> {
+    if to <= from {
+        return None;
+    }
+    let start = beat_at_content(warps, from)?;
+    let end = beat_at_content(warps, to)?;
+    (end - start).is_finite().then_some((end - start).max(0.0))
 }
 
 fn warp_slope(node: El, unit: TimeUnit, content_unit: TimeUnit, bpm: f64) -> Option<f64> {

@@ -2,16 +2,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::constants::DEFAULT_BPM;
 
-/// One anchor of the project's tempo curve. `beat` is a project beat and `bpm`
-/// is the tempo in force from that beat until the next point. With `hold` the
-/// tempo stays put and jumps at the next point, which is DAWproject's second
-/// interpolation mode; the default ramps linearly.
+/// How the tempo behaves from this point until the next one. DAWproject's
+/// `interpolation` is `hold` or `linear` and defaults to `hold` when absent,
+/// which is why `from_dawproject` exists rather than a serde default.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum TempoRamp {
+    /// Ramps linearly against beats.
+    #[default]
+    Beats,
+    /// Ramps linearly against elapsed seconds.
+    Seconds,
+    /// Stays at this point's tempo until the next point.
+    Hold,
+}
+
+impl TempoRamp {
+    pub fn dawproject(self) -> &'static str {
+        match self {
+            Self::Hold => "hold",
+            Self::Beats | Self::Seconds => "linear",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct TempoPoint {
     pub beat: f64,
     pub bpm: f64,
     #[serde(default)]
-    pub hold: bool,
+    pub ramp: TempoRamp,
 }
 
 impl TempoPoint {
@@ -19,7 +38,7 @@ impl TempoPoint {
         Self {
             beat,
             bpm,
-            hold: false,
+            ramp: TempoRamp::Beats,
         }
     }
 
@@ -27,8 +46,12 @@ impl TempoPoint {
         Self {
             beat,
             bpm,
-            hold: true,
+            ramp: TempoRamp::Hold,
         }
+    }
+
+    pub fn ramped_in(beat: f64, bpm: f64, ramp: TempoRamp) -> Self {
+        Self { beat, bpm, ramp }
     }
 }
 
@@ -39,8 +62,7 @@ pub struct TempoSegment {
     pub beat: f64,
     pub bpm: f64,
     pub seconds_at_beat: f64,
-    /// The tempo holds at `bpm` for this whole span instead of ramping.
-    pub hold: bool,
+    pub ramp: TempoRamp,
 }
 
 /// The project's beat <-> time mapping. Between two points the tempo ramps
@@ -89,7 +111,7 @@ impl TempoCurve {
             beat: points[0].beat,
             bpm: points[0].bpm,
             seconds_at_beat: 0.0,
-            hold: points[0].hold,
+            ramp: points[0].ramp,
         });
         for pair in points.windows(2) {
             let (a, b) = (pair[0], pair[1]);
@@ -98,7 +120,7 @@ impl TempoCurve {
                 beat: b.beat,
                 bpm: b.bpm,
                 seconds_at_beat: seconds,
-                hold: b.hold,
+                ramp: b.ramp,
             });
         }
         Self::Mapped { segments }
@@ -178,12 +200,21 @@ fn map_beats_to_seconds(segments: &[TempoSegment], beats: f64) -> f64 {
     }
     let index = segment_for(segments, beats);
     let segment = &segments[index];
-    if segment.hold {
-        return segment.seconds_at_beat + (beats - segment.beat) * 60.0 / segment.bpm;
+    match segment.ramp {
+        TempoRamp::Hold => segment.seconds_at_beat + (beats - segment.beat) * 60.0 / segment.bpm,
+        TempoRamp::Beats => {
+            let next = &segments[index + 1];
+            let k = ramp_slope(segment.bpm, next.bpm, next.beat - segment.beat);
+            segment.seconds_at_beat + ramp_seconds(k, segment.bpm, beats - segment.beat)
+        }
+        TempoRamp::Seconds => {
+            let next = &segments[index + 1];
+            let duration = next.seconds_at_beat - segment.seconds_at_beat;
+            let elapsed =
+                seconds_ramp_elapsed(segment.bpm, next.bpm, duration, beats - segment.beat);
+            segment.seconds_at_beat + elapsed
+        }
     }
-    let next = &segments[index + 1];
-    let k = ramp_slope(segment.bpm, next.bpm, next.beat - segment.beat);
-    segment.seconds_at_beat + ramp_seconds(k, segment.bpm, beats - segment.beat)
 }
 
 fn map_seconds_to_beats(segments: &[TempoSegment], seconds: f64) -> f64 {
@@ -204,13 +235,19 @@ fn map_seconds_to_beats(segments: &[TempoSegment], seconds: f64) -> f64 {
     }
     let segment = &segments[index];
     let next = &segments[index + 1];
-    let span = next.beat - segment.beat;
     let elapsed = seconds - segment.seconds_at_beat;
-    if segment.hold {
-        return segment.beat + elapsed * segment.bpm / 60.0;
+    match segment.ramp {
+        TempoRamp::Hold => segment.beat + elapsed * segment.bpm / 60.0,
+        TempoRamp::Beats => {
+            let span = next.beat - segment.beat;
+            let k = ramp_slope(segment.bpm, next.bpm, span);
+            segment.beat + ramp_beats(k, segment.bpm, span, elapsed)
+        }
+        TempoRamp::Seconds => {
+            let duration = next.seconds_at_beat - segment.seconds_at_beat;
+            segment.beat + seconds_ramp_beats(segment.bpm, next.bpm, duration, elapsed)
+        }
     }
-    let k = ramp_slope(segment.bpm, next.bpm, span);
-    segment.beat + ramp_beats(k, segment.bpm, span, elapsed)
 }
 
 fn map_bpm_at(segments: &[TempoSegment], beats: f64) -> f64 {
@@ -224,14 +261,22 @@ fn map_bpm_at(segments: &[TempoSegment], beats: f64) -> f64 {
     }
     let index = segment_for(segments, beats);
     let segment = &segments[index];
-    if segment.hold {
+    if segment.ramp == TempoRamp::Hold {
         return segment.bpm;
     }
     let next = &segments[index + 1];
     if (next.beat - segment.beat).abs() <= f64::EPSILON {
         return next.bpm;
     }
-    let t = (beats - segment.beat) / (next.beat - segment.beat);
+    let t = if segment.ramp == TempoRamp::Seconds {
+        let duration = next.seconds_at_beat - segment.seconds_at_beat;
+        if duration <= f64::EPSILON {
+            return next.bpm;
+        }
+        seconds_ramp_elapsed(segment.bpm, next.bpm, duration, beats - segment.beat) / duration
+    } else {
+        (beats - segment.beat) / (next.beat - segment.beat)
+    };
     segment.bpm + (next.bpm - segment.bpm) * t
 }
 
@@ -260,16 +305,60 @@ pub fn sanitise_bpm(bpm: f64) -> f64 {
     }
 }
 
-/// Seconds to cross the span between two points, honouring whether it ramps or holds.
-fn span_seconds(from: TempoPoint, to: TempoPoint) -> f64 {
-    let span = to.beat - from.beat;
-    if span <= 0.0 {
+/// For a tempo linear in seconds, `beats(t) = (p0·t + (p1-p0)·t²/2) / 60`, so
+/// elapsed seconds from a beat count is the positive root of that quadratic.
+fn seconds_ramp_elapsed(from_bpm: f64, to_bpm: f64, duration: f64, beats: f64) -> f64 {
+    if duration <= 0.0 {
         return 0.0;
     }
-    if from.hold {
-        return span * 60.0 / from.bpm;
+    let a = (to_bpm - from_bpm) / (2.0 * duration);
+    if a.abs() <= f64::EPSILON {
+        return (beats * 60.0 / from_bpm).clamp(0.0, duration);
     }
-    ramp_seconds(ramp_slope(from.bpm, to.bpm, span), from.bpm, span)
+    let b = from_bpm;
+    let disc = (b * b + 4.0 * a * 60.0 * beats).max(0.0);
+    ((-b + disc.sqrt()) / (2.0 * a)).clamp(0.0, duration)
+}
+
+fn seconds_ramp_beats(from_bpm: f64, to_bpm: f64, duration: f64, seconds: f64) -> f64 {
+    if duration <= 0.0 {
+        return 0.0;
+    }
+    let t = seconds.clamp(0.0, duration);
+    (from_bpm * t + (to_bpm - from_bpm) * t * t / (2.0 * duration)) / 60.0
+}
+
+/// Seconds to cross the span between two points, honouring whether it ramps
+/// against beats, against seconds, or holds.
+fn span_seconds(from: TempoPoint, to: TempoPoint) -> f64 {
+    match from.ramp {
+        TempoRamp::Hold => {
+            let span = to.beat - from.beat;
+            if span > 0.0 {
+                span * 60.0 / from.bpm
+            } else {
+                0.0
+            }
+        }
+        TempoRamp::Beats => {
+            let span = to.beat - from.beat;
+            if span <= 0.0 {
+                0.0
+            } else {
+                ramp_seconds(ramp_slope(from.bpm, to.bpm, span), from.bpm, span)
+            }
+        }
+        // A tempo linear in seconds over T seconds runs at the mean of the two
+        // tempos, since time is the independent variable here.
+        TempoRamp::Seconds => {
+            let span = to.beat - from.beat;
+            if span <= 0.0 {
+                0.0
+            } else {
+                span * 60.0 / (0.5 * (from.bpm + to.bpm))
+            }
+        }
+    }
 }
 
 /// Tempo ramp slope in BPM per beat, taken over the segment's whole span.
