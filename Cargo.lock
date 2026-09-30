@@ -6229,7 +6229,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "yadaw"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "ahash",
  "android-activity",
@@ -6289,7 +6289,7 @@ dependencies = [
 
 [[package]]
 name = "yadaw-plugin-api"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "anyhow",
  "serde",
@@ -6297,7 +6297,7 @@ dependencies = [
 
 [[package]]
 name = "yadaw-plugin-host"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "anyhow",
  "clack-extensions",
