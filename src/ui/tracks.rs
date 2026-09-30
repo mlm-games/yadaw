@@ -43,6 +43,7 @@ pub enum DropTarget {
 struct DndRow {
     id: u64,
     rect: egui::Rect,
+    zone: egui::Rect,
     is_group: bool,
 }
 
@@ -191,13 +192,14 @@ impl TracksPanel {
             };
 
             if is_group {
-                let resp = self.draw_group_header(ui, id, depth, app);
+                let (resp, zone) = self.draw_group_header(ui, id, depth, app);
                 if resp.clicked() {
                     app.select_group(id);
                 }
                 self.dnd_row_rects.push(DndRow {
                     id,
                     rect: resp.rect,
+                    zone,
                     is_group: true,
                 });
                 if resp.drag_started() && self.dnd_dragging.is_none() {
@@ -243,6 +245,7 @@ impl TracksPanel {
             self.dnd_row_rects.push(DndRow {
                 id: track_id,
                 rect: header_resp.rect,
+                zone: header_resp.rect,
                 is_group: false,
             });
 
@@ -462,7 +465,7 @@ impl TracksPanel {
         group_id: u64,
         depth: usize,
         app: &mut super::app::YadawApp,
-    ) -> egui::Response {
+    ) -> (egui::Response, egui::Rect) {
         let (name, color, collapsed, volume, muted, solo, member_count, child_count) = {
             let state = app.state.lock_sync();
             let g = state.groups.get(&group_id);
@@ -481,12 +484,13 @@ impl TracksPanel {
         let fill = egui::Color32::from_rgba_unmultiplied(color.0, color.1, color.2, 38);
         let is_selected = app.selected_group == Some(group_id);
 
+        let mut header_rect = egui::Rect::NOTHING;
         let frame = egui::Frame::group(ui.style())
             .fill(fill)
             .inner_margin(egui::Margin::symmetric(6, 3))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
+                header_rect = ui.horizontal(|ui| {
                     ui.add_space(depth as f32 * 12.0);
 
                     if ui
@@ -542,7 +546,9 @@ impl TracksPanel {
                             egui::StrokeKind::Middle,
                         );
                     }
+                }).response.rect;
 
+                ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.menu_button("⚙", |ui| {
                             if ui.button("Select All Tracks").clicked() {
@@ -611,9 +617,10 @@ impl TracksPanel {
                         }
 
                         let mut vol = volume;
+                        let slider_w = (ui.available_width() - 44.0).max(40.0);
                         let changed = ui
                             .add_sized(
-                                [90.0, 16.0],
+                                [slider_w, 16.0],
                                 egui::Slider::new(&mut vol, 0.0..=1.2).show_value(false),
                             )
                             .changed();
@@ -629,13 +636,12 @@ impl TracksPanel {
 
         let rect = frame.response.rect;
         let id = ui.id().with(("group_header", group_id));
-        // Right side holds the fader, mute, solo and menu; it must not drag.
-        let drag_rect = egui::Rect::from_min_max(
+        let header_zone = egui::Rect::from_min_max(
             rect.min,
-            egui::pos2((rect.right() - 210.0).max(rect.left()), rect.bottom()),
+            egui::pos2(rect.right(), header_rect.bottom().max(rect.min.y)),
         );
-        let drag_resp = ui.interact(drag_rect, id, egui::Sense::click_and_drag());
-        drag_resp.union(frame.response)
+        let drag_resp = ui.interact(header_zone, id, egui::Sense::click_and_drag());
+        (drag_resp.union(frame.response), header_zone)
     }
 
     fn draw_mixer_strip(&mut self, ui: &mut egui::Ui, track_id: u64, app: &super::app::YadawApp) {
@@ -1303,7 +1309,7 @@ impl TracksPanel {
         let target = match self
             .dnd_row_rects
             .iter()
-            .find(|r| r.is_group && pointer_in_group_header(&r.rect, pointer))
+            .find(|r| r.is_group && pointer_in_group_header(&r.zone, pointer))
             .map(|r| r.id)
         {
             Some(gid) => DropTarget::IntoGroup(gid),
