@@ -6,16 +6,10 @@ pub fn draw_waveform(
     painter: &egui::Painter,
     rect: egui::Rect,
     clip: &AudioClip,
-    zoom_x: f32,
-    scroll_x: f32,
     color: egui::Color32,
 ) {
-    let clip_px_total = (clip.length_beats as f32 * zoom_x).max(1.0);
-    let start_px = scroll_x.clamp(0.0, clip_px_total);
-    let start_sample = ((start_px / clip_px_total) * clip.samples.len() as f32) as usize;
-
     let samples_per_pixel =
-        ((clip.samples.len().saturating_sub(start_sample)) as f32 / rect.width().max(1.0)).max(1.0);
+        (clip.samples.len() as f32 / rect.width().max(1.0)).max(1.0);
 
     let mut points = Vec::with_capacity(rect.width() as usize * 2);
     let center_y = rect.center().y;
@@ -24,8 +18,8 @@ pub fn draw_waveform(
     let stroke = egui::Stroke::new(1.0, color);
 
     for pixel_x in 0..rect.width() as i32 {
-        let s0 = start_sample + (pixel_x as f32 * samples_per_pixel) as usize;
-        let s1 = start_sample + (((pixel_x + 1) as f32) * samples_per_pixel) as usize;
+        let s0 = (pixel_x as f32 * samples_per_pixel) as usize;
+        let s1 = (((pixel_x + 1) as f32) * samples_per_pixel) as usize;
 
         if s0 >= clip.samples.len() {
             break;

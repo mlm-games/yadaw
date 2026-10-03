@@ -17,6 +17,8 @@ pub struct TimelineView {
     pub grid_snap: f32,
     pub show_automation: bool,
     pub auto_scroll: bool,
+    auto_scroll_suspended: bool,
+    was_playing: bool,
 
     snap_enabled: bool,
     snap_to_grid: bool,
@@ -104,6 +106,8 @@ impl TimelineView {
             grid_snap: 0.25,
             show_automation: false,
             auto_scroll: true,
+            auto_scroll_suspended: false,
+            was_playing: false,
 
             snap_enabled: true,
             snap_to_grid: true,
@@ -143,16 +147,33 @@ impl TimelineView {
         self.draw_toolbar(ui, app);
         ui.separator();
 
-        egui::ScrollArea::both()
+        let playing = app.audio_state.playing.load(Ordering::Relaxed);
+        if playing && !self.was_playing {
+            self.auto_scroll_suspended = false;
+        }
+        self.was_playing = playing;
+
+        let scroll_before = self.scroll_x;
+        let out = egui::ScrollArea::both()
             .auto_shrink([false, false])
-            .scroll_source(ScrollSource::MOUSE_WHEEL)
+            .id_salt("tl_scroll")
+            .scroll_source(ScrollSource::MOUSE_WHEEL | ScrollSource::SCROLL_BAR)
+            .horizontal_scroll_offset(scroll_before)
             .show(ui, |ui| {
                 self.draw_timeline(ui, app);
             });
 
+        let max_offset = (out.content_size.x - out.inner_rect.width()).max(0.0);
+        let expected = scroll_before.clamp(0.0, max_offset);
+        let user_delta = out.state.offset.x - expected;
+        if user_delta.abs() > f32::EPSILON {
+            self.auto_scroll_suspended = true;
+        }
+        self.scroll_x = (self.scroll_x + user_delta).clamp(0.0, max_offset);
+
         self.draw_context_menus(ui, app);
 
-        if self.auto_scroll && app.audio_state.playing.load(Ordering::Relaxed) {
+        if self.auto_scroll && !self.auto_scroll_suspended && playing {
             self.update_auto_scroll(app);
         }
     }
@@ -167,6 +188,7 @@ impl TimelineView {
         };
 
         self.scroll_x = (self.scroll_x - delta.x).max(0.0);
+        self.auto_scroll_suspended = true;
 
         if (scale - 1.0).abs() > f32::EPSILON {
             let old_zoom_x = self.zoom_x;
@@ -174,8 +196,10 @@ impl TimelineView {
 
             if (self.zoom_x - old_zoom_x).abs() > f32::EPSILON {
                 // Keep the beat under the centroid pinned while zooming.
-                let beat = (centroid.x - region.left() + self.scroll_x) / old_zoom_x;
-                self.scroll_x = (beat * self.zoom_x - (centroid.x - region.left())).max(0.0);
+                let beat = (centroid.x - region.left()) / old_zoom_x;
+                self.scroll_x =
+                    (beat * self.zoom_x - (centroid.x - region.left()) + self.scroll_x)
+                        .max(0.0);
             }
         }
 
@@ -211,7 +235,13 @@ impl TimelineView {
 
                     ui.separator();
                     ui.checkbox(&mut self.show_automation, "Show Automation");
-                    ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
+                    if ui
+                        .checkbox(&mut self.auto_scroll, "Auto-scroll")
+                        .changed()
+                        && self.auto_scroll
+                    {
+                        self.auto_scroll_suspended = false;
+                    }
 
                     ui.separator();
                     ui.checkbox(
@@ -248,6 +278,8 @@ impl TimelineView {
     fn draw_timeline(&mut self, ui: &mut egui::Ui, app: &mut super::app::YadawApp) {
         self.automation_hit_regions.clear();
         self.last_track_blocks.clear();
+
+        let scroll_x = self.scroll_x;
 
         if self.pending_clip_undo {
             self.pending_clip_undo = false;
@@ -332,6 +364,7 @@ impl TimelineView {
                 if let Some(last) = self.last_pointer_pos {
                     let dx = pos.x - last.x;
                     self.scroll_x = (self.scroll_x - dx).max(0.0);
+                    self.auto_scroll_suspended = true;
                 }
             }
             // While space is down, cancel other interactions
@@ -342,7 +375,7 @@ impl TimelineView {
         // Draw the grid and horizontal ruler
         let rect = response.rect;
         let markers: Vec<Marker> = app.state.lock_sync().markers.clone();
-        self.draw_grid(&painter, rect, app.state.lock_sync().bpm);
+        self.draw_grid(&painter, rect, app.state.lock_sync().bpm, scroll_x);
 
         // loop/seek
         let ruler_h = 18.0;
@@ -421,7 +454,7 @@ impl TimelineView {
         let position = app.audio_state.get_position();
         let current_beat = app.state.lock_sync().position_to_beats(position);
         if current_beat.is_finite() {
-            let x = rect.left() + (current_beat as f32 * self.zoom_x - self.scroll_x);
+            let x = rect.left() + current_beat as f32 * self.zoom_x;
             if x >= rect.left() && x <= rect.right() {
                 ui.ctx().debug_painter().line_segment(
                     [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
@@ -502,7 +535,13 @@ impl TimelineView {
         }
     }
 
-    fn draw_grid(&self, painter: &egui::Painter, rect: egui::Rect, _bpm: f32) {
+    fn draw_grid(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        _bpm: f32,
+        scroll_x: f32,
+    ) {
         let ruler_h = 18.0;
         let visuals = painter.ctx().global_style().visuals.clone();
         let bg = visuals.widgets.noninteractive.bg_fill;
@@ -519,10 +558,10 @@ impl TimelineView {
 
         // Vertical beat lines and bar markers
         let beats_visible = (rect.width() / self.zoom_x) as i32 + 2;
-        let start_beat = (self.scroll_x / self.zoom_x) as i32;
+        let start_beat = (scroll_x / self.zoom_x) as i32;
 
         for beat in start_beat..(start_beat + beats_visible) {
-            let x = rect.left() + (beat as f32 * self.zoom_x - self.scroll_x);
+            let x = rect.left() + beat as f32 * self.zoom_x;
             if x < rect.left() || x > rect.right() {
                 continue;
             }
@@ -598,7 +637,7 @@ impl TimelineView {
             let curve = app.state.lock_sync().tempo_curve();
             let on_clip = match track.track_type {
                 TrackType::Midi => track.midi_clips.iter().any(|c| {
-                    let clip_x = c.start_beat as f32 * self.zoom_x - self.scroll_x;
+                    let clip_x = c.start_beat as f32 * self.zoom_x;
                     let clip_rect = egui::Rect::from_min_size(
                         rect.min + egui::vec2(clip_x, 5.0),
                         egui::vec2(
@@ -609,7 +648,7 @@ impl TimelineView {
                     clip_rect.contains(pos)
                 }),
                 _ => track.audio_clips.iter().any(|c| {
-                    let clip_x = c.start_beat as f32 * self.zoom_x - self.scroll_x;
+                    let clip_x = c.start_beat as f32 * self.zoom_x;
                     let audio_duration_seconds = c.samples.len() as f64 / c.sample_rate as f64;
                     let audio_length_beats = curve.seconds_to_beats(audio_duration_seconds);
                     let effective_length_beats = if c.warp_mode {
@@ -663,7 +702,7 @@ impl TimelineView {
         app: &mut super::app::YadawApp,
         track_color: Option<(u8, u8, u8)>,
     ) {
-        let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
+        let clip_x = clip.start_beat as f32 * self.zoom_x;
 
         let audio_duration_seconds = clip.samples.len() as f64 / clip.sample_rate as f64;
         let audio_length_beats = app
@@ -684,7 +723,9 @@ impl TimelineView {
             egui::vec2(clip_width, self.track_height - 25.0),
         );
 
-        if clip_rect.right() < track_rect.left() || clip_rect.left() > track_rect.right() {
+        if clip_rect.right() < track_rect.left() + self.scroll_x
+            || clip_rect.left() > track_rect.right()
+        {
             return;
         }
 
@@ -714,8 +755,6 @@ impl TimelineView {
             painter,
             clip_rect,
             clip,
-            self.zoom_x,
-            self.scroll_x,
             fg_color.gamma_multiply(0.6),
         );
 
@@ -913,10 +952,10 @@ impl TimelineView {
             return;
         }
 
-        let start_x = rect.left() + (loop_start as f32 * self.zoom_x - self.scroll_x);
-        let end_x = rect.left() + (loop_end as f32 * self.zoom_x - self.scroll_x);
+        let start_x = rect.left() + loop_start as f32 * self.zoom_x;
+        let end_x = rect.left() + loop_end as f32 * self.zoom_x;
 
-        if end_x <= rect.left() || start_x >= rect.right() {
+        if end_x <= rect.left() + self.scroll_x || start_x >= rect.right() {
             return;
         }
 
@@ -948,7 +987,7 @@ impl TimelineView {
         track_color: Option<(u8, u8, u8)>,
     ) {
         // Compute clip rectangle
-        let clip_x = clip.start_beat as f32 * self.zoom_x - self.scroll_x;
+        let clip_x = clip.start_beat as f32 * self.zoom_x;
         let clip_width = clip.length_beats as f32 * self.zoom_x;
 
         let clip_rect = egui::Rect::from_min_size(
@@ -956,7 +995,9 @@ impl TimelineView {
             egui::vec2(clip_width, self.track_height - 10.0),
         );
 
-        if clip_rect.right() < track_rect.left() || clip_rect.left() > track_rect.right() {
+        if clip_rect.right() < track_rect.left() + self.scroll_x
+            || clip_rect.left() > track_rect.right()
+        {
             return;
         }
 
@@ -1831,6 +1872,7 @@ impl TimelineView {
         // Click on ruler to set playhead
         if ruler_resp.clicked() {
             if let Some(pos) = ruler_resp.interact_pointer_pos() {
+                self.auto_scroll_suspended = false;
                 let mut beat = self.x_to_beat(response.rect, pos.x);
                 beat = if self.grid_snap > 0.0 {
                     (beat / self.grid_snap as f64).round() * self.grid_snap as f64
@@ -2342,11 +2384,11 @@ impl TimelineView {
     }
 
     fn x_to_beat(&self, rect: egui::Rect, x: f32) -> f64 {
-        ((x - rect.left()) + self.scroll_x) as f64 / self.zoom_x as f64
+        (x - rect.left()) as f64 / self.zoom_x as f64
     }
 
     fn beat_to_x(&self, rect: egui::Rect, beat: f64) -> f32 {
-        rect.left() + (beat as f32 * self.zoom_x - self.scroll_x)
+        rect.left() + beat as f32 * self.zoom_x
     }
 
     fn zoom_horiz_around(&mut self, rect: egui::Rect, anchor_x: f32, factor: f32) {
@@ -2356,7 +2398,9 @@ impl TimelineView {
         self.zoom_x = (self.zoom_x * factor).clamp(10.0, 500.0);
         if (self.zoom_x - prev_zoom).abs() > f32::EPSILON {
             let new_x_at_anchor_beat = (anchor_beat as f32) * self.zoom_x;
-            let desired_scroll_x = (new_x_at_anchor_beat - (anchor_x - rect.left())).max(0.0);
+            let desired_scroll_x =
+                (new_x_at_anchor_beat - (anchor_x - rect.left()) + self.scroll_x)
+                    .max(0.0);
             self.scroll_x = desired_scroll_x;
         }
     }
@@ -2455,9 +2499,11 @@ impl TimelineView {
         if pointer_x > rect.right() - margin {
             let t = ((pointer_x - (rect.right() - margin)) / margin).clamp(0.0, 1.0);
             self.scroll_x += step_base * (0.25 + 0.75 * t);
+            self.auto_scroll_suspended = true;
         } else if pointer_x < rect.left() + margin {
             let t = (((rect.left() + margin) - pointer_x) / margin).clamp(0.0, 1.0);
             self.scroll_x = (self.scroll_x - step_base * (0.25 + 0.75 * t)).max(0.0);
+            self.auto_scroll_suspended = true;
         }
     }
 

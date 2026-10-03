@@ -55,8 +55,8 @@ impl AutomationLaneWidget {
         // Build screen positions for points (only those visible)
         let mut pts_screen: Vec<(usize, egui::Pos2)> = Vec::with_capacity(lane.points.len());
         for (i, p) in lane.points.iter().enumerate() {
-            let x = lane_rect.left() + (p.beat as f32 * zoom_x - scroll_x);
-            if x < lane_rect.left() - 8.0 || x > lane_rect.right() + 8.0 {
+            let x = lane_rect.left() + p.beat as f32 * zoom_x;
+            if x < lane_rect.left() + scroll_x - 8.0 || x > lane_rect.right() + 8.0 {
                 continue;
             }
             let y = lane_rect.bottom() - (p.value.clamp(0.0, 1.0) * lane_rect.height());
@@ -102,7 +102,7 @@ impl AutomationLaneWidget {
             if resp.dragged()
                 && let Some(pointer) = resp.interact_pointer_pos()
             {
-                let beat = ((pointer.x - lane_rect.left()) + scroll_x) / zoom_x;
+                let beat = (pointer.x - lane_rect.left()) / zoom_x;
                 let value = ((lane_rect.bottom() - pointer.y) / lane_rect.height()).clamp(0.0, 1.0);
 
                 let old_beat = lane.points[i].beat;
@@ -126,7 +126,7 @@ impl AutomationLaneWidget {
             && !hovered_any
             && let Some(pos) = lane_resp.interact_pointer_pos()
         {
-            let beat = ((pos.x - lane_rect.left()) + scroll_x) / zoom_x;
+            let beat = (pos.x - lane_rect.left()) / zoom_x;
             let value = ((lane_rect.bottom() - pos.y) / lane_rect.height()).clamp(0.0, 1.0);
             actions.push(AutomationAction::AddPoint {
                 beat: beat as f64,
