@@ -1,3 +1,8 @@
+## v0.11.4
+
+- No user-facing changes were mentioned since previous release
+
+
 ## v0.11.3
 
 - fix flathub
