@@ -280,7 +280,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
     );
 
     let initial_file: Option<PathBuf> = app.internal_data_path().and_then(|dir| {
-        let intent = rlobkit_app_events::take_pending_intent(dir)?;
+        let intent = rlobkit_app_events::take_pending_intent(&dir)?;
         let name = std::path::Path::new(&intent.name).file_name()?.to_owned();
         let incoming = dir.join("incoming");
         std::fs::create_dir_all(&incoming).ok()?;
