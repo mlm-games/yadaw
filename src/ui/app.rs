@@ -2502,9 +2502,24 @@ impl YadawApp {
     }
 }
 
+#[cfg(target_os = "android")]
+impl YadawApp {
+    fn open_pending_shared_files(&mut self) {
+        for path in crate::android_saf::take_pending_shared_files() {
+            self.open_file_from_path(&path);
+        }
+    }
+}
+
 impl eframe::App for YadawApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+
+        #[cfg(target_os = "android")]
+        {
+            let _ = crate::android_saf::EGUI_CTX.set(ctx.clone());
+            self.open_pending_shared_files();
+        }
 
         if ctx.input(|i| i.viewport().close_requested()) {
             if self.project_manager.is_dirty() {

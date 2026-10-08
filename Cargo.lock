@@ -4023,14 +4023,15 @@ dependencies = [
 
 [[package]]
 name = "rlobkit-app-events"
-version = "0.5.9"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b63e277074ae181ef6e217eed5db447fe055400beaabf4edd5ac2e4d37b4751f"
+checksum = "598be9318d3d9206b46b8d2a28dec3005e2223095e5de28265ecc788378bf98c"
 dependencies = [
  "jni 0.22.4",
  "jni-min-helper 0.4.7",
  "log",
  "paranoid-android",
+ "rlobkit-core",
  "tracing",
  "tracing-log",
  "tracing-subscriber",
@@ -4038,9 +4039,9 @@ dependencies = [
 
 [[package]]
 name = "rlobkit-core"
-version = "0.5.9"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e559e00c2f408952a84fd813d658a350d2492d1906ff78ca9457b01585e20be3"
+checksum = "29dfed1a049590467a35cccd5d6bc65c3733f2c7f22da9f620c9a4f84278efc5"
 dependencies = [
  "bytes",
  "dirs",
@@ -4051,9 +4052,9 @@ dependencies = [
 
 [[package]]
 name = "rlobkit-dialogs"
-version = "0.5.9"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67345952c99cd08a8826d23cd853cda1f4ba29a942a213e1d8a576301ef84927"
+checksum = "dd911dd3ed2eaf1a8658f49bf26d67e43a28d16805c066272f8c3fbba239f351"
 dependencies = [
  "bytes",
  "futures-lite",

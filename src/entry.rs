@@ -214,7 +214,6 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(target_os = "android")]
 pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
     use eframe::wgpu;
-    use std::path::PathBuf;
 
     // Initialize logging
     android_logger::init_once(
@@ -279,16 +278,12 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         },
     );
 
-    let initial_file: Option<PathBuf> = app.internal_data_path().and_then(|dir| {
-        let intent = rlobkit_app_events::take_pending_intent(&dir)?;
-        let name = std::path::Path::new(&intent.name).file_name()?.to_owned();
-        let incoming = dir.join("incoming");
-        std::fs::create_dir_all(&incoming).ok()?;
-        let path = incoming.join(name);
-        std::fs::write(&path, &intent.data).ok()?;
-        log::info!("Opening shared file: {}", path.display());
-        Some(path)
+    rlobkit_app_events::intents::set_on_new_intent(|| {
+        if let Some(ctx) = crate::android_saf::EGUI_CTX.get() {
+            ctx.request_repaint();
+        }
     });
+    let initial_files = crate::android_saf::take_pending_shared_files();
 
     // UI
     let native_options = eframe::NativeOptions {
@@ -315,7 +310,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
                 config,
                 ui_midi_handler,
             );
-            if let Some(ref path) = initial_file {
+            for path in &initial_files {
                 app.open_file_from_path(path);
             }
             Ok(Box::new(app))

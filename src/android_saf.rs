@@ -17,6 +17,42 @@ where
     })
 }
 
+pub static EGUI_CTX: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
+
+pub fn take_pending_shared_files() -> Vec<PathBuf> {
+    let Ok(dir) = files_dir_path() else {
+        return Vec::new();
+    };
+    let incoming = dir.join("incoming");
+    let mut staged = Vec::new();
+    for intent in rlobkit_app_events::intents::drain_intents_from(&dir) {
+        for file in &intent.files {
+            let Ok(bytes) = file.read_bytes() else {
+                log::warn!("cannot read shared file {}", file.name());
+                continue;
+            };
+            let name = std::path::Path::new(file.name())
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| String::from("shared"));
+            if std::fs::create_dir_all(&incoming).is_err() {
+                continue;
+            }
+            let mut path = incoming.join(&name);
+            let mut n = 1;
+            while path.exists() {
+                path = incoming.join(format!("{n}_{name}"));
+                n += 1;
+            }
+            if std::fs::write(&path, &bytes).is_ok() {
+                log::info!("staged shared file {}", path.display());
+                staged.push(path);
+            }
+        }
+    }
+    staged
+}
+
 pub fn files_dir_path() -> Result<PathBuf, jni::errors::Error> {
     with_env(|env, context| {
         let file_obj = env
