@@ -736,12 +736,9 @@ impl OpenDialog {
                                     state.loop_end = live_loop_end;
                                     state.loop_enabled = live_loop_enabled;
 
-                                    crate::project::publish_tempo(&state, &app.audio_state);
-                                    app.audio_state.loop_start.store(state.loop_start);
-                                    app.audio_state.loop_end.store(state.loop_end);
-                                    app.audio_state.loop_enabled.store(
-                                        state.loop_enabled,
-                                        std::sync::atomic::Ordering::Relaxed,
+                                    crate::project::publish_project_settings(
+                                        &state,
+                                        &app.audio_state,
                                     );
 
                                     state.ensure_ids();

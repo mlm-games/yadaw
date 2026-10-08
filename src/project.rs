@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 
 use crate::constants::DEFAULT_LOOP_LEN;
 use crate::model::clip::{AudioClip, MidiPattern, WarpPoint};
@@ -255,6 +256,19 @@ pub fn tempo_map_at_bpm(map: &[TempoPoint], bpm: f32) -> Vec<TempoPoint> {
 pub fn publish_tempo(state: &AppState, audio_state: &crate::audio_state::AudioState) {
     audio_state.bpm.store(state.bpm);
     audio_state.set_tempo_curve(state.tempo_curve());
+}
+
+/// Publish every project setting the audio thread reads on its own (tempo, loop
+/// region, master volume). Loading, importing or undoing state into `AppState`
+/// must go through here, or the engine keeps rendering the previous values.
+pub fn publish_project_settings(state: &AppState, audio_state: &crate::audio_state::AudioState) {
+    publish_tempo(state, audio_state);
+    audio_state.loop_start.store(state.loop_start);
+    audio_state.loop_end.store(state.loop_end);
+    audio_state
+        .loop_enabled
+        .store(state.loop_enabled, Ordering::Relaxed);
+    audio_state.master_volume.store(state.master_volume);
 }
 
 /// Puts a clip's warp map back into the shape the audio thread assumes: sorted

@@ -534,6 +534,7 @@ impl MixerWindow {
 
                         if (master_volume - app.audio_state.master_volume.load()).abs() > 0.001 {
                             app.audio_state.master_volume.store(master_volume);
+                            app.state.lock_sync().master_volume = master_volume;
                         }
                     });
                 });

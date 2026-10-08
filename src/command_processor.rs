@@ -101,6 +101,7 @@ fn process_command(
         }
         AudioCommand::SetMasterVolume(volume) => {
             audio_state.master_volume.store(volume);
+            app_state.lock_sync().master_volume = volume;
         }
         AudioCommand::UpdateTracks => {
             send_graph_snapshot(&app_state.lock_sync(), snapshot_tx);

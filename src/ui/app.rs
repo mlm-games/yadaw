@@ -278,6 +278,7 @@ impl YadawApp {
             let current = state.snapshot();
             self.redo_stack.push_back(current);
             state.restore(snapshot);
+            crate::project::publish_project_settings(&state, &self.audio_state);
             drop(state);
 
             self.sync_views_after_model_change();
@@ -291,6 +292,7 @@ impl YadawApp {
             let current = state.snapshot();
             self.undo_stack.push_back(current);
             state.restore(snapshot);
+            crate::project::publish_project_settings(&state, &self.audio_state);
             drop(state);
 
             self.sync_views_after_model_change();
@@ -688,12 +690,7 @@ impl YadawApp {
                 let mut state = self.state.lock_sync();
                 state.load_project(project);
 
-                crate::project::publish_tempo(&state, &self.audio_state);
-                self.audio_state.loop_start.store(state.loop_start);
-                self.audio_state.loop_end.store(state.loop_end);
-                self.audio_state
-                    .loop_enabled
-                    .store(state.loop_enabled, Ordering::Relaxed);
+                crate::project::publish_project_settings(&state, &self.audio_state);
 
                 self.transport_ui.bpm_input = format!("{:.1}", state.bpm);
                 self.transport_ui.loop_start_input = format!("{:.1}", state.loop_start);
@@ -765,7 +762,7 @@ impl YadawApp {
         {
             let mut state = self.state.lock_sync();
             state.load_project(project);
-            crate::project::publish_tempo(&state, &self.audio_state);
+            crate::project::publish_project_settings(&state, &self.audio_state);
             self.transport_ui.bpm_input = format!("{:.1}", state.bpm);
             state.ensure_ids();
         }
@@ -1514,14 +1511,15 @@ impl YadawApp {
                             state.loop_start = live_loop_start;
                             state.loop_end = live_loop_end;
                             state.loop_enabled = live_loop_enabled;
-                            drop(state);
 
-                            self.audio_state.set_bpm(live_bpm);
-                            self.audio_state.loop_start.store(live_loop_start);
-                            self.audio_state.loop_end.store(live_loop_end);
+                            crate::project::publish_project_settings(&state, &self.audio_state);
+
+                            state.ensure_ids();
+                            drop(state);
 
                             let _ = self.command_tx.send(AudioCommand::UpdateTracks);
                             let _ = self.command_tx.send(AudioCommand::RebuildAllRtChains);
+                            self.hydrate_audio_cache();
                             self.dialogs
                                 .show_success(&format!("Loaded project: {name}"));
                         }
@@ -2349,6 +2347,7 @@ impl YadawApp {
                 }
                 drop(state);
 
+                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
                 self.cache_audio_after_import();
                 self.dialogs.show_success(&format!(
                     "Imported audio file: {}",
@@ -2390,6 +2389,7 @@ impl YadawApp {
                 }
                 drop(state);
 
+                let _ = self.command_tx.send(AudioCommand::UpdateTracks);
                 self.cache_audio_after_import();
                 self.dialogs
                     .show_success(&format!("Imported audio: {name}"));
@@ -2470,18 +2470,31 @@ impl YadawApp {
                     .collect()
             };
             let state_arc = self.state.clone();
+            let command_tx = self.command_tx.clone();
             for (track_id, idx, hash) in entries {
                 let state_arc = state_arc.clone();
+                let command_tx = command_tx.clone();
                 crate::spawn_detached!(async move {
-                    if let Some(cached) = crate::wasm_persist::read_cached_audio_by_hash(hash).await
-                    {
-                        if let Some(track) = state_arc.lock_sync().tracks.get_mut(&track_id) {
-                            if let Some(clip) = track.audio_clips.get_mut(idx) {
-                                if clip.source_hash == Some(hash) {
-                                    clip.samples = Arc::new(cached);
-                                }
+                    let Some(cached) = crate::wasm_persist::read_cached_audio_by_hash(hash).await
+                    else {
+                        return;
+                    };
+                    let hydrated = {
+                        let mut state = state_arc.lock_sync();
+                        match state
+                            .tracks
+                            .get_mut(&track_id)
+                            .and_then(|t| t.audio_clips.get_mut(idx))
+                        {
+                            Some(clip) if clip.source_hash == Some(hash) => {
+                                clip.samples = Arc::new(cached);
+                                true
                             }
+                            _ => false,
                         }
+                    };
+                    if hydrated {
+                        let _ = command_tx.send(AudioCommand::UpdateTracks);
                     }
                 });
             }

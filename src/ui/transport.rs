@@ -268,6 +268,30 @@ impl TransportUI {
                                 }
                             }
 
+                            if !loop_start_response.has_focus() {
+                                let live = app.audio_state.loop_start.load();
+                                if self
+                                    .loop_start_input
+                                    .parse::<f64>()
+                                    .map(|v| (v - live).abs() > 0.05)
+                                    .unwrap_or(true)
+                                {
+                                    self.loop_start_input = format!("{:.1}", live);
+                                }
+                            }
+
+                            if !loop_end_response.has_focus() {
+                                let live = app.audio_state.loop_end.load();
+                                if self
+                                    .loop_end_input
+                                    .parse::<f64>()
+                                    .map(|v| (v - live).abs() > 0.05)
+                                    .unwrap_or(true)
+                                {
+                                    self.loop_end_input = format!("{:.1}", live);
+                                }
+                            }
+
                             if ui.button("Set to Selection").clicked() {
                                 app.set_loop_to_selection();
                                 // Update display
