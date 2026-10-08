@@ -1,3 +1,10 @@
+## v0.11.5
+
+- send and send multiple handling
+- android intents
+- fix silent audio files on import
+
+
 ## v0.11.4
 
 - No user-facing changes were mentioned since previous release

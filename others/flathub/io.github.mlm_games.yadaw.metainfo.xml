@@ -52,6 +52,15 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.11.5" date="2026-10-08" type="stable">
+      <description>
+        <ul>
+          <li>send and send multiple handling</li>
+          <li>android intents</li>
+          <li>fix silent audio files on import</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.4" date="2026-10-03" type="stable">
       <description>
         <ul>
