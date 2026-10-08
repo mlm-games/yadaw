@@ -181,6 +181,18 @@ launch_mode = "singleTask"
 actions = ["android.intent.action.MAIN"]
 categories = ["android.intent.category.LAUNCHER"]
 
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.VIEW"]
+categories = ["android.intent.category.DEFAULT"]
+
+[[package.metadata.android.application.activity.intent_filter.data]]
+scheme = "content"
+mime_type = "audio/*"
+
+[[package.metadata.android.application.activity.intent_filter.data]]
+scheme = "file"
+mime_type = "audio/*"
+
 [package.metadata.android.sdk]
 version_code = 16779854
 min_sdk_version = 29

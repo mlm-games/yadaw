@@ -214,6 +214,7 @@ pub fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(target_os = "android")]
 pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
     use eframe::wgpu;
+    use std::path::PathBuf;
 
     // Initialize logging
     android_logger::init_once(
@@ -278,6 +279,17 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         },
     );
 
+    let initial_file: Option<PathBuf> = app.internal_data_path().and_then(|dir| {
+        let intent = rlobkit_app_events::take_pending_intent(dir)?;
+        let name = std::path::Path::new(&intent.name).file_name()?.to_owned();
+        let incoming = dir.join("incoming");
+        std::fs::create_dir_all(&incoming).ok()?;
+        let path = incoming.join(name);
+        std::fs::write(&path, &intent.data).ok()?;
+        log::info!("Opening shared file: {}", path.display());
+        Some(path)
+    });
+
     // UI
     let native_options = eframe::NativeOptions {
         android_app: Some(app), // Pass the Android app here!
@@ -293,7 +305,7 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
         native_options,
         Box::new(move |_cc| {
             let ui_midi_handler = channels.midi_handler.clone();
-            Ok(Box::new(ui::YadawApp::new(
+            let mut app = ui::YadawApp::new(
                 app_state.clone(),
                 audio_state.clone(),
                 channels.command_tx.clone(),
@@ -302,7 +314,11 @@ pub fn run_app_android(app: AndroidApp) -> Result<(), Box<dyn std::error::Error>
                 available_plugins,
                 config,
                 ui_midi_handler,
-            )))
+            );
+            if let Some(ref path) = initial_file {
+                app.open_file_from_path(path);
+            }
+            Ok(Box::new(app))
         }),
     )?;
 
