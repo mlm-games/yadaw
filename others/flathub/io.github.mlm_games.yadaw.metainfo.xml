@@ -363,6 +363,12 @@
     <binary>yadaw</binary>
     <mediatype>audio/wav</mediatype>
     <mediatype>audio/x-wav</mediatype>
+    <mediatype>audio/mpeg</mediatype>
+    <mediatype>audio/flac</mediatype>
+    <mediatype>audio/ogg</mediatype>
+    <mediatype>audio/mp4</mediatype>
+    <mediatype>audio/aac</mediatype>
+    <mediatype>audio/midi</mediatype>
   </provides>
   <keywords>
     <keyword>audio</keyword>
