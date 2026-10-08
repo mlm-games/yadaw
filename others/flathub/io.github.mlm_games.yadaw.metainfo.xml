@@ -369,6 +369,8 @@
     <mediatype>audio/mp4</mediatype>
     <mediatype>audio/aac</mediatype>
     <mediatype>audio/midi</mediatype>
+    <mediatype>application/x-dawproject</mediatype>
+    <mediatype>application/x-yadaw</mediatype>
   </provides>
   <keywords>
     <keyword>audio</keyword>

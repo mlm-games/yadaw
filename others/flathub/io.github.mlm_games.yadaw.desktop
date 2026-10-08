@@ -10,4 +10,4 @@ Icon=io.github.mlm_games.yadaw
 Terminal=false
 StartupNotify=true
 StartupWMClass=yadaw
-MimeType=audio/midi;audio/x-midi;audio/wav;audio/x-wav;audio/vnd.wave;audio/flac;audio/mpeg;audio/mp3;audio/x-mp3;audio/x-mpg;audio/ogg;audio/vorbis;audio/x-vorbis;audio/x-vorbis+ogg;audio/mp4;audio/m4a;audio/aac;application/x-dawproject;
+MimeType=audio/midi;audio/x-midi;audio/wav;audio/x-wav;audio/vnd.wave;audio/flac;audio/mpeg;audio/mp3;audio/x-mp3;audio/x-mpg;audio/ogg;audio/vorbis;audio/x-vorbis;audio/x-vorbis+ogg;audio/mp4;audio/m4a;audio/aac;application/x-dawproject;application/x-yadaw;

@@ -5,4 +5,10 @@
     <sub-class-of type="application/zip"/>
     <glob pattern="*.dawproject"/>
   </mime-type>
+  <mime-type type="application/x-yadaw">
+    <comment>YADAW project</comment>
+    <sub-class-of type="application/json"/>
+    <glob pattern="*.yadaw"/>
+    <glob pattern="*.ydw"/>
+  </mime-type>
 </mime-info>
