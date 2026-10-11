@@ -12,7 +12,7 @@ Your recording appears as a clip on the timeline.
 ## Creating MIDI
 
 1. Click "Add MIDI Track"
-2. Click "+ Plugins" and load a CLAP/LV2 instrument
+2. Click "+ Plugins" and load a CLAP/LV2/VST3 instrument
 3. Double-click on the timeline to create a clip
 4. Double-click the clip to open piano roll
 5. Double-click in piano roll to add notes
@@ -77,7 +77,7 @@ Exports to WAV only.
 - Check master output level
 
 **Plugins not showing?**
-- Verify they're CLAP or LV2 format (not VST)
+- Verify they're CLAP, LV2 or VST3 format
 - Check plugin paths in settings
 - Restart YADAW after installing new plugins
 

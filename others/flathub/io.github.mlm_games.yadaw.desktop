@@ -2,9 +2,9 @@
 Type=Application
 Version=1.5
 Name=Yadaw
-Comment=Lightweight mini-DAW for sound design and prototyping with LV2/CLAP plugin support
+Comment=Lightweight mini-DAW for sound design and prototyping with LV2/CLAP/VST3 plugin support
 Categories=AudioVideo;Audio;Music;Sequencer;Midi;
-Keywords=audio;music;daw;midi;lv2;clap;plugin;sequencer;sound;
+Keywords=audio;music;daw;midi;lv2;clap;vst3;plugin;sequencer;sound;
 Exec=yadaw %F
 Icon=io.github.mlm_games.yadaw
 Terminal=false

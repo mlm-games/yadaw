@@ -17,14 +17,14 @@
     <ul>
       <li>Multi-track audio recording and editing</li>
       <li>MIDI input with piano roll editor</li>
-      <li>CLAP and LV2 plugin hosting</li>
+      <li>CLAP, LV2 and VST3 plugin hosting</li>
       <li>Automation lanes</li>
       <li>WAV import/export</li>
       <li>Cross-platform support</li>
     </ul>
     <p>
-      No VST support (LV2/CLAP only). No built-in plugins.
-      No MP3/FLAC export (WAV only).
+      No built-in plugins.
+      No MP3 export (WAV only).
     </p>
   </description>
   <launchable type="desktop-id">io.github.mlm_games.yadaw.desktop</launchable>
@@ -387,5 +387,6 @@
     <keyword>MIDI</keyword>
     <keyword>CLAP</keyword>
     <keyword>LV2</keyword>
+    <keyword>VST3</keyword>
   </keywords>
 </component>
