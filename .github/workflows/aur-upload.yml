@@ -21,7 +21,7 @@ jobs:
       license: "AGPL-3.0-only"
       depends: "alsa-lib libx11 libxcursor libxinerama libxrandr libxi"
       optdepends: "'pipewire-pulse: for PipeWire audio support' 'pulseaudio: for PulseAudio audio support'"
-      provides: "yadaw clap-host lv2-host"
+      provides: "yadaw clap-host lv2-host vst3-host"
       conflicts: "yadaw"
       desktop-file-path: "others/flathub/io.github.mlm_games.yadaw.desktop"
       icon-url: "https://raw.githubusercontent.com/mlm-games/yadaw/master/fastlane/metadata/android/en-US/images/icon.png"
