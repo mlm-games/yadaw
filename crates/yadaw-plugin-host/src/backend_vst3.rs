@@ -136,13 +136,23 @@ mod vst3_impl {
 
             let plugin = Arc::new(Mutex::new(plugin));
 
+            #[cfg(unix)]
+            let editor_host =
+                match EditorHost::spawn(Box::new(Vst3EditorBackend::new(plugin.clone()))) {
+                    Ok(host) => Some(host),
+                    Err(e) => {
+                        log::warn!("VST3 plugin loaded without its control thread: {e}");
+                        None
+                    }
+                };
+
             Ok(Box::new(Vst3PluginInstance {
                 plugin,
                 params: param_infos,
                 param_values,
                 sample_rate: self.cfg.sample_rate,
                 #[cfg(unix)]
-                editor_host: None,
+                editor_host,
             }))
         }
     }
@@ -181,10 +191,15 @@ mod vst3_impl {
         }
     }
 
+    const DEFAULT_TEMPO: f64 = 120.0;
+
     #[cfg(unix)]
     impl EditorBackend for Vst3EditorBackend {
         fn has_editor(&self) -> bool {
-            self.plugin.lock().map(|p| p.has_editor()).unwrap_or(false)
+            self.plugin
+                .lock()
+                .map(|p| p.is_editor_open() || p.has_editor())
+                .unwrap_or(false)
         }
 
         fn try_open_floating(&mut self) -> Result<bool> {
@@ -192,8 +207,36 @@ mod vst3_impl {
         }
 
         fn on_idle(&mut self) {
-            if let Ok(mut plugin) = self.plugin.lock() {
+            let Ok(mut plugin) = self.plugin.try_lock() else {
+                return;
+            };
+
+            if plugin.is_editor_open() {
                 plugin.service_run_loop();
+            }
+
+            for notification in plugin.take_host_notifications() {
+                match notification {
+                    vst3_host::HostNotification::BusActivationRequested {
+                        bus_index,
+                        active,
+                        ..
+                    } => log::debug!(
+                        "VST3 plugin asked for bus {bus_index} to be {}; yadaw has no auxiliary bus routing to grant it",
+                        if active { "activated" } else { "deactivated" }
+                    ),
+                    vst3_host::HostNotification::OpenEditorRequested { .. } => log::debug!(
+                        "VST3 plugin asked the host to open its editor; yadaw opens it from the plugin panel"
+                    ),
+                    _ => {}
+                }
+            }
+
+            let flags = plugin.take_restart_flags();
+            if (flags.latency_changed() || flags.io_changed())
+                && let Err(e) = plugin.service_host_requests()
+            {
+                log::warn!("VST3 plugin could not be reconfigured: {e}");
             }
         }
 
@@ -211,19 +254,27 @@ mod vst3_impl {
         }
 
         fn close(&mut self) -> Result<()> {
-            self.plugin
+            let mut plugin = self
+                .plugin
                 .lock()
-                .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?
+                .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?;
+            if !plugin.is_editor_open() {
+                return Ok(());
+            }
+            plugin
                 .close_editor()
                 .map_err(|e| anyhow!("Failed to close VST3 editor: {e}"))
         }
 
         fn preferred_size(&self) -> Option<(u32, u32)> {
-            self.plugin
-                .lock()
-                .ok()
-                .and_then(|p| p.get_editor_size().ok())
-                .map(|(w, h)| (w as u32, h as u32))
+            let plugin = self.plugin.lock().ok()?;
+            match plugin.attached_editor_size() {
+                Ok(Some(size)) => Some((size.0 as u32, size.1 as u32)),
+                _ => plugin
+                    .get_editor_size()
+                    .ok()
+                    .map(|(w, h)| (w as u32, h as u32)),
+            }
         }
     }
 
@@ -235,15 +286,15 @@ mod vst3_impl {
             audio_out: &mut [&mut [f32]],
             events: &[MidiEvent],
         ) -> Result<()> {
+            if ctx.frames == 0 {
+                return Ok(());
+            }
             let mut plugin = self
                 .plugin
                 .lock()
                 .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?;
 
             let frames = ctx.frames;
-            if frames == 0 {
-                return Ok(());
-            }
             let block_size = plugin.block_size().max(1);
 
             for e in events {
@@ -252,9 +303,33 @@ mod vst3_impl {
                 }
             }
 
+            // A tempo the plugin cannot be told about would leave its transport
+            // frozen, so an unusable project tempo falls back to a plain one.
+            let tempo = match ctx.bpm {
+                bpm if bpm.is_finite() && bpm > 0.0 => f64::from(bpm),
+                _ => DEFAULT_TEMPO,
+            };
+            let _ = plugin.set_tempo(tempo);
+            let _ = plugin.set_playing(ctx.playing);
+            let beats_per_second = tempo / 60.0;
+            let start_samples = ctx.time_samples;
+            let start_beats = ctx.beats;
+
             let mut offset = 0;
             while offset < frames {
                 let actual_frames = (frames - offset).min(block_size);
+
+                // Position of this sub-block's first frame, in the host's samples
+                // and quarter notes. A project position that is not a number is
+                // left alone rather than half-substituted.
+                let position = vst3_host::TransportPosition {
+                    samples: start_samples as i64 + offset as i64,
+                    quarter_notes: start_beats
+                        + offset as f64 / self.sample_rate * beats_per_second,
+                };
+                if start_samples.is_finite() && start_beats.is_finite() {
+                    let _ = plugin.set_transport_position(position);
+                }
 
                 let in_ch = audio_in.len();
                 let out_ch = audio_out.len();
@@ -336,27 +411,13 @@ mod vst3_impl {
         }
 
         fn open_editor(&mut self) -> Result<()> {
-            let has_editor = self
-                .plugin
-                .lock()
-                .map_err(|e| anyhow!("VST3 plugin lock poisoned: {}", e))?
-                .has_editor();
-            if !has_editor {
-                return Err(anyhow!("VST3 plugin has no editor"));
-            }
-
             #[cfg(unix)]
             {
-                if self.editor_host.is_none() {
-                    let backend = Vst3EditorBackend::new(self.plugin.clone());
-                    let host = EditorHost::spawn(Box::new(backend))
-                        .map_err(|e| anyhow!("Failed to spawn editor thread: {e}"))?;
-                    self.editor_host = Some(host);
-                }
-                self.editor_host
+                let host = self
+                    .editor_host
                     .as_ref()
-                    .unwrap()
-                    .open_editor()
+                    .ok_or_else(|| anyhow!("VST3 editor is unavailable on this system"))?;
+                host.open_editor()
                     .map_err(|e| anyhow!("Failed to open VST3 editor: {e}"))
             }
 
@@ -365,10 +426,17 @@ mod vst3_impl {
         }
 
         fn has_editor(&self) -> bool {
-            self.plugin.lock().map(|p| p.has_editor()).unwrap_or(false)
+            self.plugin
+                .lock()
+                .map(|p| p.is_editor_open() || p.has_editor())
+                .unwrap_or(false)
         }
     }
 
+    /// A control change, pitch bend or channel aftertouch is not a VST3 event: the
+    /// host library resolves it through the plugin's `IMidiMapping` table, queues
+    /// the mapped parameter and drops what the plugin does not map. Keeping a copy
+    /// of that table here would only be a staler version of the same decision.
     fn convert_midi_event(e: &MidiEvent) -> Option<vst3_host::MidiEvent> {
         let channel = vst3_host::MidiChannel::from_index(e.status & 0x0F)?;
         match e.status & 0xF0 {

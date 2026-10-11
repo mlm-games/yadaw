@@ -272,10 +272,15 @@ impl EditorHost {
 
     /// Shut down the thread permanently.
     pub fn shutdown(&mut self) {
-        if let Some(handle) = self.join_handle.take() {
-            let (result_tx, result_rx) = mpsc::channel();
-            let _ = self.cmd_tx.send(EditorCommand::Shutdown { result_tx });
-            let _ = result_rx.recv_timeout(Duration::from_secs(2));
+        let Some(handle) = self.join_handle.take() else {
+            return;
+        };
+        let (result_tx, result_rx) = mpsc::channel();
+        let _ = self.cmd_tx.send(EditorCommand::Shutdown { result_tx });
+        // An instance can be dropped on the audio thread, so a control thread
+        // that does not answer in time is left to finish on its own rather than
+        // waited on here.
+        if result_rx.recv_timeout(Duration::from_millis(250)).is_ok() {
             let _ = handle.join();
         }
     }

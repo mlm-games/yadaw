@@ -1987,8 +1987,10 @@ impl AudioEngine {
                     let ctx = ProcessCtx {
                         frames: 64,
                         bpm: self.audio_state.bpm.load(),
+                        beats: 0.0,
                         time_samples: 0.0,
                         loop_active: false,
+                        playing: false,
                     };
                     let panic_events: Vec<RtMidiEvent> = (0..16)
                         .flat_map(|ch| {
@@ -2264,8 +2266,10 @@ impl AudioEngine {
                     .curve()
                     .bpm_at(converter.samples_to_beats(block_start_samples))
                     as f32,
+                beats: converter.samples_to_beats(block_start_samples),
                 time_samples: block_start_samples,
                 loop_active,
+                playing: self.audio_state.playing.load(Ordering::Relaxed),
             };
 
             let t0 = web_time::Instant::now();

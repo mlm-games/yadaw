@@ -68,8 +68,11 @@ pub struct UnifiedPluginInfo {
 pub struct ProcessCtx {
     pub frames: usize,
     pub bpm: f32,
+    /// Musical position of the first frame of the block, in quarter notes.
+    pub beats: f64,
     pub time_samples: f64,
     pub loop_active: bool,
+    pub playing: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
