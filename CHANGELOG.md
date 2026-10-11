@@ -1,3 +1,8 @@
+## v0.11.6
+
+- No user-facing changes were mentioned since previous release
+
+
 ## v0.11.5
 
 - send and send multiple handling
