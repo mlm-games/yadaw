@@ -22,7 +22,7 @@ yeli = { version = "0.4", optional = true }
 
 yadaw-plugin-api.workspace = true
 
-vst3-host = { version = "0.9", optional = true, default-features = false, features = [
+vst3-host = { version = "0.10", optional = true, default-features = false, features = [
     "egui-widgets",
 ] }
 

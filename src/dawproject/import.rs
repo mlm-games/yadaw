@@ -67,8 +67,10 @@ impl Container {
             .map_err(|e| anyhow!("not a ZIP container: {e}"))?;
         let mut names = Vec::with_capacity(archive.len());
         for index in 0..archive.len() {
-            if let Ok(file) = archive.by_index(index) {
-                names.push(file.name().to_string());
+            if let Ok(file) = archive.by_index(index)
+                && let Ok(name) = file.name()
+            {
+                names.push(name.into_owned());
             }
         }
         Ok(Container {
